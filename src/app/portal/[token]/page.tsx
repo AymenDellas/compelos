@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { notFound } from 'next/navigation';
 import { Check, CircleAlert, FileText, KeyRound, LayoutList, UserRound } from 'lucide-react';
 import {
@@ -6,6 +7,9 @@ import {
     saveClientPortalFormAction,
 } from '@/app/actions/business-actions';
 import { pool } from '@/lib/pg_setup';
+import { agreementPdf } from '@/lib/agreement-pdf';
+import { AgreementSigningForm } from './AgreementSigningForm';
+import { AgreementPdfViewer } from './AgreementPdfViewer';
 import {
     CASE_STUDY_CONSENT_TEXT,
     normalizeOnboarding,
@@ -40,11 +44,19 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
     );
     const blockers = onboardingBlockers(data);
     const progress = onboardingProgress(data);
+    const clientSigned = Boolean(data.agreement.clientSignature);
+    const agreementReady = Boolean(data.agreement.scope.trim() && data.agreement.deliverables.trim()) &&
+        (data.projectType === 'CASE_STUDY' || data.payment.price !== null);
+    const canSign = agreementReady && !clientSigned && !data.agreement.signedPdfData &&
+        ['DRAFT', 'SENT', 'VIEWED'].includes(data.agreement.status);
+    const documentSha256 = canSign
+        ? createHash('sha256').update(Buffer.from(await agreementPdf(data).arrayBuffer())).digest('hex')
+        : '';
     const requiredAccess = data.access.filter((item) => item.required && !item.nonBlocking);
     const tasks = [
         {
             label: 'Agreement',
-            detail: data.agreement.status === 'FULLY_SIGNED' ? 'Fully signed' : 'Signature required',
+            detail: data.agreement.status === 'FULLY_SIGNED' ? 'Fully signed' : clientSigned ? 'Your signature received' : 'Signature required',
             done: data.agreement.status === 'FULLY_SIGNED' || data.overrides.includes('agreement'),
             icon: FileText,
         },
@@ -122,12 +134,25 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
                 </section>
                 <section className="panel">
                     <div className="panel-head">Agreement</div>
-                    <div className="panel-body flex flex-wrap items-center gap-3">
-                        <div className="flex-1 min-w-48">
-                            <p className="text-sm">{data.projectType === 'CASE_STUDY' ? 'Free case-study agreement' : 'Paid-client agreement'}</p>
-                            <p className="text-xs text-[var(--text-faint)] mt-1">Status: {data.agreement.status.replaceAll('_', ' ').toLowerCase()}</p>
+                    <div className="panel-body space-y-5">
+                        <div className="flex flex-wrap items-center gap-3">
+                            <div className="flex-1 min-w-48">
+                                <p className="text-sm">{data.projectType === 'CASE_STUDY' ? 'Free case-study agreement' : 'Paid-client agreement'}</p>
+                                <p className="text-xs text-[var(--text-faint)] mt-1">{data.agreement.status === 'FULLY_SIGNED' ? 'Fully signed' : clientSigned ? 'You signed · Compel signature pending' : 'Please review and sign below'}</p>
+                            </div>
+                            <a className="btn btn-outline" href={`/portal/${token}/agreement`} target="_blank" rel="noreferrer">Open PDF in new tab</a>
                         </div>
-                        <a className="btn btn-outline" href={`/portal/${token}/agreement`} target="_blank" rel="noreferrer">Preview agreement PDF</a>
+                        <AgreementPdfViewer url={`/portal/${token}/agreement?v=${encodeURIComponent(data.agreement.clientSignature?.signedAt || data.agreement.signedPdfName || data.agreement.status)}`} />
+                        {clientSigned ? (
+                            <p className="text-sm text-[var(--text-dim)]">
+                                Signed by {data.agreement.clientSignature!.name} on {new Date(data.agreement.clientSignature!.signedAt).toLocaleDateString('en-US')}.
+                                {' '}Your saved PDF is available above. Compel can see the signed copy in the project dashboard.
+                            </p>
+                        ) : canSign ? (
+                            <AgreementSigningForm token={token} clientName={data.clientName} email={data.email} documentSha256={documentSha256} />
+                        ) : !data.agreement.signedPdfData && data.agreement.status !== 'FULLY_SIGNED' ? (
+                            <p className="text-sm text-[var(--warn)]">Compel is finalizing this agreement. Please return when the scope, deliverables, and fee are ready.</p>
+                        ) : null}
                     </div>
                 </section>
                 {data.projectType === 'PAID' && (
@@ -237,5 +262,5 @@ function PortalGroup({ title, children }: { title: string; children: React.React
 }
 
 function PortalField({ name, label, value, multiline = false, required = false }: { name: string; label: string; value: string; multiline?: boolean; required?: boolean }) {
-    return <label className="space-y-1.5 min-w-0"><span className="flex items-baseline justify-between gap-2 text-sm text-[var(--text-dim)]"><span>{label}{required ? ' *' : ''}</span>{!required && <span className="text-xs text-[var(--text-faint)]">Optional</span>}</span>{multiline ? <textarea className="field w-full min-h-24" name={name} defaultValue={value} required={required} /> : <input className="field w-full" name={name} defaultValue={value} required={required} />}</label>;
+    return <label className="space-y-1.5 min-w-0"><span className="flex items-baseline justify-between gap-2 text-sm text-[var(--text-dim)]"><span>{label}{required ? ' *' : ''}</span>{!required && <span className="text-xs text-[var(--text-faint)]">Optional</span>}</span>{multiline ? <textarea className="field w-full min-h-24" name={name} defaultValue={value || ''} required={required} /> : <input className="field w-full" name={name} defaultValue={value || ''} required={required} />}</label>;
 }

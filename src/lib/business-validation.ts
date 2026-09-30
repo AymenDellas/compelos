@@ -188,5 +188,13 @@ export function validateProject(d: ProjectData) {
         }
         if (o.agreement.signedPdfData && o.agreement.signedPdfData.length > 8_000_000)
             throw new Error('The signed agreement is too large. Upload a PDF smaller than 5 MB.');
+        if (o.agreement.clientSignature) {
+            required(o.agreement.clientSignature.name, 'Signer name');
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.agreement.clientSignature.email))
+                throw new Error('Signer email is invalid.');
+            date(o.agreement.clientSignature.signedAt, 'Signature date');
+            if (!/^[0-9a-f]{64}$/.test(o.agreement.clientSignature.documentSha256))
+                throw new Error('Agreement fingerprint is invalid.');
+        }
     }
 }

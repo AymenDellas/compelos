@@ -20,7 +20,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ tok
         result.rows[0].opportunity as OpportunityData,
         result.rows[0].profile as OfferProfile,
     );
-    const bytes = await agreementPdf(onboarding).arrayBuffer();
+    const storedPdf = onboarding.agreement.signedPdfData;
+    const bytes = storedPdf?.startsWith('data:application/pdf;base64,')
+        ? Buffer.from(storedPdf.slice('data:application/pdf;base64,'.length), 'base64')
+        : await agreementPdf(onboarding).arrayBuffer();
     const name = onboarding.projectName.replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '') || 'project';
     return new Response(bytes, {
         headers: {

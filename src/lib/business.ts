@@ -242,6 +242,12 @@ export type OnboardingData = {
         sentAt: string;
         signedPdfName: string;
         signedPdfData?: string;
+        clientSignature?: {
+            name: string;
+            email: string;
+            signedAt: string;
+            documentSha256: string;
+        };
     };
     payment: {
         structure: 'FULL' | 'DEPOSIT' | 'CUSTOM';

@@ -132,22 +132,30 @@ export function agreementPdf(data: OnboardingData): Blob {
     section(number++, 'Confidentiality', a.confidentiality);
     section(number++, 'Cancellation and termination', a.termination);
 
-    ensure(133);
+    ensure(185);
     stream += textAt('SIGNATURES', left, y, 10, ink, true);
     y -= 24;
     stream += textAt('By signing, both parties agree to the terms above.', left, y, 9, muted);
     y -= 49;
     stream += line(left, y, left + 205, y, ink);
     stream += line(left + 273, y, right, y, ink);
+    if (a.clientSignature) stream += textAt(wrapped(a.clientSignature.name, 33)[0], left + 4, y + 8, 12, ink, true);
     y -= 16;
-    stream += textAt('CLIENT SIGNATURE', left, y, 7.5, muted, true);
+    stream += textAt('CLIENT ELECTRONIC SIGNATURE', left, y, 7.5, muted, true);
     stream += textAt('COMPEL SIGNATURE', left + 273, y, 7.5, muted, true);
     y -= 34;
     stream += line(left, y, left + 205, y);
     stream += line(left + 273, y, right, y);
+    if (a.clientSignature) stream += textAt(a.clientSignature.signedAt.slice(0, 10), left + 4, y + 8, 9, ink);
     y -= 16;
     stream += textAt('DATE', left, y, 7.5, muted, true);
     stream += textAt('DATE', left + 273, y, 7.5, muted, true);
+    if (a.clientSignature) {
+        y -= 24;
+        stream += textAt(`Signed electronically by ${a.clientSignature.name} (${a.clientSignature.email})`, left, y, 7.5, muted);
+        y -= 13;
+        stream += textAt(`Original document SHA-256: ${a.clientSignature.documentSha256}`, left, y, 6.5, muted);
+    }
     finishPage();
 
     const pages = streams.map((content, index) => content
