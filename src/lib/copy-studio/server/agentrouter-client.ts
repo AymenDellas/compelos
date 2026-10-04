@@ -176,7 +176,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
           try {
             resolve(clientResult(output));
           } catch (error) {
-            if (process.env.COPY_STUDIO_DIAGNOSTIC === '1') {
+            if (process.env.COPY_STUDIO_DIAGNOSTIC === '1' || process.env.VERCEL === '1') {
               try {
                 const messages = JSON.parse(output);
                 const failure = Array.isArray(messages)
@@ -196,9 +196,11 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
                     exitCode,
                     exitSignal,
                     outputLength: output.length,
-                    prefix: output.slice(0, 500),
-                    suffix: output.slice(-500),
-                    stderr: diagnosticStderr,
+                    ...(process.env.COPY_STUDIO_DIAGNOSTIC === '1' ? {
+                      prefix: output.slice(0, 500),
+                      suffix: output.slice(-500),
+                      stderr: diagnosticStderr,
+                    } : {}),
                   })
                     .replaceAll(config.apiKey, '[redacted]')
                     .replaceAll(relay.localToken, '[redacted]'),
