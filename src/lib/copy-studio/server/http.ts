@@ -145,7 +145,7 @@ export async function handleCopyStudio(
       'You are testing an API connection. Reply with OK only.',
       'Reply OK.',
       signal,
-      32,
+      512,
     );
     return { connected: true, model: providerConfig().model };
   };

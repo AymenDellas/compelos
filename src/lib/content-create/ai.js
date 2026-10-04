@@ -4,9 +4,10 @@ import { videoPlanSchema, videoInstructions, normalizeVideoPlan, syncVideoEdges,
 const apiKey = process.env.AGENTROUTER_API_KEY;
 const model = process.env.AGENTROUTER_MODEL || 'deepseek-v4-flash';
 const baseUrl=(process.env.AGENTROUTER_BASE_URL || 'https://agentrouter.org/v1').replace(/\/$/,'');
+const provider = new URL(baseUrl).hostname === 'api.groq.com' ? 'Groq' : 'AgentRouter';
 
 export function aiStatus() {
-  return { configured:Boolean(apiKey), credentialsConfigured:Boolean(apiKey), provider:'AgentRouter', model:apiKey ? model : null };
+  return { configured:Boolean(apiKey), credentialsConfigured:Boolean(apiKey), provider, model:apiKey ? model : null };
 }
 
 const string = { type: 'string' };
@@ -91,17 +92,17 @@ async function routerGenerate(mode, context, imageDataUrl, retryJson = false) {
       headers:{Authorization:'Bearer '+apiKey,'Content-Type':'application/json','User-Agent':'codex_cli_rs/0.149.1',originator:'codex_cli_rs',version:'0.149.1'},
       // A recording plan includes the script plus several frames of production
       // instructions. Leave room for both reasoning and the complete JSON.
-      body:JSON.stringify({model,messages:[{role:'user',content:userContent}],response_format:{type:'json_object'},max_tokens:mode==='draft'&&context.format==='Short video script'?16000:8000,stream:false}),
+      body:JSON.stringify({model:imageDataUrl ? process.env.CONTENT_AI_VISION_MODEL || model : model,messages:[{role:'user',content:userContent}],response_format:{type:'json_object'},max_tokens:mode==='draft'&&context.format==='Short video script'?16000:8000,stream:false}),
     });
   } catch(error) {
-    throw Object.assign(new Error(error?.name==='TimeoutError'?'AgentRouter timed out. Please retry.':'AgentRouter could not be reached: '+error.message),{status:502});
+    throw Object.assign(new Error(error?.name==='TimeoutError'?`${provider} timed out. Please retry.`:`${provider} could not be reached: `+error.message),{status:502});
   }
   let payload;
-  try {payload=await response.json();}catch{throw Object.assign(new Error('AgentRouter returned an unreadable response.'),{status:502});}
-  if(!response.ok)throw Object.assign(new Error('AgentRouter generation failed: '+String(payload?.error?.message || payload?.message || 'HTTP '+response.status).slice(0,300)),{status:502});
+  try {payload=await response.json();}catch{throw Object.assign(new Error(`${provider} returned an unreadable response.`),{status:502});}
+  if(!response.ok)throw Object.assign(new Error(`${provider} generation failed: `+String(payload?.error?.message || payload?.message || 'HTTP '+response.status).slice(0,300)),{status:502});
   const content=payload?.choices?.[0]?.message?.content;
   const message=typeof content==='string'?content:Array.isArray(content)?content.map(item=>item?.text||'').join('\n'):'';
-  if(!message.trim())throw Object.assign(new Error('AgentRouter returned no draft text.'),{status:502});
+  if(!message.trim())throw Object.assign(new Error(`${provider} returned no draft text.`),{status:502});
   return {messages:[message],responseId:payload.id||null,usage:payload.usage||null};
 }
 export async function generate(mode, input) {
@@ -140,7 +141,7 @@ export async function generate(mode, input) {
       catch (error) { parseFailure = error.message; }
     }
   }
-  if (!parsed) throw Object.assign(new Error(parseFailure === 'incomplete' ? 'DeepSeek returned an incomplete response twice. Nothing was saved; please retry.' : 'DeepSeek returned non-JSON output twice. Nothing was saved; please retry.'),{status:502});
+  if (!parsed) throw Object.assign(new Error(parseFailure === 'incomplete' ? 'The AI returned an incomplete response twice. Nothing was saved; please retry.' : 'The AI returned non-JSON output twice. Nothing was saved; please retry.'),{status:502});
   if (mode === 'ideas') {
     if (!Array.isArray(parsed.ideas) || parsed.ideas.length !== 3 || new Set(parsed.ideas.map(idea=>String(idea.angle).trim().toLowerCase())).size !== 3 || parsed.ideas.some(idea=>!['principle','pov','transformation','breakdown'].includes(idea.pillar) || ['topic','angle','hook','buyerProblem','whyRelevant'].some(key=>typeof idea[key] !== 'string' || !idea[key].trim()))) {
       throw new Error('The AI did not return three complete, distinct ideas. Please try again.');
@@ -163,7 +164,7 @@ export async function generate(mode, input) {
   if (mode === 'draft') {
     parsed = { shortVersion:'', caption:'', visualInstructions:'', audit:null, auditDimensions:[], transformation:null, slides:[], ...parsed };
     if (context.format === 'Carousel') parsed.caption = parsed.body;
-    if (typeof parsed.title !== 'string' || !parsed.title.trim() || typeof parsed.body !== 'string' || !parsed.body.trim() || typeof parsed.cta !== 'string') throw Object.assign(new Error('DeepSeek returned an incomplete draft. Nothing was saved; please retry.'),{status:502});
+    if (typeof parsed.title !== 'string' || !parsed.title.trim() || typeof parsed.body !== 'string' || !parsed.body.trim() || typeof parsed.cta !== 'string') throw Object.assign(new Error('The AI returned an incomplete draft. Nothing was saved; please retry.'),{status:502});
     if (!Array.isArray(parsed.hooks) || parsed.hooks.length !== 3 || parsed.hooks.some(hook=>typeof hook !== 'string' || !hook.trim()) || !parsed.hooks.includes(parsed.recommendedHook)) throw new Error('The model did not return three valid hooks. Please retry.');
     if (!parsed.learning || typeof parsed.learning !== 'object' || !Array.isArray(parsed.claimFlags) || parsed.claimFlags.some(flag=>typeof flag !== 'string') || !Array.isArray(parsed.sourceNotes) || parsed.sourceNotes.some(note=>typeof note !== 'string')) throw new Error('The AI returned incomplete source notes. Please try again.');
     if (context.format === 'Short video script') {
