@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { syncBouncesAction } from '@/app/actions/bounce-actions';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 /**
  * Reads delivery-failure reports from the connected inboxes and suppresses the

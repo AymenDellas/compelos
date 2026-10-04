@@ -5,7 +5,7 @@ import path from 'path';
 import { importCampaignReportsAction } from '@/app/actions/campaign-import-actions';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 /**
  * Same import as the CRM's "Import Campaign Report" button, exposed as an endpoint

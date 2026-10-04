@@ -5,7 +5,7 @@ import { verifyLeadEmailsAction } from '@/app/actions/crm-actions';
 import { hasFreshSmtpProof } from '@/lib/email-verification-proof';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 /**
  * Re-checks leads whose email label is not backed by evidence.

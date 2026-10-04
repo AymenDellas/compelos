@@ -4,7 +4,7 @@ import { syncContactedFromGmailAction } from '@/app/actions/gmail-actions';
 
 export const dynamic = 'force-dynamic';
 // An all-time scan of a large mailbox takes minutes, not seconds.
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 /**
  * Same reconcile as the CRM's "Sync Gmail" button, exposed as an endpoint so it
