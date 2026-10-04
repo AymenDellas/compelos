@@ -8,6 +8,7 @@ import { generate, aiStatus } from '@/lib/content-create/ai';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
+export const maxDuration=300;
 
 function database(){ return openDatabase(process.env.CONTENT_CREATE_DB_PATH); }
 const answer=(value,status=200)=>NextResponse.json(value,{status,headers:{'Cache-Control':'no-store'}});
