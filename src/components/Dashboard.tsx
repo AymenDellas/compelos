@@ -1,4 +1,5 @@
 "use client";
+import { LogoutButton } from './LogoutButton';
 
 import dynamic from "next/dynamic";
 import React, { useState, useEffect, useCallback } from "react";
@@ -1253,7 +1254,7 @@ export default function Dashboard() {
                             <p className="text-[12px] text-[var(--text-dim)] truncate mt-0.5 hidden sm:block">{screen.sub}</p>
                         </div>
                         <div className="ml-auto flex items-center gap-1.5 flex-none">
-                            <form action="/api/auth/logout" method="post"><button className="btn btn-ghost" type="submit">Sign out</button></form>
+                            <LogoutButton />
                             {activeTab === 'engine' && (
                                 <>
                                     <button onClick={handleOpenHistory} className="btn btn-ghost !px-2" title="Saved runs">
