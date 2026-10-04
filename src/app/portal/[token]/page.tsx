@@ -5,7 +5,7 @@ import {
     confirmClientScopeAction,
     markPortalAccessReceivedAction,
     saveClientPortalFormAction,
-} from '@/app/actions/business-actions';
+} from '@/app/actions/portal-actions';
 import { pool } from '@/lib/pg_setup';
 import { agreementPdf } from '@/lib/agreement-pdf';
 import { AgreementSigningForm } from './AgreementSigningForm';

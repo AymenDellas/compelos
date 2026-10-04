@@ -24,7 +24,7 @@ const client = {
     throw new Error('Unexpected query');
   },
 };
-const source = fs.readFileSync(path.join(__dirname, '../src/app/actions/business-actions.ts'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../src/app/actions/portal-actions.ts'), 'utf8');
 const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;

@@ -725,3 +725,4 @@ export function onboardingProgress(data: OnboardingData) {
     ];
     return Math.round((stages.filter(Boolean).length / stages.length) * 100);
 }
+

@@ -1,11 +1,122 @@
 'use server';
+import { requireAdmin } from '@/lib/dashboard-auth';
 
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
-import { agreementPdf } from '@/lib/agreement-pdf';
-import { generateAccessChecklist, normalizeOnboarding, type ProjectData } from '@/lib/business';
-import { businessTransaction, recordActivity } from '@/lib/business-store';
-import { validateProject } from '@/lib/business-validation';
+import {
+    blankOpportunity,
+    buildProject,
+    generateAccessChecklist,
+    normalizeOnboarding,
+    type OfferProfile,
+    type OpportunityData,
+    type ProjectData,
+} from '@/lib/business';
+import {
+    businessTransaction,
+    readBusinessSnapshot,
+    mapOffer,
+    mapProject,
+    recordActivity,
+} from '@/lib/business-store';
+import { validateOffer, validateOpportunity, validateProject } from '@/lib/business-validation';
+
+export async function loadBusinessAction() {
+    await requireAdmin();
+    return readBusinessSnapshot();
+}
+
+export async function saveOfferAction(profile: OfferProfile, expectedVersion: number) {
+    await requireAdmin();
+    validateOffer(profile);
+    return businessTransaction(async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock(83472102)');
+        const latest = await client.query(
+            'SELECT version FROM business_offer_versions ORDER BY version DESC LIMIT 1',
+        );
+        if (latest.rows[0].version !== expectedVersion)
+            throw new Error('The offer changed in another window. Reload before saving.');
+        const result = await client.query(
+            'INSERT INTO business_offer_versions(profile) VALUES ($1) RETURNING *',
+            [JSON.stringify(profile)],
+        );
+        return mapOffer(result.rows[0]);
+    });
+}
+
+export type CreateOnboardingInput = {
+    clientName: string;
+    businessName: string;
+    email: string;
+    website: string;
+    projectName: string;
+    funnel: ProjectData['funnel'];
+    projectType: 'PAID' | 'CASE_STUDY';
+};
+
+/** Start a client workflow even when the accepted deal was not previously tracked in Sales. */
+export async function createOnboardingAction(input: CreateOnboardingInput) {
+    await requireAdmin();
+    const opportunity: OpportunityData = {
+        ...blankOpportunity(),
+        name: input.clientName.trim(),
+        email: input.email.trim(),
+        website: input.website.trim(),
+        stage: 'WON',
+        funnel: input.funnel,
+        mode: input.projectType === 'CASE_STUDY' ? 'CASE_STUDY' : 'PERFORMANCE',
+        currentOffer: input.projectName.trim(),
+        nextAction: 'Complete client onboarding',
+    };
+    validateOpportunity(opportunity);
+    return businessTransaction(async (client) => {
+        const offer = await client.query(
+            'SELECT * FROM business_offer_versions ORDER BY version DESC LIMIT 1',
+        );
+        const opportunityId = randomUUID();
+        await client.query(
+            'INSERT INTO business_opportunities(id,lead_id,offer_version,data) VALUES ($1,NULL,$2,$3)',
+            [opportunityId, offer.rows[0].version, JSON.stringify(opportunity)],
+        );
+        const project = buildProject(opportunity, offer.rows[0].profile);
+        project.name = input.projectName.trim();
+        project.onboarding = {
+            ...project.onboarding!,
+            clientName: input.clientName.trim(),
+            businessName: input.businessName.trim(),
+            email: input.email.trim(),
+            website: input.website.trim(),
+            projectName: input.projectName.trim(),
+            projectType: input.projectType,
+            portalToken: randomUUID(),
+        };
+        const result = await client.query(
+            'INSERT INTO business_projects(id,opportunity_id,offer_version,data) VALUES ($1,$2,$3,$4) RETURNING *',
+            [randomUUID(), opportunityId, offer.rows[0].version, JSON.stringify(project)],
+        );
+        await recordActivity(client, opportunityId, 'PROJECT', 'Client onboarding started');
+        return mapProject(result.rows[0]);
+    });
+}
+
+export async function saveClientProjectAction(id: string, data: ProjectData, expectedRevision: number) {
+    await requireAdmin();
+    validateProject(data);
+    return businessTransaction(async (client) => {
+        const result = await client.query(
+            'UPDATE business_projects SET data=$2,revision=revision+1,updated_at=NOW() WHERE id=$1 AND revision=$3 RETURNING *',
+            [id, JSON.stringify(data), expectedRevision],
+        );
+        if (!result.rows[0]) throw new Error('This project changed in another window. Reload before saving.');
+        await recordActivity(
+            client,
+            result.rows[0].opportunity_id,
+            'PROJECT',
+            `Client project updated · ${data.status.toLowerCase()}`,
+        );
+        return mapProject(result.rows[0]);
+    });
+}
 
 const PORTAL_FORM_FIELDS = [
     'offer', 'audience', 'customerProblem', 'desiredOutcome', 'trafficSources',
@@ -20,109 +131,11 @@ function portalValue(formData: FormData, key: string) {
     return typeof value === 'string' ? value.trim().slice(0, 20_000) : '';
 }
 
-function validPortalToken(token: string) {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
-}
-
-export type SignAgreementState = { error: string; signed: boolean };
-
-export async function signClientAgreementAction(
-    _previous: SignAgreementState,
-    formData: FormData,
-): Promise<SignAgreementState> {
-    const token = portalValue(formData, 'token');
-    const name = portalValue(formData, 'signerName').replace(/\s+/g, ' ');
-    const email = portalValue(formData, 'signerEmail').toLowerCase();
-    const reviewedHash = portalValue(formData, 'documentSha256');
-    if (!validPortalToken(token)) return { error: 'This portal link is invalid.', signed: false };
-    if (name.length < 2 || name.length > 120) return { error: 'Enter your full name to sign.', signed: false };
-    if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-        return { error: 'Enter a valid email address.', signed: false };
-    if (formData.get('signatureConsent') !== 'accepted')
-        return { error: 'Confirm that you agree to sign electronically.', signed: false };
-    if (!/^[0-9a-f]{64}$/.test(reviewedHash))
-        return { error: 'Reload the agreement and review it before signing.', signed: false };
-
-    try {
-        await businessTransaction(async (client) => {
-            const result = await client.query(
-                `SELECT p.*,o.data AS opportunity,v.profile
-                 FROM business_projects p
-                 JOIN business_opportunities o ON o.id=p.opportunity_id
-                 JOIN business_offer_versions v ON v.version=p.offer_version
-                 WHERE p.data->'onboarding'->>'portalToken'=$1 FOR UPDATE OF p`,
-                [token],
-            );
-            if (!result.rows[0]) throw new Error('This portal link is no longer available.');
-            const project = result.rows[0].data as ProjectData;
-            const onboarding = normalizeOnboarding(project, result.rows[0].opportunity, result.rows[0].profile);
-            if (onboarding.agreement.clientSignature || onboarding.agreement.signedPdfData ||
-                !['DRAFT', 'SENT', 'VIEWED'].includes(onboarding.agreement.status))
-                throw new Error('This agreement has already been signed.');
-            if (!onboarding.agreement.scope.trim() || !onboarding.agreement.deliverables.trim() ||
-                (onboarding.projectType === 'PAID' && onboarding.payment.price === null))
-                throw new Error('Compel must finish the agreement terms before you can sign.');
-
-            const original = Buffer.from(await agreementPdf(onboarding).arrayBuffer());
-            const documentSha256 = createHash('sha256').update(original).digest('hex');
-            if (documentSha256 !== reviewedHash)
-                throw new Error('The agreement changed. Reload and review the current PDF before signing.');
-            const originalPdfData = `data:application/pdf;base64,${original.toString('base64')}`;
-            const clientSignature = {
-                name,
-                email,
-                signedAt: new Date().toISOString(),
-                documentSha256,
-            };
-            const signedOnboarding = {
-                ...onboarding,
-                agreement: { ...onboarding.agreement, status: 'SIGNED_CLIENT' as const, clientSignature },
-            };
-            const signedBytes = Buffer.from(await agreementPdf(signedOnboarding).arrayBuffer());
-            const signedPdfData = `data:application/pdf;base64,${signedBytes.toString('base64')}`;
-            const signedPdfName = `${onboarding.projectName.replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '') || 'project'}-client-signed.pdf`;
-            const next = {
-                ...project,
-                onboarding: {
-                    ...signedOnboarding,
-                    agreement: { ...signedOnboarding.agreement, signedPdfName, signedPdfData },
-                    documents: [
-                        ...onboarding.documents.filter((item) => item.kind !== 'AGREEMENT' || !['Agreement reviewed before signing', 'Client-signed agreement'].includes(item.name)),
-                        {
-                            id: randomUUID(), name: 'Agreement reviewed before signing', kind: 'AGREEMENT' as const,
-                            url: '', fileName: signedPdfName.replace('-client-signed.pdf', '-reviewed.pdf'),
-                            dataUrl: originalPdfData, createdAt: clientSignature.signedAt,
-                        },
-                        {
-                            id: randomUUID(), name: 'Client-signed agreement', kind: 'AGREEMENT' as const,
-                            url: '', fileName: signedPdfName, dataUrl: signedPdfData, createdAt: clientSignature.signedAt,
-                        },
-                    ],
-                },
-            };
-            validateProject(next);
-            await client.query(
-                'UPDATE business_projects SET data=$2,revision=revision+1,updated_at=NOW() WHERE id=$1',
-                [result.rows[0].id, JSON.stringify(next)],
-            );
-            await recordActivity(client, result.rows[0].opportunity_id, 'ONBOARDING', 'Client electronically signed the agreement; Compel signature pending');
-        });
-    } catch (error) {
-        if (error instanceof Error && [
-            'This portal link is no longer available.',
-            'This agreement has already been signed.',
-            'Compel must finish the agreement terms before you can sign.',
-            'The agreement changed. Reload and review the current PDF before signing.',
-        ].includes(error.message)) return { error: error.message, signed: false };
-        return { error: 'We could not save your signature. Please try again or contact Compel.', signed: false };
-    }
-    revalidatePath(`/portal/${token}`);
-    return { error: '', signed: true };
-}
-
+/** Client-portal writes are deliberately limited to the client's own onboarding fields. */
 export async function saveClientPortalFormAction(formData: FormData) {
+    await requireAdmin();
     const token = portalValue(formData, 'token');
-    if (!validPortalToken(token)) throw new Error('This portal link is invalid.');
+    if (!/^[0-9a-f-]{36}$/i.test(token)) throw new Error('This portal link is invalid.');
     await businessTransaction(async (client) => {
         const result = await client.query(
             `SELECT p.*,o.data AS opportunity,v.profile
@@ -155,8 +168,9 @@ export async function saveClientPortalFormAction(formData: FormData) {
 }
 
 export async function confirmClientScopeAction(formData: FormData) {
+    await requireAdmin();
     const token = portalValue(formData, 'token');
-    if (!validPortalToken(token)) throw new Error('This portal link is invalid.');
+    if (!/^[0-9a-f-]{36}$/i.test(token)) throw new Error('This portal link is invalid.');
     await businessTransaction(async (client) => {
         const result = await client.query(
             `SELECT * FROM business_projects WHERE data->'onboarding'->>'portalToken'=$1 FOR UPDATE`,
@@ -180,9 +194,10 @@ export async function confirmClientScopeAction(formData: FormData) {
 }
 
 export async function markPortalAccessReceivedAction(formData: FormData) {
+    await requireAdmin();
     const token = portalValue(formData, 'token');
     const itemId = portalValue(formData, 'itemId');
-    if (!validPortalToken(token) || !itemId) throw new Error('This access request is invalid.');
+    if (!/^[0-9a-f-]{36}$/i.test(token) || !itemId) throw new Error('This access request is invalid.');
     await businessTransaction(async (client) => {
         const result = await client.query(
             `SELECT * FROM business_projects WHERE data->'onboarding'->>'portalToken'=$1 FOR UPDATE`,
@@ -200,3 +215,4 @@ export async function markPortalAccessReceivedAction(formData: FormData) {
     });
     revalidatePath(`/portal/${token}`);
 }
+

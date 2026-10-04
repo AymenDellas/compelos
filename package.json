@@ -1,5 +1,5 @@
 {
-  "name": "compelos-client-portal",
+  "name": "compelos",
   "version": "1.0.0",
   "private": true,
   "engines": {
@@ -10,7 +10,8 @@
     "build": "next build",
     "start": "next start",
     "test:pdf": "node scripts/check-agreement-pdf.cjs",
-    "test:sign": "node scripts/check-agreement-signing.cjs"
+    "test:sign": "node scripts/check-agreement-signing.cjs",
+    "test:auth": "node scripts/check-dashboard-auth.cjs"
   },
   "dependencies": {
     "lucide-react": "0.564.0",
@@ -18,7 +19,18 @@
     "pdfjs-dist": "6.3.289",
     "pg": "8.23.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "@qwen-code/qwen-code": "0.24.6",
+    "axios": "^1.13.6",
+    "cheerio": "^1.2.0",
+    "clsx": "latest",
+    "groq-sdk": "^1.3.0",
+    "https-proxy-agent": "^7.0.6",
+    "imapflow": "^1.7.6",
+    "ipaddr.js": "^2.5.0",
+    "papaparse": "^5.5.3",
+    "tailwind-merge": "latest",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.18",
@@ -27,6 +39,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "tailwindcss": "4.1.18",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "@types/papaparse": "^5.5.2"
   }
 }

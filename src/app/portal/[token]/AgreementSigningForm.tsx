@@ -1,7 +1,7 @@
 'use client';
 
 import { useActionState } from 'react';
-import { signClientAgreementAction, type SignAgreementState } from '@/app/actions/business-actions';
+import { signClientAgreementAction, type SignAgreementState } from '@/app/actions/portal-actions';
 
 const initialState: SignAgreementState = { error: '', signed: false };
 
