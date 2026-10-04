@@ -125,6 +125,11 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
           signal: combinedSignal,
           env: {
             ...process.env,
+            // Serverless hosts may report a home directory that does not exist.
+            // Keep the client's settings and state inside this request's temporary directory.
+            HOME: workspace,
+            USERPROFILE: workspace,
+            QWEN_HOME: join(workspace, '.qwen'),
             OPENAI_API_KEY: relay.localToken,
             OPENAI_BASE_URL: relay.baseUrl,
             OPENAI_MODEL: config.model,
