@@ -522,7 +522,7 @@ export function createOnboardingData(
         },
         form: {
             status: 'NOT_SENT',
-            offer: opportunity?.currentOffer || '',
+            offer: '',
             audience: opportunity?.audience || '',
             customerProblem: '',
             desiredOutcome: '',
@@ -591,6 +591,11 @@ export function normalizeOnboarding(
     if (!saved) return fallback;
     const { permissions: _legacyPermissions, ...current } = saved as OnboardingData & { permissions?: unknown };
     const { currentPrice: _legacyPrice, ...savedForm } = saved.form as OnboardingData['form'] & { currentPrice?: string };
+    const form = { ...fallback.form, ...savedForm };
+    // Remove the old prospect prefill only before the client has saved any answers.
+    if ((form.status === 'NOT_SENT' || form.status === 'SENT') && form.offer === opportunity?.currentOffer) {
+        form.offer = '';
+    }
     const agreement = { ...fallback.agreement, ...saved.agreement };
     if (agreement.status === 'DRAFT' && current.projectType === 'CASE_STUDY') {
         agreement.intro = currentFreeAgreementIntro(agreement.intro);
@@ -601,7 +606,7 @@ export function normalizeOnboarding(
         ...current,
         agreement,
         payment: { ...fallback.payment, ...saved.payment },
-        form: { ...fallback.form, ...savedForm },
+        form,
         baseline: { ...fallback.baseline, ...saved.baseline },
         scope: { ...fallback.scope, ...saved.scope },
         access: Array.isArray(saved.access) ? saved.access : [],
