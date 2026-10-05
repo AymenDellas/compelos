@@ -12,6 +12,8 @@ import { AgreementSigningForm } from './AgreementSigningForm';
 import { AgreementPdfViewer } from './AgreementPdfViewer';
 import {
     CASE_STUDY_CONSENT_TEXT,
+    FUNNEL_OFFER_HINT,
+    FUNNEL_OFFER_QUESTION,
     normalizeOnboarding,
     onboardingBlockers,
     onboardingFormComplete,
@@ -172,7 +174,7 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
                     <form action={saveClientPortalFormAction} className="panel-body space-y-6">
                         <input type="hidden" name="token" value={token} />
                         <PortalGroup title="Offer and business">
-                            <PortalField name="offer" label="Offer being promoted" value={data.form.offer} required />
+                            <PortalField name="offer" label={FUNNEL_OFFER_QUESTION} hint={FUNNEL_OFFER_HINT} value={data.form.offer} required />
                             <PortalField name="audience" label="Target audience" value={data.form.audience} required />
                             <PortalField name="trafficSources" label="Current traffic sources" value={data.form.trafficSources} />
                             <PortalField name="customerProblem" label="Main customer problem" value={data.form.customerProblem} multiline required />
@@ -261,6 +263,19 @@ function PortalGroup({ title, children }: { title: string; children: React.React
     return <fieldset><legend className="label-micro border-b border-[var(--line)] pb-2 mb-4 w-full">{title}</legend><div className="grid sm:grid-cols-2 gap-4">{children}</div></fieldset>;
 }
 
-function PortalField({ name, label, value, multiline = false, required = false }: { name: string; label: string; value: string; multiline?: boolean; required?: boolean }) {
-    return <label className="space-y-1.5 min-w-0"><span className="flex items-baseline justify-between gap-2 text-sm text-[var(--text-dim)]"><span>{label}{required ? ' *' : ''}</span>{!required && <span className="text-xs text-[var(--text-faint)]">Optional</span>}</span>{multiline ? <textarea className="field w-full min-h-24" name={name} defaultValue={value || ''} required={required} /> : <input className="field w-full" name={name} defaultValue={value || ''} required={required} />}</label>;
+function PortalField({ name, label, value, hint, multiline = false, required = false }: { name: string; label: string; value: string; hint?: string; multiline?: boolean; required?: boolean }) {
+    const id = `portal-${name}`;
+    const hintId = hint ? `${id}-hint` : undefined;
+    return (
+        <div className="space-y-1.5 min-w-0">
+            <label htmlFor={id} className="flex items-baseline justify-between gap-2 text-sm text-[var(--text-dim)]">
+                <span>{label}{required ? ' *' : ''}</span>
+                {!required && <span className="text-xs text-[var(--text-faint)]">Optional</span>}
+            </label>
+            {multiline
+                ? <textarea id={id} className="field w-full min-h-24" name={name} defaultValue={value || ''} required={required} aria-describedby={hintId} />
+                : <input id={id} className="field w-full" name={name} defaultValue={value || ''} required={required} aria-describedby={hintId} />}
+            {hint && <p id={hintId} className="text-xs text-[var(--text-faint)]">{hint}</p>}
+        </div>
+    );
 }

@@ -30,6 +30,8 @@ import {
     CASE_STUDY_CONSENT_TEXT,
     currentFreeAgreementIntro,
     DEFAULT_ONBOARDING_TEMPLATES,
+    FUNNEL_OFFER_HINT,
+    FUNNEL_OFFER_QUESTION,
     FUNNEL_LABELS,
     FUNNEL_TYPES,
     PAYMENT_STATUSES,
@@ -635,14 +637,14 @@ function FormStep({ data, update }: StepProps) {
             <h3 className="label-micro border-b border-[var(--line)] pb-2">{title}</h3>
             <div className="grid sm:grid-cols-2 gap-4">{fields.map(([key, label, multiline]) => {
                 const required = requiredKeys.includes(key);
-                return <Field key={key} label={required ? label : `${label} · Optional`} required={required} multiline={multiline} value={data.form[key]} onChange={(value) => set(key, value)} />;
+                return <Field key={key} label={required ? label : `${label} · Optional`} hint={key === 'offer' ? FUNNEL_OFFER_HINT : undefined} required={required} multiline={multiline} value={data.form[key]} onChange={(value) => set(key, value)} />;
             })}</div>
         </div>
     );
     return (
         <Panel title="Client onboarding form" action={<select className="field" aria-label="Form status" value={data.form.status} onChange={(e) => set('status', e.target.value)}><option value="NOT_SENT">Not sent</option><option value="SENT">Sent</option><option value="IN_PROGRESS">In progress</option><option value="COMPLETE">Complete</option></select>}>
             <p className="text-sm text-[var(--text-dim)]">Collect structured information here. Keep strategy and context for the short discovery call.</p>
-            {group('Offer and business', [['offer', 'Offer being promoted'], ['audience', 'Target audience'], ['customerProblem', 'Main customer problem', true], ['desiredOutcome', 'Desired outcome', true], ['trafficSources', 'Current traffic sources']])}
+            {group('Offer and business', [['offer', FUNNEL_OFFER_QUESTION], ['audience', 'Target audience'], ['customerProblem', 'Main customer problem', true], ['desiredOutcome', 'Desired outcome', true], ['trafficSources', 'Current traffic sources']])}
             {group('Funnel information', [['landingPageUrl', 'Current landing page URL'], ['bookingUrl', 'Booking URL'], ['qualification', 'Current qualification'], ['nurture', 'Current nurture / follow-up'], ['traffic', 'Approximate traffic'], ['bookings', 'Approximate bookings'], ['showRate', 'Approximate show rate'], ['closeRate', 'Approximate clients / close rate']])}
             {group('Existing tools', [['bookingPlatform', 'Booking platform'], ['crm', 'CRM'], ['emailPlatform', 'Email platform'], ['analyticsPlatform', 'Analytics platform'], ['hostingPlatform', 'Hosting platform'], ['domainProvider', 'Domain provider'], ['websitePlatform', 'Website platform'], ['repositoryProvider', 'Repository provider']])}
             {group('Brand, assets, and preferences', [['assets', 'Logo, colors, fonts, photos, testimonials, case studies, certifications, and copy links', true], ['mustStay', 'Anything that must stay', true], ['avoid', 'Anything the client does not want changed', true], ['importantContext', 'Anything important that is not obvious', true]])}

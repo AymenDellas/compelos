@@ -323,8 +323,12 @@ export type OnboardingData = {
 export const CASE_STUDY_CONSENT_TEXT =
     'I authorize Compel to document this project and use my business name and logo, before-and-after website screenshots, the finished work, and verified results I provide (including traffic, booking, conversion, and revenue figures) on its website and portfolio, in proposals and presentations, and on LinkedIn. Any testimonial or direct quote will be shown to me for approval before publication. Compel will not publish passwords, confidential customer information, or unverified results, and will anonymize sensitive figures when we agree to do so.';
 
+export const FUNNEL_OFFER_QUESTION = 'Which single offer should this funnel promote?';
+export const FUNNEL_OFFER_HINT =
+    'One offer keeps the message focused and gives visitors a clear next step, reducing distractions and helping the page convert.';
+
 export const REQUIRED_ONBOARDING_FORM_FIELDS = [
-    ['offer', 'Offer being promoted'],
+    ['offer', FUNNEL_OFFER_QUESTION],
     ['audience', 'Target audience'],
     ['customerProblem', 'Main customer problem'],
     ['desiredOutcome', 'Desired outcome'],
