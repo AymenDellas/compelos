@@ -11,7 +11,7 @@ export default function TeleprompterPage() {
     const load = ()=>{
       try {
         const token = window.location.hash.slice(1);
-        if (!/^[a-f0-9-]{36}$/i.test(token)) throw new Error('Open a video in Create and choose Teleprompter → Separate window.');
+        if (!/^[a-f0-9-]{36}$/i.test(token)) throw new Error('Open a video in Create and choose Teleprompter.');
         const key = teleprompterStoragePrefix+token;
         const saved = JSON.parse(localStorage.getItem(key) || sessionStorage.getItem(key) || 'null');
         if (!saved || typeof saved.script!=='string' || !saved.script.trim()) throw new Error('The script is unavailable. Open the teleprompter again from Create.');

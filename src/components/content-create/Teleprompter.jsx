@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ExternalLink, FlipHorizontal2, Pause, Play, RotateCcw, X } from 'lucide-react';
+import { openTeleprompterPictureInPicture } from './teleprompter-pip';
 
 export const teleprompterStoragePrefix = 'compel:teleprompter:';
 
@@ -12,6 +13,12 @@ export default function Teleprompter({title,script,onClose,standalone=false}) {
   const text = useRef(null);
   const elapsedRef = useRef(0);
   const handedOff = useRef(false);
+  const floatingRef = useRef(null);
+  const openingRef = useRef(false);
+  const scrollPosition = useRef(0);
+  const mounted = useRef(true);
+  const [floating,setFloating] = useState(null);
+  const [opening,setOpening] = useState(false);
   const [popupToken] = useState(()=>crypto.randomUUID());
   const [playing,setPlaying] = useState(false);
   const [speed,setSpeed] = useState(140);
@@ -32,32 +39,51 @@ export default function Teleprompter({title,script,onClose,standalone=false}) {
   },[standalone,popupStorageKey,title,script]);
 
   useEffect(()=>{
-    if (standalone) {viewport.current.focus({preventScroll:true});return;}
+    mounted.current = true;
+    return ()=>{
+      mounted.current = false;
+      floatingRef.current?.close();
+      floatingRef.current = null;
+    };
+  },[]);
+
+  useLayoutEffect(()=>{
+    const reader = viewport.current;
+    reader.scrollTop = scrollPosition.current;
+    if (standalone || floating) {reader.focus({preventScroll:true});return;}
     const modal = dialog.current;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     modal.showModal();
-    viewport.current.focus({preventScroll:true});
+    reader.focus({preventScroll:true});
     return ()=>{modal.close();document.body.style.overflow=previousOverflow;};
-  },[standalone]);
+  },[standalone,floating]);
 
   useEffect(()=>{
-    const pauseWhenHidden = ()=>{if(document.hidden)setPlaying(false);};
-    document.addEventListener('visibilitychange',pauseWhenHidden);
-    return ()=>document.removeEventListener('visibilitychange',pauseWhenHidden);
-  },[]);
+    // A visible PiP reader must keep scrolling when the dashboard tab is hidden.
+    const readerDocument = (floating || window).document;
+    const pauseWhenHidden = ()=>{
+      if (readerDocument.hidden && !(readerDocument === document && (openingRef.current || floatingRef.current))) setPlaying(false);
+    };
+    readerDocument.addEventListener('visibilitychange',pauseWhenHidden);
+    return ()=>readerDocument.removeEventListener('visibilitychange',pauseWhenHidden);
+  },[floating]);
 
   useEffect(()=>{
     if (!playing || !words) return;
     const reader = viewport.current;
-    const pixelsPerSecond = text.current.getBoundingClientRect().height / words * speed / 60;
+    const readerWindow = reader.ownerDocument.defaultView;
+    let pixelsPerSecond;
+    const measure = ()=>{pixelsPerSecond = text.current.getBoundingClientRect().height / words * speed / 60;};
+    measure();
+    readerWindow.addEventListener('resize',measure);
     let position = reader.scrollTop;
     let previousTime;
     let animation;
     const tick = now=>{
       if (previousTime!==undefined) {
         const seconds = Math.min((now-previousTime)/1000,0.1);
-        const limit = reader.scrollHeight-reader.clientHeight;
+        const limit = Math.max(0,reader.scrollHeight-reader.clientHeight);
         position = Math.min(limit,position+pixelsPerSecond*seconds);
         reader.scrollTop = position;
         elapsedRef.current += seconds;
@@ -65,11 +91,11 @@ export default function Teleprompter({title,script,onClose,standalone=false}) {
         if (position>=limit) {setPlaying(false);return;}
       }
       previousTime = now;
-      animation = requestAnimationFrame(tick);
+      animation = readerWindow.requestAnimationFrame(tick);
     };
-    animation = requestAnimationFrame(tick);
-    return ()=>cancelAnimationFrame(animation);
-  },[playing,speed,fontSize,script,words]);
+    animation = readerWindow.requestAnimationFrame(tick);
+    return ()=>{readerWindow.cancelAnimationFrame(animation);readerWindow.removeEventListener('resize',measure);};
+  },[playing,speed,fontSize,script,words,floating]);
 
   const restart = ()=>{
     setPlaying(false);
@@ -88,9 +114,38 @@ export default function Teleprompter({title,script,onClose,standalone=false}) {
     if (event.code==='Space') {event.preventDefault();toggle();}
     if (event.key.toLowerCase()==='r') {event.preventDefault();restart();}
     if (event.key==='ArrowUp' || event.key==='ArrowDown') setPlaying(false);
-    if (standalone && event.key==='Escape') onClose();
+    if ((standalone || floating) && event.key==='Escape') close();
   };
-  const popOut = ()=>{
+  const close = ()=>{
+    floatingRef.current?.close();
+    onClose();
+  };
+  const popOut = async()=>{
+    if (opening) return;
+    openingRef.current = true;
+    setError('');
+    setOpening(true);
+    try {
+      const next = await openTeleprompterPictureInPicture(window);
+      if (!mounted.current) {next.close();return;}
+      scrollPosition.current = viewport.current.scrollTop;
+      floatingRef.current = next;
+      next.addEventListener('pagehide',()=>{
+        if (!mounted.current) return;
+        scrollPosition.current = viewport.current?.scrollTop || 0;
+        floatingRef.current = null;
+        setPlaying(false);
+        setFloating(null);
+      },{once:true});
+      setFloating(next);
+    } catch (failure) {
+      if (mounted.current) setError(failure.message || 'Could not open always-on-top mode. Keep reading here or try a regular window.');
+    } finally {
+      openingRef.current = false;
+      if (mounted.current) setOpening(false);
+    }
+  };
+  const regularWindow = ()=>{
     try {
       localStorage.setItem(popupStorageKey,JSON.stringify({title,script}));
       const popup = window.open(popupUrl,'compel-teleprompter','popup,width=580,height=800,resizable=yes,scrollbars=yes');
@@ -107,23 +162,26 @@ export default function Teleprompter({title,script,onClose,standalone=false}) {
   };
 
   const contents = <>
-    <header className="teleprompter-header"><div><span className="label-micro">TELEPROMPTER</span><h2>{title || 'Your video script'}</h2></div><button className="teleprompter-icon" aria-label={standalone?'Close window':'Close teleprompter'} onClick={onClose}><X className="h-5 w-5"/></button></header>
+    <header className="teleprompter-header"><div><span className="label-micro">{floating?'TELEPROMPTER · ALWAYS ON TOP':'TELEPROMPTER'}</span><h2>{title || 'Your video script'}</h2></div><button className="teleprompter-icon" aria-label={standalone || floating?'Close window':'Close teleprompter'} onClick={close}><X className="h-5 w-5"/></button></header>
     <div className="teleprompter-controls">
       <button className="teleprompter-play" onClick={toggle} disabled={!words}>{playing?<Pause className="h-4 w-4"/>:<Play className="h-4 w-4"/>}{playing?'Pause scrolling':'Start scrolling'}</button>
       <button className="teleprompter-icon" aria-label="Restart script" onClick={restart}><RotateCcw className="h-4 w-4"/></button>
       <label>Speed <span>{speed} wpm</span><input aria-label="Scrolling speed" type="range" min="60" max="220" step="10" value={speed} onChange={event=>setSpeed(Number(event.target.value))}/></label>
       <label>Text size <span>{fontSize} px</span><input aria-label="Teleprompter text size" type="range" min="24" max="64" step="2" value={fontSize} onChange={event=>setFontSize(Number(event.target.value))}/></label>
       <button className="teleprompter-icon" aria-label="Mirror script" aria-pressed={mirrored} onClick={()=>setMirrored(value=>!value)}><FlipHorizontal2 className="h-4 w-4"/></button>
-      {!standalone&&<a role="button" className="teleprompter-popout" href={popupUrl} target="compel-teleprompter" onClick={event=>{event.preventDefault();popOut();}}><ExternalLink className="h-4 w-4"/>Separate window</a>}
+      {floating
+        ? <button className="teleprompter-popout" onClick={()=>floating.close()}><ExternalLink className="h-4 w-4"/>Back to dashboard</button>
+        : <button className="teleprompter-popout" disabled={opening} onClick={popOut}><ExternalLink className="h-4 w-4"/>{opening?'Opening…':'Always on top'}</button>}
     </div>
-    {error&&<p className="teleprompter-error" role="alert">{error}</p>}
+    {error&&<div className="teleprompter-error" role="alert"><p>{error}</p>{!standalone&&<button onClick={regularWindow}>Open regular window</button>}</div>}
     <div className="teleprompter-reader" ref={viewport} tabIndex={0} aria-label="Spoken video script" onWheel={()=>setPlaying(false)} onTouchStart={()=>setPlaying(false)} onScroll={()=>{const reader=viewport.current;const limit=reader.scrollHeight-reader.clientHeight;setProgress(limit>0?Math.round(reader.scrollTop/limit*100):0);}} style={{'--teleprompter-font-size':fontSize+'px'}}>
       <div className="teleprompter-copy"><div ref={text} className={mirrored?'is-mirrored':''}>{paragraphs.map((paragraph,index)=><p key={index}>{paragraph}</p>)}</div></div>
     </div>
     <footer className="teleprompter-footer"><span>{words} words · {Math.floor(elapsed/60)}:{String(elapsed%60).padStart(2,'0')} elapsed</span><span>{progress}%</span><span>Space: play / pause · R: restart</span></footer>
   </>;
 
-  if (standalone) return <main className="teleprompter-shell is-standalone" aria-label="Teleprompter" onKeyDown={keyboard}>{contents}</main>;
   if (typeof document==='undefined') return null;
+  if (floating) return createPortal(<main className="teleprompter-shell is-standalone" aria-label="Teleprompter" onKeyDown={keyboard}>{contents}</main>,floating.document.body);
+  if (standalone) return <main className="teleprompter-shell is-standalone" aria-label="Teleprompter" onKeyDown={keyboard}>{contents}</main>;
   return createPortal(<dialog ref={dialog} className="teleprompter-shell" aria-label="Teleprompter" onKeyDown={keyboard} onCancel={event=>{event.preventDefault();onClose();}}>{contents}</dialog>,document.body);
 }

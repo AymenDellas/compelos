@@ -278,6 +278,8 @@ export default function Dashboard() {
     const [onboardingProjectId, setOnboardingProjectId] = useState<string | undefined>();
     const [copyStudioOpened, setCopyStudioOpened] = useState(false);
     useEffect(() => { if (activeTab === 'copy-studio') setCopyStudioOpened(true); }, [activeTab]);
+    const [contentCreateOpened, setContentCreateOpened] = useState(false);
+    useEffect(() => { if (activeTab === 'content-create') setContentCreateOpened(true); }, [activeTab]);
     const [caseStudyEntryView, setCaseStudyEntryView] = useState<'TODAY' | 'CRM_OUTREACH'>('TODAY');
     const [progress, setProgress] = useState(0);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -1996,9 +1998,10 @@ export default function Dashboard() {
                 ) : activeTab === 'copy-studio' ? (
                     null
                 ) : activeTab === 'content-create' ? (
-                    <ContentCreate />
+                    null
                 ) : <BusinessWorkspace view={activeTab as BusinessView} onNavigate={setActiveTab} initialProjectId={onboardingProjectId} />}
                     {(copyStudioOpened || activeTab === 'copy-studio') && <div hidden={activeTab !== 'copy-studio'}><CopyStudio /></div>}
+                    {(contentCreateOpened || activeTab === 'content-create') && <div hidden={activeTab !== 'content-create'}><ContentCreate /></div>}
                     <div hidden={activeTab !== 'funnel'}>
                         <FunnelAnalyzer />
                     </div>

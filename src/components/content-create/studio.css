@@ -209,6 +209,7 @@ dialog.teleprompter-shell:not([open]) { display:none; }
 .teleprompter-controls label span { color:#f1f5f9; font-variant-numeric:tabular-nums; }
 .teleprompter-controls input { grid-column:1 / -1; width:100%; accent-color:#9dbdff; cursor:pointer; }
 .teleprompter-error { padding:12px 22px; background:#422c28; color:#ffe0d8; font-size:12px; flex:none; }
+.teleprompter-error button { margin-top:10px; }
 .teleprompter-reader { flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-color:#54677d #101923; scroll-behavior:auto; }
 .teleprompter-reader:focus-visible { outline:2px solid #9dbdff; outline-offset:-2px; }
 .teleprompter-copy { max-width:780px; margin:0 auto; padding:20vh 36px 45vh; font-size:var(--teleprompter-font-size,38px); line-height:1.65; letter-spacing:-.015em; font-weight:500; overflow-wrap:anywhere; }
