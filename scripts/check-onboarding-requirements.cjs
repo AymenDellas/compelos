@@ -29,9 +29,9 @@ Object.assign(complete.onboarding.form, {
 
 assert.equal(initial.onboarding.form.testimonialCommitment, false);
 assert.equal(initial.onboarding.form.deploymentAccessConsent, false);
-assert.ok(business.missingOnboardingFormFields(initial.onboarding).includes('Honest testimonial after delivery'));
+assert.ok(business.missingOnboardingFormFields(initial.onboarding).includes('Case-study permission and testimonial commitment'));
 validation.validateProject(complete);
-for (const key of ['testimonialCommitment', 'deploymentAccessConsent', 'caseStudyConsent']) {
+for (const key of ['testimonialCommitment', 'caseStudyConsent']) {
   const missing = structuredClone(complete);
   missing.onboarding.form[key] = false;
   assert.throws(() => validation.validateProject(missing), /required onboarding/);
@@ -39,14 +39,23 @@ for (const key of ['testimonialCommitment', 'deploymentAccessConsent', 'caseStud
 for (const [key] of business.DEPLOYMENT_TOOL_FIELDS) {
   const missing = structuredClone(complete);
   missing.onboarding.form[key] = '';
-  assert.throws(() => validation.validateProject(missing), /required onboarding/);
+  assert.doesNotThrow(() => validation.validateProject(missing));
 }
 const noDestination = structuredClone(complete);
 for (const [key] of business.DEPLOYMENT_TOOL_FIELDS) noDestination.onboarding.form[key] = 'Not used';
-assert.throws(() => validation.validateProject(noDestination), /website builder or hosting/);
+assert.doesNotThrow(() => validation.validateProject(noDestination));
 const unknown = structuredClone(complete);
 unknown.onboarding.form.hostingPlatform = 'Unknown';
-assert.throws(() => validation.validateProject(unknown), /Hosting/);
+assert.doesNotThrow(() => validation.validateProject(unknown));
+const skippedDeployment = structuredClone(complete);
+for (const [key] of business.DEPLOYMENT_TOOL_FIELDS) skippedDeployment.onboarding.form[key] = '';
+skippedDeployment.onboarding.form.deploymentAccessConsent = false;
+assert.doesNotThrow(() => validation.validateProject(skippedDeployment));
+assert.equal(business.onboardingFormComplete(skippedDeployment.onboarding), true);
+assert.equal(business.generateAccessChecklist(skippedDeployment.onboarding.form).length, 0);
+assert.equal(business.onboardingAccessComplete(skippedDeployment.onboarding), true);
+assert.equal(business.onboardingBlockers(skippedDeployment.onboarding).some(item => item.key === 'access'), false);
+assert.equal(business.onboardingAccessComplete(initial.onboarding), false, 'Do not clear access before the client completes onboarding');
 
 const paid = structuredClone(complete);
 paid.onboarding.projectType = 'PAID';
@@ -122,11 +131,18 @@ function submission(intent = 'complete') {
     else if (value === true) form.set(key, 'accepted');
   form.set('token', '00000000-0000-4000-8000-000000000000');
   form.set('intent', intent);
+  form.set('caseStudyConsentVersion', business.CASE_STUDY_CONSENT_VERSION);
+  form.delete('testimonialCommitment'); // One combined checkbox supplies both commitments.
+  form.delete('deploymentAccessConsent');
   return form;
 }
 
 async function main() {
-  for (const key of ['testimonialCommitment', 'deploymentAccessConsent', 'websitePlatform']) {
+  const staleConsent = submission();
+  staleConsent.delete('caseStudyConsentVersion');
+  await assert.rejects(actions.saveClientPortalFormAction(staleConsent), /required onboarding/);
+  assert.equal(writes, 0, 'An older case-study checkbox must not silently accept the new testimonial commitment');
+  for (const key of ['caseStudyConsent', 'offer']) {
     const form = submission();
     form.delete(key);
     await assert.rejects(actions.saveClientPortalFormAction(form), /required onboarding/);
@@ -141,10 +157,19 @@ async function main() {
   await actions.saveClientPortalFormAction(submission());
   assert.equal(stored.onboarding.form.status, 'COMPLETE');
   assert.equal(stored.onboarding.form.testimonialCommitment, true);
-  assert.equal(stored.onboarding.form.deploymentAccessConsent, true);
+  assert.equal(stored.onboarding.form.deploymentAccessConsent, false);
   assert.ok(stored.onboarding.access.some(item => item.id === manual.id));
   assert.ok(stored.onboarding.access.find(item => item.id.endsWith('-website')).required);
   assert.equal(business.onboardingAccessComplete(stored.onboarding), false);
-  console.log('Onboarding checks passed: required commitments, deployment tools, access verification, draft saves, legacy records, signed terms, and server-side rejection. No live database used.');
+  stored = structuredClone(initial);
+  const skipped = submission();
+  for (const [key] of business.DEPLOYMENT_TOOL_FIELDS) skipped.delete(key);
+  await actions.saveClientPortalFormAction(skipped);
+  assert.equal(stored.onboarding.form.status, 'COMPLETE');
+  assert.equal(stored.onboarding.form.caseStudyConsent, true);
+  assert.equal(stored.onboarding.form.testimonialCommitment, true);
+  assert.equal(stored.onboarding.access.length, 0);
+  assert.equal(business.onboardingAccessComplete(stored.onboarding), true);
+  console.log('Onboarding checks passed: optional deployment, one combined consent, access verification when needed, draft saves, legacy records, signed terms, and server-side validation. No live database used.');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

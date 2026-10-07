@@ -322,8 +322,9 @@ export type OnboardingData = {
     documents: OnboardingDocument[];
 };
 
+export const CASE_STUDY_CONSENT_VERSION = 'case-study-testimonial-v1';
 export const CASE_STUDY_CONSENT_TEXT =
-    'I authorize Compel to document this project and use my business name and logo, before-and-after website screenshots, the finished work, and verified results I provide (including traffic, booking, conversion, and revenue figures) on its website and portfolio, in proposals and presentations, and on LinkedIn. Any testimonial or direct quote will be shown to me for approval before publication. Compel will not publish passwords, confidential customer information, or unverified results, and will anonymize sensitive figures when we agree to do so.';
+    'I agree to provide a short, honest testimonial after delivery and let Compel share this project and verified results as a case study, with my approval before publication.';
 
 export const TESTIMONIAL_COMMITMENT_TEXT =
     'In exchange for this free case-study project, I will provide one short, honest written or video testimonial about my experience with Compel after the agreed work is delivered. A positive review is not required, and Compel will show me the testimonial for approval before publishing it.';
@@ -336,14 +337,11 @@ export const DEPLOYMENT_TOOL_FIELDS = [
     ['repositoryProvider', 'Code repository provider'],
 ] as const;
 export const DEPLOYMENT_TOOL_HINT =
-    'Enter the tool name, or “Not used” if it does not apply. If hosting is included with your website builder, enter the builder name again. Ask Compel if you are unsure.';
+    'Fill this in only if you manage these tools. Otherwise, skip this section and we’ll coordinate deployment with the person responsible.';
 
 const UNUSED_TOOL = /^(none|n\/?a|no|not used|not applicable|not needed|no custom domain|no repository|no code repository|no website|no hosting)$/i;
 const UNKNOWN_TOOL = /^(unknown|unsure|not sure|don['’]?t know|i don['’]?t know|idk|tbd|to be decided|pending|\?+)$/i;
 const namedTool = (value: string) => Boolean(value?.trim() && !UNUSED_TOOL.test(value.trim()) && !UNKNOWN_TOOL.test(value.trim()));
-const deploymentToolsIdentified = (form: OnboardingData['form']) =>
-    DEPLOYMENT_TOOL_FIELDS.every(([key]) => Boolean(form[key]?.trim()) && !UNKNOWN_TOOL.test(form[key].trim())) &&
-    (namedTool(form.websitePlatform) || namedTool(form.hostingPlatform));
 
 export const FUNNEL_OFFER_QUESTION = 'Which single offer should this funnel promote?';
 export const FUNNEL_OFFER_HINT =
@@ -354,22 +352,14 @@ export const REQUIRED_ONBOARDING_FORM_FIELDS = [
     ['audience', 'Target audience'],
     ['customerProblem', 'Main customer problem'],
     ['desiredOutcome', 'Desired outcome'],
-    ...DEPLOYMENT_TOOL_FIELDS,
 ] as const;
 
 export function missingOnboardingFormFields(data: OnboardingData): string[] {
     const missing: string[] = REQUIRED_ONBOARDING_FORM_FIELDS
         .filter(([key]) => !String(data.form[key] || '').trim())
         .map(([, label]) => label);
-    if (data.projectType === 'CASE_STUDY' && !data.form.caseStudyConsent)
-        missing.push('Case-study permission');
-    if (data.projectType === 'CASE_STUDY' && !data.form.testimonialCommitment)
-        missing.push('Honest testimonial after delivery');
-    if (!data.form.deploymentAccessConsent) missing.push('Deployment access commitment');
-    for (const [key, label] of DEPLOYMENT_TOOL_FIELDS)
-        if (UNKNOWN_TOOL.test(String(data.form[key] || '').trim())) missing.push(label);
-    if (!namedTool(data.form.websitePlatform) && !namedTool(data.form.hostingPlatform))
-        missing.push('Identify the website builder or hosting platform for deployment');
+    if (data.projectType === 'CASE_STUDY' && (!data.form.caseStudyConsent || !data.form.testimonialCommitment))
+        missing.push('Case-study permission and testimonial commitment');
     return missing;
 }
 
@@ -744,10 +734,12 @@ export function mergeAccessChecklist(existing: AccessItem[], generated: AccessIt
 }
 
 export function onboardingAccessComplete(data: OnboardingData): boolean {
-    return Boolean(data.form.deploymentAccessConsent && deploymentToolsIdentified(data.form)) &&
-        !mergeAccessChecklist(data.access, generateAccessChecklist(data.form)).some(
-            (item) => item.required && !item.nonBlocking && !['VERIFIED', 'NOT_NEEDED'].includes(item.status),
-        );
+    const required = mergeAccessChecklist(data.access, generateAccessChecklist(data.form)).filter(
+        (item) => item.required && !item.nonBlocking,
+    );
+    return required.length
+        ? required.every((item) => ['VERIFIED', 'NOT_NEEDED'].includes(item.status))
+        : onboardingFormComplete(data);
 }
 
 export type OnboardingBlocker = { key: string; label: string; detail: string };
@@ -777,9 +769,7 @@ export function onboardingBlockers(data: OnboardingData): OnboardingBlocker[] {
     const missingAccess = mergeAccessChecklist(data.access, generateAccessChecklist(data.form)).filter(
         (item) => item.required && !item.nonBlocking && !['VERIFIED', 'NOT_NEEDED'].includes(item.status),
     );
-    if (!data.form.deploymentAccessConsent || !deploymentToolsIdentified(data.form))
-        blockers.push({ key: 'access', label: 'Deployment access not confirmed', detail: 'Identify your deployment tools and confirm collaborator access in the onboarding form.' });
-    else if (missingAccess.length)
+    if (missingAccess.length)
         blockers.push({
             key: 'access',
             label: `${missingAccess.length} required access ${missingAccess.length === 1 ? 'item is' : 'items are'} missing`,

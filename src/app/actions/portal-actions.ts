@@ -3,7 +3,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { agreementPdf } from '@/lib/agreement-pdf';
-import { generateAccessChecklist, mergeAccessChecklist, normalizeOnboarding, type ProjectData } from '@/lib/business';
+import { CASE_STUDY_CONSENT_VERSION, generateAccessChecklist, mergeAccessChecklist, normalizeOnboarding, type ProjectData } from '@/lib/business';
 import { businessTransaction, recordActivity } from '@/lib/business-store';
 import { validateProject } from '@/lib/business-validation';
 
@@ -138,7 +138,10 @@ export async function saveClientPortalFormAction(formData: FormData) {
         const nextForm = { ...onboarding.form };
         for (const key of PORTAL_FORM_FIELDS) nextForm[key] = portalValue(formData, key);
         nextForm.caseStudyConsent = onboarding.projectType === 'CASE_STUDY' && formData.get('caseStudyConsent') === 'accepted';
-        nextForm.testimonialCommitment = onboarding.projectType === 'CASE_STUDY' && formData.get('testimonialCommitment') === 'accepted';
+        nextForm.testimonialCommitment = nextForm.caseStudyConsent && (
+            formData.get('caseStudyConsentVersion') === CASE_STUDY_CONSENT_VERSION ||
+            formData.get('testimonialCommitment') === 'accepted'
+        );
         nextForm.deploymentAccessConsent = formData.get('deploymentAccessConsent') === 'accepted';
         nextForm.status = portalValue(formData, 'intent') === 'complete' ? 'COMPLETE' : 'IN_PROGRESS';
         const generated = nextForm.status === 'COMPLETE' ? generateAccessChecklist(nextForm) : [];

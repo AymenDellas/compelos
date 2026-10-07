@@ -28,10 +28,8 @@ import {
 import {
     AGREEMENT_STATUSES,
     CASE_STUDY_CONSENT_TEXT,
-    DEPLOYMENT_ACCESS_CONSENT_TEXT,
     DEPLOYMENT_TOOL_FIELDS,
     DEPLOYMENT_TOOL_HINT,
-    TESTIMONIAL_COMMITMENT_TEXT,
     currentFreeAgreementIntro,
     DEFAULT_ONBOARDING_TEMPLATES,
     FUNNEL_OFFER_HINT,
@@ -668,20 +666,12 @@ function FormStep({ data, update }: StepProps) {
             {group('Offer and business', [['offer', FUNNEL_OFFER_QUESTION], ['audience', 'Target audience'], ['customerProblem', 'Main customer problem', true], ['desiredOutcome', 'Desired outcome', true], ['trafficSources', 'Current traffic sources']])}
             {group('Funnel information', [['landingPageUrl', 'Current landing page URL'], ['bookingUrl', 'Booking URL'], ['qualification', 'Current qualification'], ['nurture', 'Current nurture / follow-up'], ['traffic', 'Approximate traffic'], ['bookings', 'Approximate bookings'], ['showRate', 'Approximate show rate'], ['closeRate', 'Approximate clients / close rate']])}
             {group('Existing tools', [['bookingPlatform', 'Booking platform'], ['crm', 'CRM'], ['emailPlatform', 'Email platform'], ['analyticsPlatform', 'Analytics platform']])}
-            {group('Deployment tools and access', DEPLOYMENT_TOOL_FIELDS.map(([key, label]) => [key, label]), DEPLOYMENT_TOOL_HINT)}
-            <label className="flex items-start gap-3 text-sm text-[var(--text-dim)]">
-                <input type="checkbox" className="mt-1" checked={data.form.deploymentAccessConsent} onChange={(e) => set('deploymentAccessConsent', e.target.checked)} />
-                <span>{DEPLOYMENT_ACCESS_CONSENT_TEXT}</span>
-            </label>
+            {group('Deployment tools and access · Optional', DEPLOYMENT_TOOL_FIELDS.map(([key, label]) => [key, label]), DEPLOYMENT_TOOL_HINT)}
             {group('Brand, assets, and preferences', [['assets', 'Logo, colors, fonts, photos, testimonials, case studies, certifications, and copy links', true], ['mustStay', 'Anything that must stay', true], ['avoid', 'Anything the client does not want changed', true], ['importantContext', 'Anything important that is not obvious', true]])}
             {data.projectType === 'CASE_STUDY' && <div className="rounded-md border border-[var(--line-strong)] p-4 space-y-3">
-                <p className="text-sm font-medium">Free case-study commitments <span className="text-[var(--bad)]">*</span></p>
+                <p className="text-sm font-medium">Case-study permission <span className="text-[var(--bad)]">*</span></p>
                 <label className="flex items-start gap-3 text-sm text-[var(--text-dim)]">
-                    <input type="checkbox" className="mt-1" checked={data.form.testimonialCommitment} onChange={(e) => set('testimonialCommitment', e.target.checked)} />
-                    <span>{TESTIMONIAL_COMMITMENT_TEXT}</span>
-                </label>
-                <label className="flex items-start gap-3 text-sm text-[var(--text-dim)]">
-                    <input type="checkbox" className="mt-1" checked={data.form.caseStudyConsent} onChange={(e) => set('caseStudyConsent', e.target.checked)} />
+                    <input type="checkbox" className="mt-1" checked={data.form.caseStudyConsent && data.form.testimonialCommitment} onChange={(e) => update((current) => ({ ...current, form: { ...current.form, caseStudyConsent: e.target.checked, testimonialCommitment: e.target.checked } }))} />
                     <span>{CASE_STUDY_CONSENT_TEXT}</span>
                 </label>
             </div>}
@@ -826,7 +816,7 @@ function PortalPreview({ data, blockers, onClose }: { data: OnboardingData; bloc
                     ['Agreement', AGREEMENT_LABELS[data.agreement.status], data.agreement.status === 'FULLY_SIGNED'],
                     ...(data.projectType === 'PAID' ? [['Payment', PAYMENT_LABELS[data.payment.status], ['FULLY_PAID', 'DEPOSIT_PAID'].includes(data.payment.status)]] : []),
                     ['Onboarding form', data.form.status.replace('_', ' ').toLowerCase(), onboardingFormComplete(data)],
-                    ['Access requests', data.access.length ? `${data.access.filter((item) => item.status === 'VERIFIED').length} of ${data.access.filter((item) => item.required && !item.nonBlocking).length} verified` : 'Complete deployment details', onboardingAccessComplete(data)],
+                    ['Access requests', data.access.length ? `${data.access.filter((item) => item.status === 'VERIFIED').length} of ${data.access.filter((item) => item.required && !item.nonBlocking).length} verified` : onboardingFormComplete(data) ? 'Not needed' : 'Optional · share if applicable', onboardingAccessComplete(data)],
                     ['Assets', data.form.assets ? 'Received' : 'Waiting', Boolean(data.form.assets)],
                     ['Scope confirmation', data.scope.confirmed ? 'Confirmed' : 'Waiting', data.scope.confirmed],
                 ].map(([label, status, done]) => <div key={String(label)} className="panel px-4 py-4 flex items-center gap-3"><span className={`w-6 h-6 rounded-full flex items-center justify-center border ${done ? 'text-[var(--signal)] border-[var(--signal-line)] bg-[var(--signal-dim)]' : 'text-[var(--text-faint)] border-[var(--line-strong)]'}`}>{done ? <Check className="w-3.5 h-3.5" /> : <span className="w-1.5 h-1.5 bg-current rounded-full" />}</span><span className="font-medium flex-1">{label}</span><span className="text-sm text-[var(--text-dim)] capitalize">{status}</span></div>)}</div>
