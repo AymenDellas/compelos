@@ -288,6 +288,8 @@ export type OnboardingData = {
         avoid: string;
         importantContext: string;
         caseStudyConsent: boolean;
+        testimonialCommitment: boolean;
+        deploymentAccessConsent: boolean;
     };
     access: AccessItem[];
     baseline: {
@@ -323,6 +325,26 @@ export type OnboardingData = {
 export const CASE_STUDY_CONSENT_TEXT =
     'I authorize Compel to document this project and use my business name and logo, before-and-after website screenshots, the finished work, and verified results I provide (including traffic, booking, conversion, and revenue figures) on its website and portfolio, in proposals and presentations, and on LinkedIn. Any testimonial or direct quote will be shown to me for approval before publication. Compel will not publish passwords, confidential customer information, or unverified results, and will anonymize sensitive figures when we agree to do so.';
 
+export const TESTIMONIAL_COMMITMENT_TEXT =
+    'In exchange for this free case-study project, I will provide one short, honest written or video testimonial about my experience with Compel after the agreed work is delivered. A positive review is not required, and Compel will show me the testimonial for approval before publishing it.';
+export const DEPLOYMENT_ACCESS_CONSENT_TEXT =
+    'I will provide Compel with the collaborator or delegated access needed to build, publish, connect, and test my funnel in the tools I list, including my website builder, hosting, domain/DNS, and repository where used. Work requiring that access cannot start until Compel verifies it. I will use invitations to aymen@getcompel.co rather than share passwords.';
+export const DEPLOYMENT_TOOL_FIELDS = [
+    ['websitePlatform', 'Website / funnel builder'],
+    ['hostingPlatform', 'Hosting / publishing platform'],
+    ['domainProvider', 'Domain / DNS provider'],
+    ['repositoryProvider', 'Code repository provider'],
+] as const;
+export const DEPLOYMENT_TOOL_HINT =
+    'Enter the tool name, or “Not used” if it does not apply. If hosting is included with your website builder, enter the builder name again. Ask Compel if you are unsure.';
+
+const UNUSED_TOOL = /^(none|n\/?a|no|not used|not applicable|not needed|no custom domain|no repository|no code repository|no website|no hosting)$/i;
+const UNKNOWN_TOOL = /^(unknown|unsure|not sure|don['’]?t know|i don['’]?t know|idk|tbd|to be decided|pending|\?+)$/i;
+const namedTool = (value: string) => Boolean(value?.trim() && !UNUSED_TOOL.test(value.trim()) && !UNKNOWN_TOOL.test(value.trim()));
+const deploymentToolsIdentified = (form: OnboardingData['form']) =>
+    DEPLOYMENT_TOOL_FIELDS.every(([key]) => Boolean(form[key]?.trim()) && !UNKNOWN_TOOL.test(form[key].trim())) &&
+    (namedTool(form.websitePlatform) || namedTool(form.hostingPlatform));
+
 export const FUNNEL_OFFER_QUESTION = 'Which single offer should this funnel promote?';
 export const FUNNEL_OFFER_HINT =
     'One offer keeps the message focused and gives visitors a clear next step, reducing distractions and helping the page convert.';
@@ -332,6 +354,7 @@ export const REQUIRED_ONBOARDING_FORM_FIELDS = [
     ['audience', 'Target audience'],
     ['customerProblem', 'Main customer problem'],
     ['desiredOutcome', 'Desired outcome'],
+    ...DEPLOYMENT_TOOL_FIELDS,
 ] as const;
 
 export function missingOnboardingFormFields(data: OnboardingData): string[] {
@@ -340,6 +363,13 @@ export function missingOnboardingFormFields(data: OnboardingData): string[] {
         .map(([, label]) => label);
     if (data.projectType === 'CASE_STUDY' && !data.form.caseStudyConsent)
         missing.push('Case-study permission');
+    if (data.projectType === 'CASE_STUDY' && !data.form.testimonialCommitment)
+        missing.push('Honest testimonial after delivery');
+    if (!data.form.deploymentAccessConsent) missing.push('Deployment access commitment');
+    for (const [key, label] of DEPLOYMENT_TOOL_FIELDS)
+        if (UNKNOWN_TOOL.test(String(data.form[key] || '').trim())) missing.push(label);
+    if (!namedTool(data.form.websitePlatform) && !namedTool(data.form.hostingPlatform))
+        missing.push('Identify the website builder or hosting platform for deployment');
     return missing;
 }
 
@@ -490,7 +520,7 @@ export function createOnboardingData(
                 ? `Target launch: ${project.launchAt}`
                 : 'Timeline begins when all onboarding blockers are cleared.',
             clientResponsibilities:
-                'Provide accurate business information, requested assets and necessary access; give feedback and approvals in a reasonable timeframe; ensure supplied claims, testimonials and data are accurate.',
+                ['Provide accurate business information, requested assets and necessary access; give feedback and approvals in a reasonable timeframe; ensure supplied claims, testimonials and data are accurate.', DEPLOYMENT_ACCESS_CONSENT_TEXT, ...(isCaseStudy ? [TESTIMONIAL_COMMITMENT_TEXT] : [])].join('\n\n'),
             compelResponsibilities:
                 'Diagnose the current funnel, create the approved deliverables, communicate progress, implement the agreed work, protect client information, and meet timelines when dependencies are available.',
             ownership: isCaseStudy
@@ -548,6 +578,8 @@ export function createOnboardingData(
             avoid: '',
             importantContext: opportunity?.unknowns || '',
             caseStudyConsent: false,
+            testimonialCommitment: false,
+            deploymentAccessConsent: false,
         },
         access: [],
         baseline: {
@@ -597,6 +629,12 @@ export function normalizeOnboarding(
         form.offer = '';
     }
     const agreement = { ...fallback.agreement, ...saved.agreement };
+    // Upgrade unsigned terms; signatures and stored signed PDFs retain their original wording.
+    if (['DRAFT', 'SENT', 'VIEWED'].includes(agreement.status) && !agreement.clientSignature && !agreement.signedPdfData) {
+        const commitments = [DEPLOYMENT_ACCESS_CONSENT_TEXT, ...(current.projectType === 'CASE_STUDY' ? [TESTIMONIAL_COMMITMENT_TEXT] : [])];
+        for (const commitment of commitments)
+            if (!agreement.clientResponsibilities.includes(commitment)) agreement.clientResponsibilities += `\n\n${commitment}`;
+    }
     if (agreement.status === 'DRAFT' && current.projectType === 'CASE_STUDY') {
         agreement.intro = currentFreeAgreementIntro(agreement.intro);
         agreement.caseStudyRights = agreement.caseStudyRights.replace('permissions selected below', 'permission described below');
@@ -609,7 +647,9 @@ export function normalizeOnboarding(
         form,
         baseline: { ...fallback.baseline, ...saved.baseline },
         scope: { ...fallback.scope, ...saved.scope },
-        access: Array.isArray(saved.access) ? saved.access : [],
+        access: form.status === 'COMPLETE'
+            ? mergeAccessChecklist(Array.isArray(saved.access) ? saved.access : [], generateAccessChecklist(form))
+            : Array.isArray(saved.access) ? saved.access : [],
         overrides: Array.isArray(saved.overrides) ? saved.overrides : [],
         documents: Array.isArray(saved.documents) ? saved.documents : [],
     };
@@ -620,11 +660,11 @@ const accessKey = (platform: string) =>
 
 export function generateAccessChecklist(form: OnboardingData['form']): AccessItem[] {
     const items: AccessItem[] = [];
-    const add = (platform: string, reason: string, permission: string, instructions: string) => {
-        if (!platform.trim() || /^(none|n\/a|no)$/i.test(platform.trim())) return;
+    const add = (role: string, platform: string, reason: string, permission: string, instructions: string) => {
+        if (!namedTool(platform)) return;
         items.push({
-            id: accessKey(platform),
-            platform,
+            id: `${accessKey(platform)}-${role}`,
+            platform: platform.trim(),
             reason,
             permission,
             instructions,
@@ -634,48 +674,80 @@ export function generateAccessChecklist(form: OnboardingData['form']): AccessIte
         });
     };
     add(
+        'website',
+        form.websitePlatform,
+        'Needed to build, publish, and test the agreed funnel in your website or funnel builder.',
+        'Website editor / publisher',
+        `Invite aymen@getcompel.co as a collaborator who can edit and publish the relevant site or funnel in ${form.websitePlatform}. Keep the account in your business name; do not share a password.`,
+    );
+    add(
+        'repository',
         form.repositoryProvider,
         'Needed to work with and deploy the funnel code.',
         'Repository collaborator',
-        `Invite the Compel delivery email as a collaborator in ${form.repositoryProvider}. Do not share a password.`,
+        `Invite aymen@getcompel.co as a repository collaborator in ${form.repositoryProvider}. Do not share a password.`,
     );
     add(
+        'hosting',
         form.hostingPlatform,
         'Needed to deploy and verify the finished funnel.',
         'Project collaborator',
-        `Invite Compel to the relevant project or team in ${form.hostingPlatform}. Keep the account in the client business name.`,
+        `Invite aymen@getcompel.co to the relevant project or team in ${form.hostingPlatform} with permission to deploy and manage the project. Keep the account in your business name.`,
     );
     add(
+        'domain',
         form.domainProvider,
         'Needed only for final domain and DNS connection.',
         'DNS manager or delegated access',
-        `Use delegated access in ${form.domainProvider} where available. Do not send login credentials.`,
+        `Grant aymen@getcompel.co delegated domain/DNS access in ${form.domainProvider} where available so Compel can connect the funnel domain. Do not send login credentials.`,
     );
     add(
+        'booking',
         form.bookingPlatform,
         'Needed to update the booking flow and qualification questions.',
         'Editor or admin for the relevant event',
         `Invite Compel through ${form.bookingPlatform}'s team or collaborator settings.`,
     );
     add(
+        'email',
         form.emailPlatform,
         'Needed to build or update the agreed nurture sequence.',
         'Campaign editor',
         `Grant the minimum collaborator role that can edit automations in ${form.emailPlatform}.`,
     );
     add(
+        'crm',
         form.crm,
         'Needed to connect lead capture and handoff.',
         'Workflow editor',
         `Invite Compel with access limited to the relevant pipeline or workflow in ${form.crm}.`,
     );
     add(
+        'analytics',
         form.analyticsPlatform,
         'Needed to capture the baseline and verify tracking.',
         'Viewer or analyst',
         `Grant viewer or analyst access to the relevant property in ${form.analyticsPlatform}.`,
     );
     return items;
+}
+
+export function mergeAccessChecklist(existing: AccessItem[], generated: AccessItem[]): AccessItem[] {
+    const merged = existing.map((item) => ({ ...item }));
+    for (const item of generated) {
+        const index = merged.findIndex((saved) => saved.id === item.id ||
+            (saved.id === accessKey(item.platform) && saved.permission === item.permission && saved.reason === item.reason));
+        if (index < 0) merged.push(item);
+        else merged[index] = { ...item, ...merged[index], id: item.id };
+    }
+    return merged;
+}
+
+export function onboardingAccessComplete(data: OnboardingData): boolean {
+    return Boolean(data.form.deploymentAccessConsent && deploymentToolsIdentified(data.form)) &&
+        !mergeAccessChecklist(data.access, generateAccessChecklist(data.form)).some(
+            (item) => item.required && !item.nonBlocking && !['VERIFIED', 'NOT_NEEDED'].includes(item.status),
+        );
 }
 
 export type OnboardingBlocker = { key: string; label: string; detail: string };
@@ -702,10 +774,12 @@ export function onboardingBlockers(data: OnboardingData): OnboardingBlocker[] {
             data.form.status === 'COMPLETE'
                 ? `Missing: ${missingOnboardingFormFields(data).join(', ')}.`
                 : 'Collect the structured business, funnel, tool, and asset details.');
-    const missingAccess = data.access.filter(
+    const missingAccess = mergeAccessChecklist(data.access, generateAccessChecklist(data.form)).filter(
         (item) => item.required && !item.nonBlocking && !['VERIFIED', 'NOT_NEEDED'].includes(item.status),
     );
-    if (missingAccess.length)
+    if (!data.form.deploymentAccessConsent || !deploymentToolsIdentified(data.form))
+        blockers.push({ key: 'access', label: 'Deployment access not confirmed', detail: 'Identify your deployment tools and confirm collaborator access in the onboarding form.' });
+    else if (missingAccess.length)
         blockers.push({
             key: 'access',
             label: `${missingAccess.length} required access ${missingAccess.length === 1 ? 'item is' : 'items are'} missing`,
@@ -726,9 +800,7 @@ export function onboardingProgress(data: OnboardingData) {
             (data.payment.structure !== 'FULL' && data.payment.status === 'DEPOSIT_PAID') ||
             data.overrides.includes('payment'),
         onboardingFormComplete(data) || data.overrides.includes('form'),
-        !data.access.some(
-            (item) => item.required && !item.nonBlocking && !['VERIFIED', 'NOT_NEEDED'].includes(item.status),
-        ),
+        onboardingAccessComplete(data),
         data.baseline.captured || data.overrides.includes('baseline'),
         data.scope.confirmed || data.overrides.includes('scope'),
     ];

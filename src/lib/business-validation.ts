@@ -164,6 +164,9 @@ export function validateProject(d: ProjectData) {
         choice(o.form?.status, ['NOT_SENT', 'SENT', 'IN_PROGRESS', 'COMPLETE'], 'onboarding form status');
         if (o.form.caseStudyConsent !== undefined && typeof o.form.caseStudyConsent !== 'boolean')
             throw new Error('Case-study permission must be accepted or declined.');
+        for (const key of ['testimonialCommitment', 'deploymentAccessConsent'] as const)
+            if (o.form[key] !== undefined && typeof o.form[key] !== 'boolean')
+                throw new Error('Onboarding commitments must be accepted or declined.');
         if (o.form.status === 'COMPLETE') {
             const missing = missingOnboardingFormFields(o);
             if (missing.length) throw new Error(`Complete the required onboarding fields: ${missing.join(', ')}.`);

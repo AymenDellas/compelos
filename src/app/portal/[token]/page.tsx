@@ -14,9 +14,14 @@ import { AgreementSigningForm } from './AgreementSigningForm';
 import { AgreementPdfViewer } from './AgreementPdfViewer';
 import {
     CASE_STUDY_CONSENT_TEXT,
+    DEPLOYMENT_ACCESS_CONSENT_TEXT,
+    DEPLOYMENT_TOOL_FIELDS,
+    DEPLOYMENT_TOOL_HINT,
+    TESTIMONIAL_COMMITMENT_TEXT,
     FUNNEL_OFFER_HINT,
     FUNNEL_OFFER_QUESTION,
     normalizeOnboarding,
+    onboardingAccessComplete,
     onboardingBlockers,
     onboardingFormComplete,
     onboardingProgress,
@@ -91,8 +96,10 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
         {
             label: 'Access requests',
             href: data.access.some((item) => !['VERIFIED', 'NOT_NEEDED'].includes(item.status)) ? '#access-instructions' : '#onboarding-form',
-            detail: `${requiredAccess.filter((item) => ['VERIFIED', 'NOT_NEEDED'].includes(item.status)).length} of ${requiredAccess.length} cleared`,
-            done: !blockers.some((item) => item.key === 'access'),
+            detail: requiredAccess.length
+                ? `${requiredAccess.filter((item) => ['VERIFIED', 'NOT_NEEDED'].includes(item.status)).length} of ${requiredAccess.length} cleared`
+                : 'Complete deployment details',
+            done: onboardingAccessComplete(data),
             icon: KeyRound,
         },
         {
@@ -194,19 +201,27 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
                                     <PortalField name="crm" label="CRM" value={data.form.crm} />
                                     <PortalField name="emailPlatform" label="Email platform" value={data.form.emailPlatform} />
                                     <PortalField name="analyticsPlatform" label="Analytics platform" value={data.form.analyticsPlatform} />
-                                    <PortalField name="hostingPlatform" label="Hosting platform" value={data.form.hostingPlatform} />
-                                    <PortalField name="domainProvider" label="Domain provider" value={data.form.domainProvider} />
-                                    <PortalField name="websitePlatform" label="Website platform" value={data.form.websitePlatform} />
-                                    <PortalField name="repositoryProvider" label="Repository provider" value={data.form.repositoryProvider} />
                                 </PortalGroup>
-                                <PortalGroup number="04" title="Assets and preferences">
+                                <PortalGroup number="04" title="Deployment tools and access">
+                                    <p className="sm:col-span-2 text-sm text-[var(--text-dim)]">{DEPLOYMENT_TOOL_HINT}</p>
+                                    {DEPLOYMENT_TOOL_FIELDS.map(([key, label]) => <PortalField key={key} name={key} label={label} value={data.form[key]} required />)}
+                                    <label className="sm:col-span-2 flex items-start gap-3 text-sm text-[var(--text-dim)]">
+                                        <input className="mt-1" type="checkbox" name="deploymentAccessConsent" value="accepted" defaultChecked={data.form.deploymentAccessConsent} required />
+                                        <span>{DEPLOYMENT_ACCESS_CONSENT_TEXT}</span>
+                                    </label>
+                                </PortalGroup>
+                                <PortalGroup number="05" title="Assets and preferences">
                                     <PortalField name="assets" label="Links to logos, photos, testimonials, case studies, certifications, and copy" value={data.form.assets} multiline />
                                     <PortalField name="mustStay" label="Anything that must stay" value={data.form.mustStay} multiline />
                                     <PortalField name="avoid" label="Anything you do not want changed" value={data.form.avoid} multiline />
                                     <PortalField name="importantContext" label="Anything important that is not obvious" value={data.form.importantContext} multiline />
                                 </PortalGroup>
                                 {data.projectType === 'CASE_STUDY' && <fieldset className="rounded-md border border-[var(--line-strong)] p-4 space-y-3">
-                                    <legend className="text-sm font-medium px-1">Case-study permission <span className="text-[var(--bad)]">*</span></legend>
+                                    <legend className="text-sm font-medium px-1">Free case-study commitments <span className="text-[var(--bad)]">*</span></legend>
+                                    <label className="flex items-start gap-3 text-sm text-[var(--text-dim)]">
+                                        <input className="mt-1" type="checkbox" name="testimonialCommitment" value="accepted" defaultChecked={data.form.testimonialCommitment} required />
+                                        <span>{TESTIMONIAL_COMMITMENT_TEXT}</span>
+                                    </label>
                                     <label className="flex items-start gap-3 text-sm text-[var(--text-dim)]">
                                         <input className="mt-1" type="checkbox" name="caseStudyConsent" value="accepted" defaultChecked={data.form.caseStudyConsent} required />
                                         <span>{CASE_STUDY_CONSENT_TEXT}</span>
