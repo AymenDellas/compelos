@@ -51,6 +51,8 @@ import {
 } from '@/lib/business';
 import { agreementPdf } from '@/lib/agreement-pdf';
 import { Empty, Field, LinkOut, Panel, type RunAction } from './BusinessUi';
+import { CompelLogo } from './CompelLogo';
+import './compel-onboarding.css';
 
 const STEPS = [
     ['agreement', 'Agreement'],
@@ -116,51 +118,63 @@ export default function OnboardingWorkspace({
 
     if (project)
         return (
-            <OnboardingEditor
-                key={`${project.id}-${project.revision}`}
-                project={project}
-                opportunity={opportunity?.data}
-                profile={snapshot.offer.profile}
-                busy={busy}
-                run={run}
-                onBack={() => setSelected(null)}
-            />
+            <OnboardingSurface>
+                <OnboardingEditor
+                    key={`${project.id}-${project.revision}`}
+                    project={project}
+                    opportunity={opportunity?.data}
+                    profile={snapshot.offer.profile}
+                    busy={busy}
+                    run={run}
+                    onBack={() => setSelected(null)}
+                />
+            </OnboardingSurface>
         );
     if (templates)
         return (
-            <TemplateEditor
-                templates={{
-                    ...(snapshot.offer.profile.onboardingTemplates || DEFAULT_ONBOARDING_TEMPLATES),
-                    freeAgreement: currentFreeAgreementIntro((snapshot.offer.profile.onboardingTemplates || DEFAULT_ONBOARDING_TEMPLATES).freeAgreement),
-                }}
-                profile={snapshot.offer.profile}
-                version={snapshot.offer.version}
-                busy={busy}
-                run={run}
-                onBack={() => setTemplates(false)}
-            />
+            <OnboardingSurface>
+                <TemplateEditor
+                    templates={{
+                        ...(snapshot.offer.profile.onboardingTemplates || DEFAULT_ONBOARDING_TEMPLATES),
+                        freeAgreement: currentFreeAgreementIntro((snapshot.offer.profile.onboardingTemplates || DEFAULT_ONBOARDING_TEMPLATES).freeAgreement),
+                    }}
+                    profile={snapshot.offer.profile}
+                    version={snapshot.offer.version}
+                    busy={busy}
+                    run={run}
+                    onBack={() => setTemplates(false)}
+                />
+            </OnboardingSurface>
         );
     if (creating)
         return (
-            <CreateOnboarding
-                busy={busy}
-                run={run}
-                onCancel={() => setCreating(false)}
-                onCreated={(id) => {
-                    setCreating(false);
-                    setSelected(id);
-                }}
-            />
+            <OnboardingSurface>
+                <CreateOnboarding
+                    busy={busy}
+                    run={run}
+                    onCancel={() => setCreating(false)}
+                    onCreated={(id) => {
+                        setCreating(false);
+                        setSelected(id);
+                    }}
+                />
+            </OnboardingSurface>
         );
 
     return (
-        <OnboardingDashboard
-            snapshot={snapshot}
-            onOpen={setSelected}
-            onCreate={() => setCreating(true)}
-            onTemplates={() => setTemplates(true)}
-        />
+        <OnboardingSurface>
+            <OnboardingDashboard
+                snapshot={snapshot}
+                onOpen={setSelected}
+                onCreate={() => setCreating(true)}
+                onTemplates={() => setTemplates(true)}
+            />
+        </OnboardingSurface>
     );
+}
+
+function OnboardingSurface({ children }: { children: React.ReactNode }) {
+    return <div className="compel-onboarding compel-onboarding-workspace"><div className="compel-onboarding-heading"><CompelLogo /><span className="label-micro">Client onboarding</span></div>{children}</div>;
 }
 
 function OnboardingDashboard({
@@ -637,7 +651,7 @@ function FormStep({ data, update }: StepProps) {
             <h3 className="label-micro border-b border-[var(--line)] pb-2">{title}</h3>
             <div className="grid sm:grid-cols-2 gap-4">{fields.map(([key, label, multiline]) => {
                 const required = requiredKeys.includes(key);
-                return <Field key={key} label={required ? label : `${label} · Optional`} hint={key === 'offer' ? FUNNEL_OFFER_HINT : undefined} required={required} multiline={multiline} value={data.form[key]} onChange={(value) => set(key, value)} />;
+                return <div key={key} className={key === 'offer' ? 'sm:col-span-2' : undefined}><Field label={required ? label : `${label} · Optional`} hint={key === 'offer' ? FUNNEL_OFFER_HINT : undefined} required={required} multiline={multiline} value={data.form[key]} onChange={(value) => set(key, value)} /></div>;
             })}</div>
         </div>
     );
@@ -788,8 +802,8 @@ function Documents({ data }: { data: OnboardingData }) {
 function PortalPreview({ data, blockers, onClose }: { data: OnboardingData; blockers: ReturnType<typeof onboardingBlockers>; onClose: () => void }) {
     const outstanding = blockers.map((item) => item.label);
     return (
-        <div className="fixed inset-0 z-50 bg-[var(--surface-0)] overflow-y-auto">
-            <header className="topbar h-[60px] px-5 flex items-center"><span className="font-semibold">Compel</span><span className="ml-3 text-xs text-[var(--text-faint)]">Client portal preview</span><button className="btn btn-outline ml-auto" onClick={onClose}><X className="w-3.5 h-3.5" /> Close preview</button></header>
+        <div className="compel-portal fixed inset-0 z-50 overflow-y-auto">
+            <header className="compel-portal-header"><CompelLogo /><span className="compel-portal-header-label">Client portal preview</span><button className="btn btn-outline ml-auto" onClick={onClose}><X className="w-3.5 h-3.5" /> Close preview</button></header>
             <main className="max-w-3xl mx-auto p-5 md:p-10 space-y-6">
                 <div><p className="label-micro">{data.businessName || data.clientName}</p><h1 className="text-2xl font-semibold mt-2">Welcome, {data.clientName.split(' ')[0]}</h1><p className="text-[var(--text-dim)] mt-2">Everything needed to prepare {data.projectName}, in one place.</p></div>
                 <div className={`panel p-5 ${outstanding.length ? 'border-[rgba(232,177,76,.25)]' : 'border-[var(--signal-line)]'}`}>
