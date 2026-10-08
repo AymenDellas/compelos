@@ -118,7 +118,7 @@ export async function createSchema() {
         // there whether or not its email has been verified. Rows written under the
         // old model are carried across so they keep showing up in their region tab.
         const migrated = await client.query(
-            `UPDATE leads SET pipeline_status = 'QUALIFIED' WHERE pipeline_status = 'OUTREACH'`
+            `UPDATE leads SET pipeline_status = CASE WHEN NULLIF(trim(email),'') IS NULL THEN 'NOT_QUALIFIED' ELSE 'QUALIFIED' END WHERE pipeline_status = 'OUTREACH'`
         );
         if (migrated.rowCount) console.log(`Migrated ${migrated.rowCount} leads from OUTREACH to QUALIFIED`);
 

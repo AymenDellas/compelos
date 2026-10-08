@@ -1,6 +1,10 @@
 node_modules/
 .next/
 .vercel/
+.browser-profiles/
+data/
+queue/
+queue-results/
 tmp/pdfs/
 *.tsbuildinfo
 .env*

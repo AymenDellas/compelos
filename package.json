@@ -14,13 +14,19 @@
     "test:onboarding": "node scripts/check-onboarding-requirements.cjs",
     "test:teleprompter": "node scripts/check-teleprompter-pip.cjs",
     "test:crm-verification": "node scripts/check-crm-email-verification.cjs",
-    "test:auth": "node scripts/check-dashboard-auth.cjs"
+    "test:auth": "node scripts/check-dashboard-auth.cjs",
+    "test:workers": "node --test tests/workers/*.test.cjs",
+    "worker": "node scripts/linkedin-worker-supervisor.cjs",
+    "worker:single": "node worker.cjs"
   },
   "dependencies": {
     "lucide-react": "0.564.0",
     "next": "16.3.8",
     "pdfjs-dist": "6.3.289",
     "pg": "8.23.0",
+    "puppeteer": "24.38.0",
+    "puppeteer-extra": "3.3.6",
+    "puppeteer-extra-plugin-stealth": "2.11.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "@qwen-code/qwen-code": "0.24.6",

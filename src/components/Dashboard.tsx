@@ -95,6 +95,7 @@ async function processLeadViaWorker(linkedinUrl: string): Promise<Lead> {
 import { exportToGoogleSheets, isGoogleSheetsConfigured } from "@/app/actions/google-sheets";
 import UrlCleaner from "./UrlCleaner";
 import FinderEngine from "./FinderEngine";
+import LinkedInAccounts from "./LinkedInAccounts";
 
 import Papa from 'papaparse';
 
@@ -474,7 +475,7 @@ export default function Dashboard() {
      * DEFAULT_DAILY_SCRAPE_LIMIT, so a batch is about a day of LinkedIn budget —
      * queueing more than that just fixes tomorrow's ordering to today's scores.
      */
-    const QUEUE_BATCH_SIZE = 400;
+    const QUEUE_BATCH_SIZE = Math.max(400, dailyStats.limit);
     
     const handleFetchPendingLeads = async (location: string, autoStart: boolean = false) => {
         try {
@@ -819,10 +820,10 @@ export default function Dashboard() {
     const rejectedToday = workerStatus?.dailyRejected ?? 0;
     const judgedToday = qualifiedToday + rejectedToday;
     const passRate = judgedToday > 0 ? Math.round((qualifiedToday / judgedToday) * 100) : null;
-    const budgetPct = dailyLimit > 0 ? Math.min(100, Math.round((doneToday / dailyLimit) * 100)) : 0;
-    const perHour = workerStatus?.avgJobDurationMs
+    const budgetPct = dailyLimit > 0 ? Math.min(100, Math.round(((workerStatus?.dailyBudgetCount ?? doneToday) / dailyLimit) * 100)) : 0;
+    const perHour = workerStatus?.ratePerHour ?? (workerStatus?.avgJobDurationMs
         ? Math.round(3600000 / workerStatus.avgJobDurationMs)
-        : null;
+        : null);
 
     // "Offline" and "idle" look identical in a status file — the difference is
     // whether the heartbeat is still being written. Say which one it is.
@@ -1316,7 +1317,7 @@ export default function Dashboard() {
                                 )}
                                 <p className="fig-sub">
                                     {dailyLimit > 0
-                                        ? `${Math.max(0, dailyLimit - doneToday).toLocaleString()} left in today's budget`
+                                        ? `${(workerStatus?.dailyRemaining ?? Math.max(0, dailyLimit - doneToday)).toLocaleString()} left in today's budget`
                                         : 'No daily cap configured'}
                                 </p>
                             </div>
@@ -1467,6 +1468,7 @@ export default function Dashboard() {
 
                             {/* ── Worker, and what it is doing ───────────────────── */}
                             <div className="space-y-4">
+                                <LinkedInAccounts />
                                 <section className={cn("panel", workerState === 'running' && "rail-live")}>
                                 <div className="panel-head">
                                     <Server className="w-3.5 h-3.5 text-[var(--text-faint)]" />

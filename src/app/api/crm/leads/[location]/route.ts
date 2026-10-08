@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getAllLeads, insertOrUpdateLead, updateLeadEmailVerification, LeadRecord } from '@/lib/db';
 import { verifyEmail } from '@/app/actions/email-verifier-actions';
 import { toPersistedVerification } from '@/lib/verification-persist';
+import { isUnsafeContact } from '@/lib/prospect-qualification.cjs';
 
 export async function GET(
     request: Request,
@@ -142,7 +143,7 @@ export async function POST(
             // QUALIFIED and stays there — verification below only annotates the
             // email, it never moves or removes the lead. The strict send gate is
             // applied later, at /api/crm/leads/qualified.
-            mappedLead.pipeline_status = pipeline_status;
+            mappedLead.pipeline_status = pipeline_status === 'QUALIFIED' && isUnsafeContact(String(lead.email || '')) ? 'NOT_QUALIFIED' : pipeline_status;
 
             if (lead.hook) mappedLead.hook = lead.hook;
             if (lead.hook_source) mappedLead.hook_source = lead.hook_source;
@@ -153,7 +154,7 @@ export async function POST(
             // Verify on arrival so the lead reaches the tab already labelled, rather
             // than sitting there as UNVERIFIED until someone remembers to check it.
             // A failure here costs a label, never the lead.
-            if (pipeline_status === 'QUALIFIED' && inserted.email) {
+            if (mappedLead.pipeline_status === 'QUALIFIED' && inserted.email) {
                 try {
                     const verification = await verifyEmail(inserted.email, 'automation');
                     // Same gate as the CRM's own verify path. This used to inline the

@@ -38,3 +38,13 @@ for (const file of fs.readdirSync(dir).filter(name => name.endsWith('.ts') && na
   }
 }
 console.log(`Authentication checks passed; ${checked} internal actions authenticate first.`);
+for (const route of ['linkedin-accounts','queue-batch','queue-status','process-lead','clear-queue']) {
+  const code=fs.readFileSync(path.join(__dirname,`../src/app/api/${route}/route.ts`),'utf8');
+  const ast=ts.createSourceFile(route,code,ts.ScriptTarget.Latest,true);
+  for (const statement of ast.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.body && statement.modifiers?.some(modifier=>modifier.kind===ts.SyntaxKind.ExportKeyword))
+      assert.match(statement.body.statements[0].getText(ast),/^await requireWorkerAdmin\(\)/,`${route}: authenticate before reading worker data`);
+  }
+}
+assert.match(fs.readFileSync(path.join(__dirname,'../src/lib/worker-admin.ts'),'utf8'),/await requireAdmin\(\)/);
+console.log('Worker account and queue endpoints authenticate first.');
