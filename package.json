@@ -13,6 +13,7 @@
     "test:sign": "node scripts/check-agreement-signing.cjs",
     "test:onboarding": "node scripts/check-onboarding-requirements.cjs",
     "test:teleprompter": "node scripts/check-teleprompter-pip.cjs",
+    "test:crm-verification": "node scripts/check-crm-email-verification.cjs",
     "test:auth": "node scripts/check-dashboard-auth.cjs"
   },
   "dependencies": {

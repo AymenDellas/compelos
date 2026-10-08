@@ -9,6 +9,7 @@ import { syncContactedFromGmailAction, clearUnconfirmedContactedAction, type Gma
 import { importCampaignReportsAction } from "@/app/actions/campaign-import-actions";
 import { syncBouncesAction } from "@/app/actions/bounce-actions";
 import { isExportableUnverifiable, wasRefusedByHost } from "@/lib/send-tiers";
+import { startVerificationRun, addVerificationBatch, getUnknownLabel, UNKNOWN_CAUSE_LABELS, type VerificationRun, type UnknownCause } from '@/lib/crm-email-verification';
 import { importCrmLeadsToHunterAction, markCrmLeadLinkedinDmSentAction } from "@/app/actions/linkedin-outreach-actions";
 
 
@@ -135,19 +136,12 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
      * hang, which is exactly how it got reported — so the run publishes its progress
      * as it goes rather than only at the end.
      */
-    const [verifyRun, setVerifyRun] = useState<{
-        total: number;
-        done: number;
-        valid: number;
-        invalid: number;
-        risky: number;
-        unknown: number;
-        failedChunks: number;
-    } | null>(null);
+    const [verifyRun, setVerifyRun] = useState<VerificationRun | null>(null);
     const [verifyError, setVerifyError] = useState<string | null>(null);
     /** Set by the Stop button; read between chunks so a long run can be abandoned. */
     const cancelVerifyRef = useRef(false);
-    const verifying = verifyRun !== null;
+    const verifyActiveRef = useRef(false);
+    const verifying = verifyRun?.phase === 'running';
     const [generatingHooks, setGeneratingHooks] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
     const itemsPerPage = 100;
@@ -495,7 +489,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
     const VERIFY_CHUNK = 25;
 
     const handleVerifySelected = async () => {
-        if (selectedIds.size === 0) return;
+        if (selectedIds.size === 0 || verifyActiveRef.current) return;
 
         const idsToVerify = Array.from(selectedIds);
 
@@ -510,50 +504,45 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
         )) return;
 
         cancelVerifyRef.current = false;
+        verifyActiveRef.current = true;
         setVerifyError(null);
-        setVerifyRun({ total: idsToVerify.length, done: 0, valid: 0, invalid: 0, risky: 0, unknown: 0, failedChunks: 0 });
+        setVerifyRun(startVerificationRun(idsToVerify.length));
 
         for (let i = 0; i < idsToVerify.length; i += VERIFY_CHUNK) {
             if (cancelVerifyRef.current) break;
             const chunk = idsToVerify.slice(i, i + VERIFY_CHUNK);
             try {
-                const updated = await verifyLeadEmailsAction(chunk);
-                if (updated?.length) {
+                const report = await verifyLeadEmailsAction(chunk);
+                if (report.updated.length) {
                     // Merge the whole updated row, not just the status: the method and
                     // expiry are what decide whether this lead can be exported.
-                    const byId = new Map(updated.map(u => [u.id, u]));
+                    const byId = new Map(report.updated.map(u => [u.id, u]));
                     setLeads(prev => prev.map(l => byId.has(l.id) ? { ...l, ...byId.get(l.id)! } : l));
                 }
-                const tally = { VALID: 0, INVALID: 0, RISKY: 0, UNKNOWN: 0 } as Record<string, number>;
-                for (const u of updated || []) {
-                    if (u.email_status && u.email_status in tally) tally[u.email_status]++;
+                setVerifyRun(prev => prev && addVerificationBatch(prev, report));
+                if (report.failed.length) {
+                    setVerifyError(report.failed[0].reason + ' Failed rows remain selected.');
                 }
-                setVerifyRun(prev => prev && ({
-                    ...prev,
-                    done: prev.done + chunk.length,
-                    valid: prev.valid + tally.VALID,
-                    invalid: prev.invalid + tally.INVALID,
-                    risky: prev.risky + tally.RISKY,
-                    unknown: prev.unknown + tally.UNKNOWN,
-                }));
+                // Only saved results and explicit skips are cleared. Failures remain retryable.
+                const settledIds = new Set([...report.updated, ...report.skipped].map(row => row.id));
+                setSelectedIds(prev => new Set([...prev].filter(id => !settledIds.has(id))));
             } catch (err) {
                 // A failed chunk used to vanish into the browser console, which is why
                 // a broken run and a slow one looked identical from the table.
                 console.error("Failed to verify batch", err);
                 setVerifyError(err instanceof Error ? err.message : String(err));
-                setVerifyRun(prev => prev && ({ ...prev, done: prev.done + chunk.length, failedChunks: prev.failedChunks + 1 }));
+                setVerifyRun(prev => prev && ({ ...prev, processed: prev.processed + chunk.length, failed: prev.failed + chunk.length }));
+                // A failed request is not a mailbox verdict. Retain selection and stop
+                // instead of repeating an infrastructure/configuration failure.
+                cancelVerifyRef.current = true;
+                break;
             }
-            // Clear only what's been attempted, so stopping early leaves the rest selected
-            // and the run can be resumed by clicking Verify again.
-            setSelectedIds(prev => {
-                const next = new Set(prev);
-                for (const id of chunk) next.delete(id);
-                return next;
-            });
         }
 
-        setVerifyRun(null);
+        const stopped = cancelVerifyRef.current;
+        setVerifyRun(prev => prev && ({ ...prev, phase: stopped ? 'stopped' : 'complete' }));
         cancelVerifyRef.current = false;
+        verifyActiveRef.current = false;
     };
 
     const handleGenerateHooksSelected = async () => {
@@ -1268,19 +1257,20 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                     <div className="px-4 py-2 border-b border-[var(--line)] flex items-center gap-3 flex-wrap bg-[var(--surface-0)]">
                         {verifyRun && (
                             <>
-                                <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--signal)] flex-none" />
+                                {verifying ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--signal)] flex-none" />
+                                    : <ShieldCheck className="w-3.5 h-3.5 text-[var(--text-dim)] flex-none" />}
                                 <span className="text-[12px]">
-                                    Verifying <span className="num">{verifyRun.done}</span>
+                                    {verifying ? 'Processed' : verifyRun.phase === 'stopped' ? 'Stopped at' : 'Finished'} <span className="num">{verifyRun.processed}</span>
                                     <span className="text-[var(--text-faint)]"> / </span>
                                     <span className="num">{verifyRun.total}</span>
                                 </span>
                                 <div className="h-1 w-32 rounded-full bg-[var(--surface-3)] overflow-hidden flex-none">
                                     <div
                                         className="h-full bg-[var(--signal)] transition-all duration-500"
-                                        style={{ width: `${Math.round((verifyRun.done / Math.max(1, verifyRun.total)) * 100)}%` }}
+                                        style={{ width: `${Math.round((verifyRun.processed / Math.max(1, verifyRun.total)) * 100)}%` }}
                                     />
                                 </div>
-                                {verifyRun.done > 0 && (
+                                {verifyRun.processed > 0 && (
                                     <span className="text-[12px] text-[var(--text-dim)]">
                                         <span className="num text-[var(--signal)]">{verifyRun.valid}</span> valid
                                         <span className="text-[var(--text-faint)]"> · </span>
@@ -1289,23 +1279,39 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                                         <span className="num">{verifyRun.risky}</span> risky
                                         <span className="text-[var(--text-faint)]"> · </span>
                                         <span className="num">{verifyRun.unknown}</span> unknown
+                                        {verifyRun.noEmail > 0 && <> · <span className="num">{verifyRun.noEmail}</span> skipped (no email)</>}
+                                        {verifyRun.missing > 0 && <> · <span className="num">{verifyRun.missing}</span> skipped (removed)</>}
+                                        {verifyRun.failed > 0 && <> · <span className="num">{verifyRun.failed}</span> failed (retry)</>}
                                     </span>
                                 )}
-                                {/* Most of the wait is recipient servers deliberately stalling
-                                    probes; an unknown result is their doing, not a failure here. */}
                                 <span className="label-micro">
-                                    {verifyRun.done === 0
+                                    {!verifying ? 'saved results stay in the CRM' : verifyRun.processed === 0
                                         ? 'probing mail servers — first results in a minute or two'
                                         : 'results land as each batch completes'}
                                 </span>
-                                <button
+                                {verifying ? <button
                                     onClick={() => { cancelVerifyRef.current = true; }}
                                     title="Finishes the batch in flight, then stops. Everything already verified is saved, and the rest stay selected."
                                     className="btn btn-outline ml-auto flex-none"
                                 >
                                     <XCircle className="w-3.5 h-3.5" />
                                     Stop
-                                </button>
+                                </button> : <button
+                                    onClick={() => { setVerifyRun(null); setVerifyError(null); }}
+                                    aria-label="Dismiss verification summary"
+                                    className="btn btn-ghost ml-auto !px-2"
+                                ><XCircle className="w-3.5 h-3.5" /></button>}
+                                {verifyRun.unknown > 0 && (
+                                    <div className="w-full text-[12px] text-[var(--text-dim)] leading-relaxed">
+                                        <span className="text-[var(--text)]">Why unknown: </span>
+                                        {(Object.keys(UNKNOWN_CAUSE_LABELS) as UnknownCause[])
+                                            .filter(cause => verifyRun.causes[cause] > 0)
+                                            .map(cause => `${verifyRun.causes[cause]} ${UNKNOWN_CAUSE_LABELS[cause]}`).join(' · ')}.
+                                        {(verifyRun.causes.hostBlocked + verifyRun.causes.senderIdentity > 0) && (
+                                            <span className="block">The receiving servers refused this probing host. Those mailboxes remain unconfirmed; resolving the IP or sender identity is needed before retrying.</span>
+                                        )}
+                                    </div>
+                                )}
                             </>
                         )}
                         {verifyError && (
@@ -1597,7 +1603,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                                                         : 'SMTP proof is missing or incomplete; reverify before sending'
                                                     : lead.email_verification_reason || lead.email_status}
                                             >
-                                                {isProvenValid(lead) ? 'VALID' : hasExpiredSmtpProof(lead) ? 'EXPIRED' : isUnprovenValid(lead) ? 'REVERIFY' : (lead.email_status || 'UNVERIFIED')}
+                                                {isProvenValid(lead) ? 'VALID' : hasExpiredSmtpProof(lead) ? 'EXPIRED' : isUnprovenValid(lead) ? 'REVERIFY' : lead.email_status === 'UNKNOWN' ? getUnknownLabel(lead.email_verification_reason) : (lead.email_status || 'UNVERIFIED')}
                                             </span>
                                         </td>
                                         <td className="px-4 py-2.5 text-[var(--text-dim)] max-w-[250px] truncate text-xs" title={lead.hook}>

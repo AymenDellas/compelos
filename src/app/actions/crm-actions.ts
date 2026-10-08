@@ -5,6 +5,7 @@ import { updateLead, updateLeadEmailVerification, deleteLead, bulkDeleteLeads, g
 import { classifyJunkAddress } from "@/lib/junk-addresses";
 import { getVerificationReadiness, verifyEmail, verifyEmailBatchFast } from "@/app/actions/email-verifier-actions";
 import { toPersistedVerification } from "@/lib/verification-persist";
+import { verifyCrmEmailBatch } from '@/lib/crm-email-verification';
 import { generateHook } from "@/lib/groqClient";
 
 export async function updateLeadAction(id: string, updates: Partial<LeadRecord>) {
@@ -36,18 +37,15 @@ export async function verifyLeadEmailAction(id: string) {
 /** Batch direct-SMTP verification without weakening the send gate. */
 export async function verifyLeadEmailsAction(ids: string[]) {
     await requireAdmin();
-    if (ids.length === 0) return [];
-    if (ids.length > 100) throw new Error("Verify up to 100 CRM leads at a time");
-    const readiness = await getVerificationReadiness();
-    if (!readiness.selfHostedReady) throw new Error(readiness.message);
-
-    const leads = (await getLeadsByIds(ids)).filter(lead => Boolean(lead.email));
-    const results = await verifyEmailBatchFast(leads.map(lead => ({ address: lead.email, source: "crm" })));
-    const updated = [];
-    for (let i = 0; i < leads.length; i++) {
-        updated.push(await updateLeadEmailVerification(leads[i].id, toPersistedVerification(results[i])));
-    }
-    return updated;
+    return verifyCrmEmailBatch(ids, {
+        getLeads: getLeadsByIds,
+        verify: async emails => {
+            const readiness = await getVerificationReadiness();
+            if (!readiness.selfHostedReady) throw new Error(readiness.message);
+            return verifyEmailBatchFast(emails);
+        },
+        save: (id, result) => updateLeadEmailVerification(id, toPersistedVerification(result)),
+    });
 }
 
 /**

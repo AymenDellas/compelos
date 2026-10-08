@@ -71,10 +71,14 @@ export async function POST(request: Request) {
         const transitions: Record<string, number> = {};
         const startedAt = Date.now();
         let checked = 0;
+        let skipped = 0;
+        let failed = 0;
         for (let i = 0; i < stale.length; i += 100) {
             const batch = stale.slice(i, i + 100);
-            const updated = await verifyLeadEmailsAction(batch.map(l => l.id));
-            for (const lead of updated) {
+            const report = await verifyLeadEmailsAction(batch.map(l => l.id));
+            skipped += report.skipped.length;
+            failed += report.failed.length;
+            for (const lead of report.updated) {
                 checked++;
                 const status = lead.email_status || 'UNKNOWN';
                 outcomes[status] = (outcomes[status] || 0) + 1;
@@ -93,6 +97,8 @@ export async function POST(request: Request) {
             target,
             candidates: stale.length,
             checked,
+            skipped,
+            failed,
             changed,
             unchanged: checked - changed,
             elapsedSeconds: Math.round((Date.now() - startedAt) / 1000),
