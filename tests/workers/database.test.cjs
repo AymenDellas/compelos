@@ -108,6 +108,11 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   assert.equal((await core.queueStatus(pool)).waitingCount,1);
   assert.equal((await core.claim(pool,'legacy-0','recovery')).limited,true,'a future retry cannot be claimed early');
   await pool.query('UPDATE compel_worker_jobs SET retry_at=NOW() WHERE id=$1',[resume.job.jobId]);
+  const model=process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b';
+  assert.equal((await core.reserveResearch(pool,model,4000)).ready,true);
+  assert.equal((await core.claim(pool,'legacy-0','recovery')).limited,true,'an expired per-job wait must still respect the shared provider cooldown');
+  assert.equal((await core.queueStatus(pool)).waitingCount,1);
+  await pool.query('UPDATE compel_research_budget SET next_at=NOW() WHERE id=$1',['groq/research/'+model]);
   const secondResume=await core.claim(pool,'legacy-0','recovery');assert.equal(secondResume.job.retryCount,1);assert.equal(secondResume.dailyCount,beforeRetry);
   await core.complete(pool,secondResume.job.jobId,'recovery',{...savedProfile,status:'REJECTED'});
   const reservations=await Promise.all([core.reserveResearch(pool,'fixture-model',4000),core.reserveResearch(pool,'fixture-model',4000)]);

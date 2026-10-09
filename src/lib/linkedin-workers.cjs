@@ -36,7 +36,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS compel_worker_pending_profile ON compel_worker
 CREATE INDEX IF NOT EXISTS compel_worker_job_queue ON compel_worker_jobs(created_at) WHERE status IN ('pending','processing');
 `;
 async function ensure(pool) {
- if (!ready.has(pool)) ready.set(pool, pool.query(SCHEMA).catch(error => { ready.delete(pool); throw error; }));
+ if (!ready.has(pool)) ready.set(pool, (async()=>{
+  // Existing deployments must not take schema locks while other workers save
+  // jobs. Only run migrations when the current columns are actually missing.
+  const migrated=await pool.query(`SELECT to_regclass('compel_research_budget') IS NOT NULL
+   AND (SELECT count(*)=3 FROM pg_attribute WHERE attrelid=to_regclass('compel_worker_jobs') AND attname IN ('checkpoint','retry_at','retry_count') AND NOT attisdropped)
+   AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('compel_worker_config') AND attname='supervisor_seen_at' AND NOT attisdropped) AS migrated`);
+  if(migrated.rows[0]?.migrated)return;
+  // All schema changes share one transaction lock across worker processes.
+  const client=await pool.connect();
+  try{await client.query('BEGIN');await client.query("SELECT pg_advisory_xact_lock(hashtext('compel/worker-schema/v4'))");await client.query(SCHEMA);await client.query('COMMIT');}
+  catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+ })().catch(error => { ready.delete(pool); throw error; }));
  return ready.get(pool);
 }
 function encryptionKey(env = process.env, legacy = false) {
@@ -235,7 +246,9 @@ async function claim(pool,id,owner) {
   if (!session) throw new Error('Account session lease lost.');
   await client.query(`INSERT INTO compel_worker_usage(account_id,day) VALUES($1,(NOW() AT TIME ZONE 'UTC')::date) ON CONFLICT DO NOTHING`,[id]);
   const usage=(await client.query(`SELECT count FROM compel_worker_usage WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date FOR UPDATE`,[id])).rows[0];
-  const job=(await client.query(`SELECT * FROM compel_worker_jobs WHERE (status='pending' AND (retry_at IS NULL OR retry_at<=NOW())) OR (status='processing' AND lease_until<NOW()) ORDER BY (checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`)).rows[0];
+  const job=(await client.query(`SELECT * FROM compel_worker_jobs WHERE ((status='pending' AND (retry_at IS NULL OR retry_at<=NOW())) OR (status='processing' AND lease_until<NOW()))
+   AND (result->'failure'->>'code' IS DISTINCT FROM 'AI_RATE_LIMIT' OR NOT EXISTS(SELECT 1 FROM compel_research_budget WHERE id=$1 AND next_at>NOW()))
+   ORDER BY (checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b')])).rows[0];
   if (!job?.checkpoint&&usage.count >= account.daily_limit) { await client.query('COMMIT'); return {limited:true,dailyCount:usage.count,dailyLimit:account.daily_limit}; }
   if (!job) { await client.query('COMMIT'); return null; }
   await client.query(`UPDATE compel_worker_jobs SET status='processing',account_id=$2,owner=$3,lease_until=NOW()+interval '15 minutes' WHERE id=$1`,[job.id,id,owner]);
@@ -314,7 +327,11 @@ async function importResult(pool,id,wrapper) {
 }
 async function queueStatus(pool) {
  const config=await settings(pool);
- const rows=(await pool.query(`SELECT count(*) FILTER(WHERE status IN ('pending','processing'))::integer AS pending,count(*) FILTER(WHERE status='pending' AND retry_at>NOW())::integer AS waiting,min(retry_at) FILTER(WHERE status='pending' AND retry_at>NOW()) AS next_retry FROM compel_worker_jobs`)).rows[0];
+ const rows=(await pool.query(`WITH budget AS (SELECT next_at FROM compel_research_budget WHERE id=$1), jobs AS (
+  SELECT *, GREATEST(retry_at,CASE WHEN result->'failure'->>'code'='AI_RATE_LIMIT' THEN (SELECT next_at FROM budget) END) AS ready_at FROM compel_worker_jobs)
+  SELECT count(*) FILTER(WHERE status IN ('pending','processing'))::integer AS pending,
+   count(*) FILTER(WHERE status='pending' AND ready_at>NOW())::integer AS waiting,
+   min(ready_at) FILTER(WHERE status='pending' AND ready_at>NOW()) AS next_retry FROM jobs`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b')])).rows[0];
  const recent=(await pool.query(`SELECT id,result,completed_at FROM compel_worker_jobs WHERE status='done' ORDER BY completed_at DESC LIMIT 100`)).rows;
  const selected=config.accounts.filter(a=>a.enabled&&!a.signedOut&&!a.logoutPending).slice(0,config.activeCount);
  const live=selected.filter(a=>a.online), busy=live.find(a=>a.status==='processing');
