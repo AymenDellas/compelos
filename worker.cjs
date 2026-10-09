@@ -16,6 +16,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const { researchProspect } = require('./src/lib/prospect-research.cjs');
 const { identityFromMe } = require('./src/lib/linkedin-session-identity.cjs');
+const {failureOf}=require('./src/lib/worker-failure.cjs');
 const { VERSION: QUALIFICATION_VERSION, assessProspect, pipelineForAssessment, extractMatchingProfile, extractProfileLocation, extractProfileContactInfo, isPlatformWebsite, isUnsafeContact, hostOf } = require('./src/lib/prospect-qualification.cjs');
 
 puppeteerExtra.use(StealthPlugin());
@@ -284,6 +285,7 @@ function purgeOldResults() {
 
 // ── Write worker status ──
 function writeStatus(status, extra = {}) {
+    if(isShuttingDown&&!['offline','paused','signed_out'].includes(status))return;
     latestStatus = { status, qualificationVersion: QUALIFICATION_VERSION, accountId: ACCOUNT_ID, ...extra, signedIn: signedInIdentity, updatedAt: new Date().toISOString() };
     try {
         fs.writeFileSync(
@@ -894,6 +896,12 @@ async function voyagerFetch(page, apiPath) {
         } catch (e) { return { status: 0, error: e.message }; }
     }, apiPath);
 }
+function requireLinkedInResponse(response,stage,final=false) {
+    if(![0,401,429,999,...(final?[403]:[])].includes(response.status))return;
+    const auth=[401,403,999].includes(response.status);
+    const code=auth?'LINKEDIN_AUTH':response.status===429?'LINKEDIN_RATE_LIMIT':'BROWSER_TIMEOUT';
+    throw Object.assign(new Error(`${stage}: ${auth?'LinkedIn session needs attention':response.status===429?'LinkedIn rate limit reached':response.error||'LinkedIn request timed out'}`),{failure:{stage:'linkedin',code,reason:auth?'LinkedIn requires sign-in or a security check.':response.status===429?'LinkedIn rate limit reached.':'LinkedIn browser request timed out.',retryable:true}});
+}
 
 // ── Scrape a single profile via Voyager API ──
 async function scrapeProfile(page, profileUrl, browserInstance) {
@@ -912,6 +920,7 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
         // ── 1. Contact Info (website + email) ──
         result.logs.push('Fetching contact info via Voyager API...');
         let contactRes = await voyagerFetch(page, `/voyager/api/identity/profiles/${slug}/profileContactInfo`);
+        requireLinkedInResponse(contactRes,'Contact info');
         if (contactRes.status !== 200) {
             await sleep(1000);
             contactRes = await voyagerFetch(page, `/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity=${slug}&decorationId=com.linkedin.voyager.dash.deco.identity.profile.ProfileContactInfo-14`);
@@ -937,10 +946,13 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
         // ── 2. Profile Data (name, headline, URN) ──
         result.logs.push('Fetching profile data via Voyager API...');
         let profileRes = await voyagerFetch(page, `/voyager/api/identity/profiles/${slug}/profileView`);
+        requireLinkedInResponse(profileRes,'Profile');
         if (profileRes.status !== 200) {
             await sleep(1000);
             profileRes = await voyagerFetch(page, `/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity=${slug}&decorationId=com.linkedin.voyager.dash.deco.identity.profile.FullProfileWithEntities-101`);
         }
+        requireLinkedInResponse(profileRes,'Profile',true);
+        if(profileRes.status!==200)throw Object.assign(new Error(`Profile unavailable (HTTP ${profileRes.status}).`),{failure:{stage:'linkedin',code:'PROFILE_UNAVAILABLE',reason:`LinkedIn profile unavailable (HTTP ${profileRes.status}).`,retryable:profileRes.status>=500}});
 
         let profileUrn = null;
         if (profileRes.status === 200) {
@@ -962,6 +974,7 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
         } else {
             result.logs.push(`Profile data failed: ${profileRes.status}`);
         }
+        if(!result.profileIdentityConfirmed)throw Object.assign(new Error('Requested profile was not present in the response.'),{failure:{stage:'linkedin',code:'PROFILE_IDENTITY',reason:'LinkedIn response did not contain the requested profile.',retryable:true}});
 
         await jitter(180, 520);
 
@@ -1163,6 +1176,7 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
     } catch (e) {
         result.logs.push(`Fatal error: ${e.message}`);
         result.status = 'ERROR';
+        result.failure=e.failure||failureOf(result);
     }
 
     return result;
@@ -1181,10 +1195,12 @@ function queueBrowserCrawl(task) {
 
 async function enrichAndFinalize(result, browserInstance) {
     try {
+        delete result.failure;
+        let aiError=null;
         result.logs.push('Researching independent ownership, coaching offer, clients, demand and conversion readiness...');
         const research = await researchProspect({
             ...result, linkedinUrl: result.url, email: result.primaryEmail || result.emails[0] || '',
-        });
+        }, {compactAI:result.compactAI,aiBudget:dbWorker?{reserve:(model,tokens)=>dbWorker.core.reserveResearch(dbWorker.pool,model,tokens),cool:(model,retryAt)=>dbWorker.core.coolResearch(dbWorker.pool,model,retryAt)}:undefined,onAIError:error=>{aiError=error;}});
         for (const limitation of research.limitations.filter(note => /^Automated interpretation/.test(note))) result.logs.push(limitation);
         // Email extraction is restricted to the identified practice. Inactivity is
         // a freshness signal and does not prevent business research.
@@ -1198,11 +1214,13 @@ async function enrichAndFinalize(result, browserInstance) {
         const tier = result.prospectQualification.tier;
         const interpretationFailed = research.limitations.some(note => /^Automated interpretation (?:failed|could not complete|is unavailable)/.test(note));
         result.status = pipelineForAssessment(result.prospectQualification) === 'QUALIFIED' ? 'QUALIFIED' : interpretationFailed ? 'ERROR' : 'REJECTED';
+        if(result.status==='ERROR')result.failure={...failureOf({...result,logs:[...result.logs,...research.limitations]}),retryAt:aiError?.retryAt||null};
         result.logs.push('Qualification: ' + result.status + ' — ' + (tier === 'A' ? result.prospectQualification.nextAction : result.prospectQualification.blockers.join(' ') || result.prospectQualification.nextAction));
         if (!result.primaryEmail) result.logs.push('No attributable email found; the LinkedIn profile remains available.');
     } catch (error) {
         result.logs.push('Research could not complete: ' + error.message);
         result.status = 'ERROR';
+        result.failure={stage:'research',code:'RESEARCH_FAILED',reason:'Website or qualification research could not complete.',retryable:true};
     }
     return result;
 }
@@ -1287,7 +1305,7 @@ async function shutdown(signal, exitCode = 0) {
     isShuttingDown = true;
     if (dbWorker) await settleJobs();
     log(`${signal} received — shutting down gracefully...`);
-    if (!SIGN_OUT_MODE || !['signed_out','paused'].includes(latestStatus.status)) writeStatus('offline', { reason: signal });
+    if (!(SIGN_OUT_MODE&&latestStatus.status==='signed_out') && !(latestStatus.status==='paused'&&exitCode!==0)) writeStatus('offline', { reason: signal });
 
     let launchingBrowser = null;
     if (browserLaunchTask) {
@@ -1342,7 +1360,7 @@ async function launchBrowser(profileDir, headless = true) {
     browserLaunchTask = puppeteerExtra.launch({
         headless: headless,
         userDataDir: profileDir,
-        timeout: 30000, protocolTimeout: 90000,
+        timeout: 30000, protocolTimeout: 30000,
         // Suppress page/plugin initialization until saved tabs have been closed.
         waitForInitialPage: false,
         targetFilter: target => target.type() !== 'page' || acceptPages,
@@ -1425,6 +1443,29 @@ async function loginAndGetPage(b, accounts) {
     }
     return page;
 }
+async function manualSignIn(profileDir) {
+    browser=await launchBrowser(profileDir,false);
+    if(isShuttingDown)return;
+    const page=await browser.newPage();workerPages.set(browser,page);
+    await page.setViewport({width:1366,height:768});
+    await page.goto('https://www.linkedin.com/login',{waitUntil:'domcontentloaded',timeout:45000});
+    await page.bringToFront();
+    writeStatus('awaiting_login',{reason:'Sign-in browser is open on the worker computer. Complete login or the LinkedIn security check there.'});
+    log('Manual sign-in browser opened. No saved password was entered.');
+    for(let attempt=0;attempt<120&&!isShuttingDown;attempt++) {
+        if(page.url().includes('/feed')) {
+            const me=await voyagerFetch(page,'/voyager/api/me');
+            const identity=me?.status===200?identityFromMe(me.data):null;
+            if(identity) {
+                signedInIdentity=identity;writeStatus('ready',{reason:`Signed in as ${identity.name}.`});
+                log(`Manual login confirmed as ${identity.name} (${identity.profileUrl}).`);
+                await shutdown('Manual sign-in complete');return;
+            }
+        }
+        await sleep(5000);
+    }
+    if(!isShuttingDown){writeStatus('paused',{reason:'Manual sign-in timed out. Click Sign in on worker computer to reopen the browser.'});await shutdown('Manual sign-in timed out',1);}
+}
 
 function getMemoryMB() {
     const mem = process.memoryUsage();
@@ -1505,6 +1546,13 @@ async function main() {
     const accounts = getAccounts();
     const profileDir = path.join(BROWSER_PROFILES_DIR, dbWorker ? dbWorker.account.profile_key : 'account-0');
     if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
+    if(MANUAL_LOGIN_MODE&&CHECK_LOGIN_MODE){
+        try{await manualSignIn(profileDir);}catch(error){
+            writeStatus('paused',{reason:'The sign-in browser could not open or load LinkedIn. Click Sign in on worker computer to try again.'});
+            log(`Manual sign-in failed: ${error.message}`);await shutdown('Manual sign-in failed',1);
+        }
+        return;
+    }
 
     // Startup housekeeping
     handleStaleQueue();
@@ -1772,9 +1820,14 @@ async function main() {
                 } catch {
                     log('⚠️ Page crashed mid-cycle. Recycling browser...');
                 }
+                if(isShuttingDown){inFlightJobs.delete(jobFile);break;}
 
                 let result;
-                if (pageAlive) {
+                if(job.resumeResult) {
+                    result=structuredClone(job.resumeResult);result.status='PENDING';
+                    result.logs=['Resuming saved LinkedIn profile; no new LinkedIn scrape or daily slot used.'];
+                    if(result.failure?.code==='AI_SIZE')result.compactAI=true;
+                } else if (pageAlive) {
                     try {
                         result = await scrapeProfile(page, profileUrl, browser);
                     } catch (e) {
@@ -1783,6 +1836,12 @@ async function main() {
                     }
                 } else {
                     result = { url: profileUrl, firstName: '', headline: '', activityStatus: 'Unknown', emails: [], websites: [], website: '', status: 'ERROR', logs: ['Browser page crashed before scrape'] };
+                }
+                if(result.status==='ERROR') {
+                    result.failure=result.failure||failureOf(result);
+                    needsRecycle=true;
+                } else if(dbWorker&&!job.resumeResult) {
+                    await dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,result);
                 }
 
                 // The LinkedIn half of the job is finished here. Everything that
@@ -1813,6 +1872,16 @@ async function main() {
                     if (job.nativePostProcess) {
                         await nativePostProcess(job, result, log)
                             .catch(err => { result.crmSaved = false; log(`  [Research] Save error: ${err.message}`); });
+                    }
+                    if(result.status==='ERROR'&&dbWorker) {
+                        result.failure=result.failure||failureOf(result);
+                        if(result.failure.retryable&&(job.retryCount<3||result.failure.code==='AI_RATE_LIMIT')) {
+                            const retryAt=result.failure.retryAt||new Date(Date.now()+(result.failure.stage==='linkedin'?15000:60000)).toISOString();
+                            result.failure.retryAt=retryAt;
+                            await dbWorker.core.defer(dbWorker.pool,jobId,dbWorker.owner,result,retryAt);
+                            log(`Recovery scheduled for ${jobId}: ${result.failure.reason}`);
+                            return;
+                        }
                     }
                     if (result.status === 'QUALIFIED') dailyQualified++;
                     else if (result.status === 'ERROR') dailyErrors++;
@@ -1867,11 +1936,8 @@ async function main() {
                 }
 
                 // Clear page memory between jobs: navigate back to LinkedIn feed
-                if (!needsRecycle && pageAlive) {
-                    try {
-                        await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-                    } catch { /* ignore */ }
-                }
+                // API calls use the existing authenticated page. Reloading the
+                // entire feed for every prospect needlessly filled Chrome memory.
 
                 // Delay between profiles
                 await jitter(700, 1600);

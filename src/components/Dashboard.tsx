@@ -34,6 +34,7 @@ import {
     MessagesSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { failureOf } from "@/lib/worker-failure.cjs";
 import CrmDatabase from "./CrmDatabase";
 import BusinessWorkspace from "./business/BusinessWorkspace";
 import CaseStudyHunter from "./business/CaseStudyHunter";
@@ -222,7 +223,7 @@ function describeLead(l: any): string {
             : `${who} — qualified, no address found`;
     }
     if (l.status === 'ACTIVITY_FAILED') return `${who} — skipped, no recent posts`;
-    if (l.status === 'ERROR') return `${who} — failed to scrape`;
+    if (l.status === 'ERROR') return `${who} — ${failureOf(l).reason}`;
     return `${who} — ${String(status).toLowerCase()}`;
 }
 
@@ -324,6 +325,7 @@ export default function Dashboard() {
 
     // ── Live Queue State ──
     const [queueSize, setQueueSize] = useState<number>(0);
+    const [retryingFailed, setRetryingFailed] = useState(false);
     const [workerStatus, setWorkerStatus] = useState<any>(null);
     const [dailyStats, setDailyStats] = useState<{ date: string; count: number; limit: number }>({ date: '', count: 0, limit: 0 });
 
@@ -352,9 +354,9 @@ export default function Dashboard() {
                         // pretty-printed blob in the feed for every profile —
                         // the same data the results table below already shows,
                         // in the least readable form available.
-                        const niceLogs = extractedLeads.map((l: any) => ({
+                        const niceLogs = extractedLeads.map((l: any, index: number) => ({
                             msg: describeLead(l),
-                            time: new Date().toLocaleTimeString(),
+                            time: data.recentResults[index].completedAt ? new Date(data.recentResults[index].completedAt).toLocaleTimeString() : 'Time unavailable',
                             type: l.status === 'QUALIFIED' ? 'success' as const
                                 : l.status === 'ERROR' ? 'error' as const
                                     : 'info' as const,
@@ -604,93 +606,15 @@ export default function Dashboard() {
     };
 
     const handleRetryFailed = async () => {
-        let failedLeads = leads.filter(l => l.status === 'ACTIVITY_FAILED');
-
-        // If no failed leads in current session, pull from saved progress
-        if (failedLeads.length === 0) {
-            const saved = await loadProgress();
-            if (saved && saved.leads.length > 0) {
-                const savedFailed = saved.leads.filter(l => l.status === 'ACTIVITY_FAILED');
-                if (savedFailed.length > 0) {
-                    failedLeads = savedFailed;
-                    // Load ALL saved leads into the UI so results table shows them
-                    setLeads(saved.leads);
-                    addToast(`Loaded ${savedFailed.length} failed lead(s) from saved progress`, 'info');
-                    // Give React a tick to render the loaded leads
-                    await new Promise(r => setTimeout(r, 100));
-                }
-            }
-        }
-
-        if (failedLeads.length === 0) {
-            addToast('No failed leads to retry.', 'info');
-            return;
-        }
-
-        setIsProcessing(true);
-        setProgress(0);
-        setLogs(prev => [...prev, {
-            msg: `🔄 Retrying ${failedLeads.length} failed lead(s)...`,
-            time: new Date().toLocaleTimeString(), type: 'info'
-        }]);
-
-        let retried = 0;
-
-        for (const failedLead of failedLeads) {
-            // Check cancel flag
-            if (isCancelledRef.current) {
-                setLogs(prev => [...prev, { msg: `🛑 Retry cancelled at ${retried}/${failedLeads.length}.`, time: new Date().toLocaleTimeString(), type: 'info' }]);
-                addToast(`Retry cancelled. ${retried} lead(s) re-processed.`, 'info');
-                break;
-            }
-
-            retried++;
-            setLogs(prev => [...prev, {
-                msg: `[Retry ${retried}/${failedLeads.length}] Re-processing ${failedLead.url}...`,
-                time: new Date().toLocaleTimeString(), type: 'info'
-            }]);
-
-            try {
-                const result = await processLeadViaWorker(failedLead.url);
-
-                // Use functional update so we always work with latest state
-                setLeads(prev => {
-                    const updated = [...prev];
-                    const idx = updated.findIndex(l => l.url === failedLead.url);
-                    if (idx !== -1) updated[idx] = result;
-                    else updated.push(result);
-                    return updated;
-                });
-
-                const newLogs = result.logs.map(logMsg => ({
-                    msg: logMsg,
-                    time: new Date().toLocaleTimeString(),
-                    type: result.status === 'QUALIFIED' ? 'success' as const : 'info' as const
-                }));
-                setLogs(prev => [...prev, ...newLogs]);
-            } catch (error) {
-                setLogs(prev => [...prev, {
-                    msg: `Retry failed for ${failedLead.url}: ${error}`,
-                    time: new Date().toLocaleTimeString(), type: 'info'
-                }]);
-            }
-
-            setProgress(Math.round((retried / failedLeads.length) * 100));
-
-            // Rate limiting between retries
-            if (retried < failedLeads.length) {
-                await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 2000));
-            }
-        }
-
-        // Get final leads state for saving
-        setLeads(prev => {
-            saveProgress(prev, prev.length, prev.length);
-            return prev;
-        });
-        setIsProcessing(false);
-        setProgress(100);
-        addToast(`Retry complete. ${retried} lead(s) re-processed.`, 'success');
+        setRetryingFailed(true);
+        try {
+            const response = await fetch('/api/queue-batch', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'retry_failed'})});
+            const data = await response.json();
+            if(!response.ok) throw new Error(data.error || 'Could not schedule recovery.');
+            addToast(data.queuedCount ? `Recovery queued for ${data.queuedCount} failed profiles; ${data.researchOnly} use their saved scrape.` : 'No failed profiles to recover in the latest batch.', data.queuedCount ? 'success' : 'info');
+            if(data.queuedCount) {setQueueSize(n=>n+data.queuedCount);setIsProcessing(true);}
+        } catch(error) {addToast(error instanceof Error ? error.message : 'Could not schedule recovery.', 'error');}
+        finally {setRetryingFailed(false);}
     };
 
     const handleClearQueue = async () => {
@@ -804,7 +728,7 @@ export default function Dashboard() {
     // Dynamic Stats Calculations
     const currentLeads = Array.isArray(leads) ? leads : [];
     const qualifiedCount = currentLeads.filter(l => l.status === 'QUALIFIED').length;
-    const activityFailedCount = currentLeads.filter(l => l.status === 'ACTIVITY_FAILED').length;
+    const activityFailedCount = currentLeads.filter(l => l.status === 'ERROR').length;
     const emailsFound = currentLeads.reduce((acc, curr) => acc + (curr.emails?.length || 0), 0);
     const withEmail = currentLeads.filter(l => (l.emails?.length || 0) > 0).length;
 
@@ -1450,9 +1374,9 @@ export default function Dashboard() {
                                         </button>
                                         <button
                                             onClick={handleRetryFailed}
-                                            disabled={isProcessing}
+                                            disabled={retryingFailed}
                                             className="btn btn-ghost"
-                                            title="Re-run the profiles whose activity check failed"
+                                            title="Recover failed profiles in the latest batch, using saved scrapes when available"
                                         >
                                             <RotateCcw className="w-3.5 h-3.5" />
                                             Retry failed
@@ -1513,6 +1437,9 @@ export default function Dashboard() {
                                     )}
                                 </div>
 
+                                {workerStatus?.waitingCount > 0 && <p role="status" className="panel-note">
+                                    {workerStatus.waitingCount} profiles retained for automatic retry. {workerStatus.nextRetryAt ? `Next retry after ${new Date(workerStatus.nextRetryAt).toLocaleTimeString()}.` : ''} Saved scrapes do not use another LinkedIn daily slot.
+                                </p>}
                                 {workerState === 'offline' && (
                                     <div className="panel-note">
                                         The worker isn&rsquo;t reporting in. Anything you queue is kept and
@@ -1612,6 +1539,7 @@ export default function Dashboard() {
                                                             <LeadStatusMark status={lead.status} />
                                                             {lead.timedOut && <span className="badge badge-warn">TIMED OUT</span>}
                                                         </div>
+                                                        {lead.status === 'ERROR' && <p className="mt-1 text-xs text-[var(--text-dim)] max-w-64">{failureOf(lead).reason}</p>}
                                                     </td>
                                                     <td className="px-4 py-2.5 align-top">
                                                         {sites.length > 0 ? (

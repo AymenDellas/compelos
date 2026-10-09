@@ -67,6 +67,7 @@ async function tick(){
  if(stopping||busy)return;busy=true;
  try{
   if(fs.existsSync(path.join(data,'worker-supervisor.stop'))){fs.unlinkSync(path.join(data,'worker-supervisor.stop'));await shutdown();return;}
+  await pool.query('UPDATE compel_worker_config SET supervisor_seen_at=NOW() WHERE id=1');
   await importLegacyQueue();
   const selected=await core.selectedAccounts(pool);
   // Once consumed, a sign-in request is no longer in the database. Let an

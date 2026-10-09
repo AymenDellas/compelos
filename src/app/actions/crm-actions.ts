@@ -6,7 +6,6 @@ import { classifyJunkAddress } from "@/lib/junk-addresses";
 import { getVerificationReadiness, verifyEmail, verifyEmailBatchFast } from "@/app/actions/email-verifier-actions";
 import { toPersistedVerification } from "@/lib/verification-persist";
 import { verifyCrmEmailBatch } from '@/lib/crm-email-verification';
-import { generateHook } from "@/lib/groqClient";
 
 export async function updateLeadAction(id: string, updates: Partial<LeadRecord>) {
     await requireAdmin();
@@ -108,29 +107,9 @@ export async function suppressJunkAddressesAction(): Promise<{
     return { suppressed, byReason, examples };
 }
 
-export async function generateHookAction(id: string) {
+export async function generateHookAction(_id: string): Promise<LeadRecord | null> {
     await requireAdmin();
-    const lead = await getLead(id);
-    if (!lead) return null;
-
-    // Use available data to generate a hook
-    const context = `
-        Name: ${lead.first_name} ${lead.last_name}
-        Company: ${lead.company}
-        LinkedIn URL: ${lead.linkedin_url}
-        Website: ${lead.website || lead.website_source}
-    `;
-
-    try {
-        const result = await generateHook(context, 0);
-        if (result && result.hook) {
-            return await updateLead(id, { hook: result.hook, hook_source: result.hookSource || 'manual' });
-        }
-        return lead;
-    } catch (err) {
-        console.error("Failed to generate hook", err);
-        return lead;
-    }
+    throw new Error('AI hook generation is disabled.');
 }
 
 export async function pushLeadsToInboxAction(ids: string[]) {

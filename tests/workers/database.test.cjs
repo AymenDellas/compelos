@@ -10,7 +10,7 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
  const raw=new Pool({connectionString:process.env.DATABASE_URL,max:6,connectionTimeoutMillis:10000,ssl:{rejectUnauthorized:false}});
  const schema='compel_worker_test_'+randomUUID().replaceAll('-','');
  assert.match(schema,/^compel_worker_test_[a-f0-9]{32}$/);
- const qualify=sql=>sql.replace(/\b(compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_sessions|compel_worker_jobs|leads)\b/g,`"${schema}".$1`);
+ const qualify=sql=>sql.replace(/\b(compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|leads)\b/g,`"${schema}".$1`);
  const pool={query:(sql,values)=>raw.query(qualify(sql),values),connect:async()=>{
   const client=await raw.connect();return{query:(sql,values)=>client.query(qualify(sql),values),release:()=>client.release()};
  }};
@@ -89,6 +89,31 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   assert.equal(config.accounts.find(a=>a.email==='first@example.test').id,'legacy-0');
   assert.equal(config.accounts.find(a=>a.id==='legacy-0').dailyCount,beforeRemove);
   const status=await core.queueStatus(pool);assert.equal(status.queueSize,1);assert.equal(status.recentResults.length,1);
+  // Failed interpretation resumes the saved profile even when the scrape allowance is exhausted.
+  const savedProfile={url:'https://www.linkedin.com/in/recover/',profileIdentityConfirmed:true,firstName:'Saved',status:'PENDING',logs:[]};
+  await core.clearQueue(pool);
+  const recoveredBatch=await core.enqueue(pool,[savedProfile.url]);
+  await pool.query(`UPDATE compel_worker_jobs SET status='done',result=$2::jsonb,completed_at=NOW() WHERE id=$1`,[recoveredBatch.jobs[0],JSON.stringify({...savedProfile,status:'ERROR',logs:['Automated interpretation rate limit (HTTP 429).']})]);
+  const retries=await core.retryFailed(pool);
+  assert.equal(retries.researchOnly,1);assert.equal(retries.scrapeCount,0);
+  await pool.query('UPDATE compel_linkedin_accounts SET daily_limit=1 WHERE id=$1',['legacy-0']);
+  const beforeRetry=(await core.settings(pool)).accounts.find(a=>a.id==='legacy-0').dailyCount;
+  await core.releaseSession(pool,'legacy-0','one',{status:'offline'});
+  assert.equal(await core.acquireSession(pool,'legacy-0','recovery'),true);
+  const resume=await core.claim(pool,'legacy-0','recovery');
+  assert.equal(resume.job.resumeResult.firstName,'Saved');assert.equal(resume.dailyCount,beforeRetry);
+  await core.checkpoint(pool,resume.job.jobId,'recovery',savedProfile);
+  await assert.rejects(core.defer(pool,resume.job.jobId,'impostor',{status:'ERROR'},new Date().toISOString()));
+  await core.defer(pool,resume.job.jobId,'recovery',{status:'ERROR',failure:{stage:'research',code:'AI_RATE_LIMIT',reason:'Waiting for quota',retryable:true}},new Date(Date.now()+60000).toISOString());
+  assert.equal((await core.queueStatus(pool)).waitingCount,1);
+  assert.equal((await core.claim(pool,'legacy-0','recovery')).limited,true,'a future retry cannot be claimed early');
+  await pool.query('UPDATE compel_worker_jobs SET retry_at=NOW() WHERE id=$1',[resume.job.jobId]);
+  const secondResume=await core.claim(pool,'legacy-0','recovery');assert.equal(secondResume.job.retryCount,1);assert.equal(secondResume.dailyCount,beforeRetry);
+  await core.complete(pool,secondResume.job.jobId,'recovery',{...savedProfile,status:'REJECTED'});
+  const reservations=await Promise.all([core.reserveResearch(pool,'fixture-model',4000),core.reserveResearch(pool,'fixture-model',4000)]);
+  assert.equal(reservations.filter(r=>r.ready).length,1,'all accounts share one provider budget');
+  await core.coolResearch(pool,'fixture-model',new Date(Date.now()+3600000).toISOString());
+  assert.ok(Date.parse((await core.reserveResearch(pool,'fixture-model',1000)).retryAt)>Date.now()+3500000);
   await core.importResult(pool,'job_old_text',{completedAt:new Date().toISOString(),result:{url:'https://www.linkedin.com/in/old/',status:'REJECTED',logs:['😀\ud83d broken\u0000']}});
   assert.equal((await core.jobStatus(pool,'job_old_text')).result.logs[0],'😀� broken');
   await pool.query(`CREATE TABLE leads(id TEXT PRIMARY KEY,linkedin_url TEXT,first_name TEXT,last_name TEXT,website TEXT,website_source TEXT,location TEXT,email TEXT,all_emails TEXT,email_status TEXT,

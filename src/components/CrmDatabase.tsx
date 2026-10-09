@@ -1,4 +1,5 @@
 "use client";
+import { AI_HOOK_GENERATION_ENABLED } from "@/lib/hook-settings";
 
 import React, { useState, useEffect, useRef } from "react";
 import { Loader2, Search, AlertCircle, XCircle, Trash2, Download, ShieldCheck, RefreshCcw, Zap, Phone, Radar, Upload, Mail, ChevronDown, Settings2, Ban, Send } from "lucide-react";
@@ -1082,9 +1083,9 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                                 {verifying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
                                 Verify
                             </button>
-                            <button onClick={handleGenerateHooksSelected} disabled={generatingHooks} className="btn btn-outline">
+                            <button onClick={handleGenerateHooksSelected} disabled={!AI_HOOK_GENERATION_ENABLED || generatingHooks} title="AI hook generation is disabled" className="btn btn-outline">
                                 {generatingHooks ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                                Hooks
+                                {AI_HOOK_GENERATION_ENABLED ? 'Hooks' : 'AI hooks disabled'}
                             </button>
                             <button onClick={handlePushToContacted} className="btn btn-outline">
                                 <Phone className="w-3.5 h-3.5" />
@@ -1191,7 +1192,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                                             <Ban className="w-3.5 h-3.5 flex-none" />
                                             <span className="flex-1">Scan for junk addresses</span>
                                         </button>
-                                        <button className="menu-item" onClick={() => { setToolsOpen(false); handleAutoGenerateMissingHooks(); }} disabled={generatingHooks}>
+                                        <button className="menu-item" onClick={() => { setToolsOpen(false); handleAutoGenerateMissingHooks(); }} disabled={!AI_HOOK_GENERATION_ENABLED || generatingHooks} title="AI hook generation is disabled">
                                             <Zap className="w-3.5 h-3.5 flex-none" />
                                             <span className="flex-1">Write missing hooks</span>
                                         </button>

@@ -54,12 +54,12 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
         unlinkSync: file => { files.delete(file); },
     };
     const page = {
-        setViewport: async () => {}, isClosed: () => false,
+        setViewport: async () => {}, isClosed: () => false, bringToFront:async()=>browserEvents.push('front'),
         goto: async () => {
             browserEvents.push('navigate');
             if (navigationFailures > 0) { navigationFailures--; throw Object.assign(new Error('Navigation timeout of 45000 ms exceeded'), { name: 'TimeoutError' }); }
         },
-        url: () => loginFails || signOut ? 'https://www.linkedin.com/login' : 'https://www.linkedin.com/feed/', evaluate: async () => true,
+        url: () => loginFails || signOut ? 'https://www.linkedin.com/login' : 'https://www.linkedin.com/feed/', evaluate: async (_fn,url) => typeof url==='string'&&url.includes('voyager/api/me')?{status:200,data:{miniProfile:{firstName:'Fixture',lastName:'Account',publicIdentifier:'fixture-account',entityUrn:'urn:li:fs_miniProfile:fixture'}}}:true,
     };
     const makeBrowser = options => ({
         process: () => ({ pid: 1234 }),
@@ -98,16 +98,17 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
         './src/lib/prospect-research.cjs': { researchProspect: () => assert.fail('No live research') },
         './src/lib/linkedin-session-identity.cjs': require('../../src/lib/linkedin-session-identity.cjs'),
         './src/lib/linkedin-signout.cjs': require('../../src/lib/linkedin-signout.cjs'),
+        './src/lib/worker-failure.cjs': require('../../src/lib/worker-failure.cjs'),
         http: {}, https: {},
         pg: { Pool: class { async query() { return {rows:[{id:accountId,email:`${accountId}@example.invalid`,secret:'encrypted',profile_key:`profile-${accountId}`,logout_request_token:signOut?'logout-token':null} ]}; } async end() {} } },
         'node:crypto': require('node:crypto'),
         './src/lib/linkedin-workers.cjs': { ensure:async()=>{},acquireSession:async()=>true,decrypt:()=>{assert.equal(signOut,false,'sign-out must not read or use saved passwords');return 'fixture';},releaseSession:async()=>{},consumeLoginRequest:async()=>true,
             finishLogout:async()=>{logoutSaved=true;return true;},
             claim:async()=>({job:JSON.parse(files.get(path.join(queueDir,'fixture-000.json'))),dailyCount:1,dailyLimit:400}),
-            complete:async()=>{},heartbeat:async()=>{} },
+            checkpoint:async()=>{},complete:async()=>{},heartbeat:async()=>{} },
     };
     const context = vm.createContext({
-        __dirname: root, global: {},
+        __dirname: root, global: {}, structuredClone,
         require: name => { assert.ok(Object.hasOwn(modules, name), `Unexpected module: ${name}`); return modules[name]; },
         process: {
             pid: 4444, argv: ['node', workerPath, ...(accountId ? ['--account',accountId] : []), ...(manualLogin ? ['--login'] : []), ...(checkLogin ? ['--check-login'] : []), ...(signOut ? ['--logout'] : [])], env: { DAILY_SCRAPE_LIMIT: '0' }, platform: 'win32',
@@ -139,6 +140,12 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
         assert.equal([...files.keys()].filter(file=>path.dirname(file)===queueDir).length,370,'sign-out cannot process or remove queued leads');
         assert.deepEqual(exits,[0]);return {launches,logs};
     }
+    if(manualLogin&&checkLogin) {
+        assert.deepEqual(exits,[0]);assert.equal(status.status,'offline');assert.equal(status.reason,'Manual sign-in complete');
+        assert.equal(launches.length,1);assert.equal(launches[0].headless,false);assert.ok(browserEvents.includes('front'));
+        assert.equal([...files.keys()].filter(file=>path.dirname(file)===queueDir).length,370);
+        return {launches,logs};
+    }
     if (duplicate || loginFails || status?.reason?.includes('Browser could not load')) {
         assert.equal([...files.keys()].filter(file => path.dirname(file) === queueDir).length, 370);
         assert.equal(alive, false);
@@ -168,6 +175,9 @@ test('account workers launch distinct browser profiles and use their own login i
 test('account sign-out clears authentication, preserves every queued lead and never auto-logins',async()=>{
     const result=await runWorker({accountId:'legacy-0',signOut:true});
     assert.equal(result.launches.length,1);assert.ok(result.launches[0].headless);
+});
+test('an explicit account sign-in opens a visible login browser immediately without claiming leads',async()=>{
+    await runWorker({accountId:'legacy-0',manualLogin:true,checkLogin:true});
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

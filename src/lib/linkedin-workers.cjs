@@ -4,6 +4,7 @@
 // or launches browsers: the database carries settings, leases and results.
 const { randomUUID, randomBytes, createCipheriv, createDecipheriv, createHash } = require('node:crypto');
 const {cleanIdentity}=require('./linkedin-session-identity.cjs');
+const {failureOf}=require('./worker-failure.cjs');
 const ready = new WeakMap();
 // Browser text can contain lone UTF-16 surrogates or NULs. PostgreSQL JSONB
 // rejects those even though JSON.stringify accepts them. Keep normal emoji.
@@ -26,6 +27,11 @@ CREATE TABLE IF NOT EXISTS compel_worker_jobs (
  account_id TEXT, owner TEXT, lease_until TIMESTAMPTZ, result JSONB,
  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), completed_at TIMESTAMPTZ);
 ALTER TABLE compel_worker_jobs ADD COLUMN IF NOT EXISTS queue_order BIGSERIAL;
+ALTER TABLE compel_worker_jobs ADD COLUMN IF NOT EXISTS checkpoint JSONB;
+ALTER TABLE compel_worker_jobs ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ;
+ALTER TABLE compel_worker_jobs ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS compel_research_budget (id TEXT PRIMARY KEY,next_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+ALTER TABLE compel_worker_config ADD COLUMN IF NOT EXISTS supervisor_seen_at TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS compel_worker_pending_profile ON compel_worker_jobs(profile_key) WHERE status IN ('pending','processing');
 CREATE INDEX IF NOT EXISTS compel_worker_job_queue ON compel_worker_jobs(created_at) WHERE status IN ('pending','processing');
 `;
@@ -90,7 +96,7 @@ async function settings(pool) {
   FROM compel_linkedin_accounts a LEFT JOIN compel_worker_sessions s ON s.account_id=a.id
   LEFT JOIN compel_worker_usage u ON u.account_id=a.id AND u.day=(NOW() AT TIME ZONE 'UTC')::date
   WHERE a.archived IS FALSE ORDER BY a.position,a.id`)).rows;
- return { revision: config.revision, activeCount: Math.min(config.active_count, rows.filter(a => a.enabled).length), accounts: rows.map(a => ({
+ return { revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: Math.min(config.active_count, rows.filter(a => a.enabled).length), accounts: rows.map(a => ({
   id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,
   dailyCount:a.daily_count,status:a.status?.status || 'offline',reason:a.status?.reason || '',
   online:!!a.lease_until && new Date(a.lease_until).getTime() > Date.now(),
@@ -170,7 +176,7 @@ async function releaseSession(pool,id,owner,status) {
 }
 async function requestLogin(pool,id) {
  await ensure(pool);
- const result = await pool.query('UPDATE compel_linkedin_accounts SET login_requested_at=NOW(),signed_out_at=NULL WHERE id=$1 AND archived IS FALSE AND logout_requested_at IS NULL RETURNING id',[id]);
+ const result = await pool.query('UPDATE compel_linkedin_accounts SET login_requested_at=NOW(),signed_out_at=NULL,changed_at=NOW() WHERE id=$1 AND archived IS FALSE AND logout_requested_at IS NULL RETURNING id',[id]);
  if (!result.rowCount) throw new Error('Account not found or sign-out is still pending.');
 }
 async function requestLogout(pool,id) {
@@ -229,17 +235,56 @@ async function claim(pool,id,owner) {
   if (!session) throw new Error('Account session lease lost.');
   await client.query(`INSERT INTO compel_worker_usage(account_id,day) VALUES($1,(NOW() AT TIME ZONE 'UTC')::date) ON CONFLICT DO NOTHING`,[id]);
   const usage=(await client.query(`SELECT count FROM compel_worker_usage WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date FOR UPDATE`,[id])).rows[0];
-  if (usage.count >= account.daily_limit) { await client.query('COMMIT'); return {limited:true,dailyCount:usage.count,dailyLimit:account.daily_limit}; }
-  const job=(await client.query(`SELECT * FROM compel_worker_jobs WHERE status='pending' OR (status='processing' AND lease_until<NOW()) ORDER BY created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`)).rows[0];
+  const job=(await client.query(`SELECT * FROM compel_worker_jobs WHERE (status='pending' AND (retry_at IS NULL OR retry_at<=NOW())) OR (status='processing' AND lease_until<NOW()) ORDER BY (checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`)).rows[0];
+  if (!job?.checkpoint&&usage.count >= account.daily_limit) { await client.query('COMMIT'); return {limited:true,dailyCount:usage.count,dailyLimit:account.daily_limit}; }
   if (!job) { await client.query('COMMIT'); return null; }
   await client.query(`UPDATE compel_worker_jobs SET status='processing',account_id=$2,owner=$3,lease_until=NOW()+interval '15 minutes' WHERE id=$1`,[job.id,id,owner]);
-  await client.query(`UPDATE compel_worker_usage SET count=count+1 WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date`,[id]);
-  await client.query('COMMIT'); return {job:job.payload,dailyCount:usage.count+1,dailyLimit:account.daily_limit};
+  if(!job.checkpoint)await client.query(`UPDATE compel_worker_usage SET count=count+1 WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date`,[id]);
+  await client.query('COMMIT'); return {job:{...job.payload,...(job.checkpoint?{resumeResult:{...job.checkpoint,...(job.result?.failure?{failure:job.result.failure}:{})}}:{}),retryCount:job.retry_count},dailyCount:usage.count+(job.checkpoint?0:1),dailyLimit:account.daily_limit};
  } catch(error) { await client.query('ROLLBACK'); throw error; } finally {client.release();}
 }
 async function complete(pool,id,owner,result) {
  const update=await pool.query(`UPDATE compel_worker_jobs SET status='done',result=$3::jsonb,completed_at=NOW(),lease_until=NULL WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result)]);
  if (!update.rowCount) throw new Error('Job lease lost; result was not overwritten.');
+}
+async function checkpoint(pool,id,owner,result) {
+ const update=await pool.query(`UPDATE compel_worker_jobs SET checkpoint=$3::jsonb WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result)]);
+ if(!update.rowCount)throw new Error('Job lease lost before saving the scraped profile.');
+}
+async function defer(pool,id,owner,result,retryAt) {
+ const update=await pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL,result=$3::jsonb,retry_at=$4,retry_count=retry_count+1 WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result),retryAt]);
+ if(!update.rowCount)throw new Error('Job lease lost before scheduling recovery.');
+}
+async function retryFailed(pool) {
+ await ensure(pool);const client=await pool.connect();let count=0,researchOnly=0;
+ try {
+  await client.query('BEGIN');
+  const jobs=(await client.query(`SELECT * FROM compel_worker_jobs WHERE status='done' AND result->>'status'='ERROR' AND created_at>=(SELECT date_trunc('minute',max(created_at)) FROM compel_worker_jobs) FOR UPDATE`)).rows;
+  for(const job of jobs) {
+   if((await client.query(`SELECT id FROM compel_worker_jobs WHERE profile_key=$1 AND status IN ('pending','processing')`,[job.profile_key])).rowCount)continue;
+   const resume=job.checkpoint||(job.result.profileIdentityConfirmed&&failureOf(job.result).stage!=='linkedin'?job.result:null);
+   await client.query(`UPDATE compel_worker_jobs SET status='pending',checkpoint=$2::jsonb,retry_at=NULL,retry_count=0,owner=NULL,account_id=NULL,lease_until=NULL WHERE id=$1`,[job.id,resume?json(resume):null]);
+   count++;if(resume)researchOnly++;
+  }
+  await client.query('COMMIT');
+ }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+ return {queuedCount:count,researchOnly,scrapeCount:count-researchOnly};
+}
+async function reserveResearch(pool,model,tokens) {
+ const client=await pool.connect();
+ try {
+  await client.query('BEGIN');const id='groq/research/'+model;
+  await client.query('INSERT INTO compel_research_budget(id) VALUES($1) ON CONFLICT DO NOTHING',[id]);
+  const row=(await client.query('SELECT next_at,GREATEST(0,EXTRACT(EPOCH FROM(next_at-NOW()))*1000)::int AS wait_ms FROM compel_research_budget WHERE id=$1 FOR UPDATE',[id])).rows[0];
+  if(row.wait_ms>0){await client.query('COMMIT');return {ready:false,retryAt:new Date(row.next_at).toISOString()};}
+  // Share the token budget across every account worker, even with several API keys.
+  const spacing=Math.ceil(60000*Math.max(1000,tokens)/8000);
+  await client.query("UPDATE compel_research_budget SET next_at=NOW()+($2*interval '1 millisecond') WHERE id=$1",[id,spacing]);
+  await client.query('COMMIT');return {ready:true};
+ }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+}
+async function coolResearch(pool,model,retryAt) {
+ await pool.query('UPDATE compel_research_budget SET next_at=GREATEST(next_at,$2::timestamptz) WHERE id=$1',['groq/research/'+model,retryAt]);
 }
 async function jobStatus(pool,id) {
  await ensure(pool);
@@ -269,7 +314,7 @@ async function importResult(pool,id,wrapper) {
 }
 async function queueStatus(pool) {
  const config=await settings(pool);
- const rows=(await pool.query(`SELECT count(*) FILTER(WHERE status IN ('pending','processing'))::integer AS pending FROM compel_worker_jobs`)).rows[0];
+ const rows=(await pool.query(`SELECT count(*) FILTER(WHERE status IN ('pending','processing'))::integer AS pending,count(*) FILTER(WHERE status='pending' AND retry_at>NOW())::integer AS waiting,min(retry_at) FILTER(WHERE status='pending' AND retry_at>NOW()) AS next_retry FROM compel_worker_jobs`)).rows[0];
  const recent=(await pool.query(`SELECT id,result,completed_at FROM compel_worker_jobs WHERE status='done' ORDER BY completed_at DESC LIMIT 100`)).rows;
  const selected=config.accounts.filter(a=>a.enabled&&!a.signedOut&&!a.logoutPending).slice(0,config.activeCount);
  const live=selected.filter(a=>a.online), busy=live.find(a=>a.status==='processing');
@@ -281,12 +326,12 @@ async function queueStatus(pool) {
  try {today=(await pool.query(`SELECT count(*) FILTER(WHERE pipeline_status='QUALIFIED' AND NULLIF(trim(email),'') IS NOT NULL)::integer AS qualified,
   count(*) FILTER(WHERE pipeline_status='NOT_QUALIFIED')::integer AS rejected FROM leads WHERE prospect_researched_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC')`)).rows[0];} catch { /* an older database has not received research columns yet */ }
  const ratePerHour=live.reduce((sum,a)=>sum+(a.avgJobDurationMs?Math.round(3600000/a.avgJobDurationMs):0),0);
- return {status:'ok',available:true,queueSize:rows.pending,accounts:config.accounts,activeCount:config.activeCount,
+ return {status:'ok',available:true,queueSize:rows.pending,waitingCount:rows.waiting,nextRetryAt:rows.next_retry,accounts:config.accounts,activeCount:config.activeCount,
   workerStatus:{status:busy?'processing':live.length?'ready':selected.some(a=>a.status==='paused')?'paused':'offline',stale:!live.length,
    dailyCount,dailyLimit,dailyQualified:today.qualified,dailyRejected:today.rejected,activeAccounts:live.length,configuredAccounts:selected.length,
-   memoryMB:live.reduce((sum,a)=>sum+a.memoryMB,0),ratePerHour:ratePerHour||null,url:busy?.url||'',
+   memoryMB:live.reduce((sum,a)=>sum+a.memoryMB,0),ratePerHour:ratePerHour||null,url:busy?.url||'',waitingCount:rows.waiting,nextRetryAt:rows.next_retry,
    dailyBudgetCount:selected.reduce((sum,a)=>sum+a.dailyCount,0),dailyRemaining:selected.reduce((sum,a)=>sum+Math.max(0,a.dailyLimit-a.dailyCount),0)},
   dailyStats:{date:new Date().toISOString().slice(0,10),count:dailyCount,limit:dailyLimit},
   recentResults:recent.map(row=>({jobId:row.id,result:normalizeResult(row.result),completedAt:row.completed_at}))};
 }
-module.exports={SCHEMA,ensure,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,claim,complete,jobStatus,clearQueue,queueStatus,importResult,json};
+module.exports={SCHEMA,ensure,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};

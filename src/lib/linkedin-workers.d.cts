@@ -1,11 +1,12 @@
 export type LinkedInIdentity = {name:string;profileUrl:string;memberUrn:string;checkedAt:string|null};
 export type WorkerAccount = { id: string; label: string; email: string; enabled: boolean; dailyLimit: number; hasPassword: boolean; dailyCount: number; status: string; reason: string; online: boolean; loginPending: boolean; logoutPending?:boolean; signedOut?:boolean; updatedAt: string | null; signedIn?:LinkedInIdentity|null };
-export type WorkerSettings = { revision: number; activeCount: number; accounts: WorkerAccount[] };
+export type WorkerSettings = { revision: number; activeCount: number; accounts: WorkerAccount[]; supervisorOnline?:boolean };
 export function ensure(pool: unknown): Promise<void>;
 export function settings(pool: unknown): Promise<WorkerSettings>;
 export function saveSettings(pool: unknown, body: unknown): Promise<WorkerSettings>;
 export function requestLogin(pool: unknown, id: string): Promise<void>;
 export function requestLogout(pool: unknown, id: string): Promise<void>;
+export function retryFailed(pool:unknown):Promise<{queuedCount:number;researchOnly:number;scrapeCount:number}>;
 export function enqueue(pool: unknown, urls: unknown[], options?: {nativePostProcess?: boolean;targetRegion?: string;jobId?: string}): Promise<{ jobs: string[]; queuedCount: number; skipped: {url: unknown;reason: string}[]; queued: {id:string;url:string}[] }>;
 export function queueStatus(pool: unknown): Promise<any>;
 export function jobStatus(pool: unknown, id: string): Promise<any>;

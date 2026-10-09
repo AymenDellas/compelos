@@ -14,7 +14,7 @@ const MAX_PAGES = 5;
 const MAX_BYTES = 900000;
 const MAX_TOTAL_MS = 45000;
 const DEFAULT_RESEARCH_MODEL = 'openai/gpt-oss-120b';
-const MAX_AI_INPUT_CHARS = 16000;
+const MAX_AI_INPUT_CHARS = 8000;
 const publicAddress = address => { try { return ipaddr.process(address).range() === 'unicast'; } catch { return false; } };
 
 function publicUrl(value) {
@@ -193,7 +193,7 @@ function evidenceText(text, budget) {
     if (normalized.length <= budget) return normalized;
     // Include service/client/CTA evidence beyond long navigation menus. Each
     // passage remains verbatim; the grounding check still uses the full page.
-    const ranges = [{ start: 0, end: Math.min(450, budget) }];
+    const ranges = [{ start: 0, end: Math.min(250, Math.floor(budget*0.35)) }];
     const patterns = [
         /\b(?:testimonials?|client stories|client results|case stud(?:y|ies)|success stories)\b/gi,
         /\b(?:investment|pricing|paid|coaching (?:program|programme|package|service)|one[- ]on[- ]one|1[:\-]1|program(?:me)?|services)\b/gi,
@@ -207,7 +207,7 @@ function evidenceText(text, budget) {
             if (remaining < 150 || added >= 2) break;
             if (ranges.some(range => match.index >= range.start && match.index < range.end)) continue;
             const start = Math.max(0, match.index - 80);
-            const end = Math.min(normalized.length, start + Math.min(650, remaining - 5));
+            const end = Math.min(normalized.length, start + Math.min(300, remaining - 5));
             ranges.push({ start, end }); remaining -= end - start + 5; added++;
         }
     }
@@ -215,20 +215,20 @@ function evidenceText(text, budget) {
     return ranges.map(range => normalized.slice(range.start, range.end)).join('\n[…]\n').slice(0, budget);
 }
 
-function interpretationPayload(sources, input) {
+function interpretationPayload(sources, input, maxChars=MAX_AI_INPUT_CHARS) {
     const data = {
         identifiedCoach: { name: `${input.firstName || ''} ${input.lastName || ''}`.trim().slice(0, 200), identityConfirmed: input.profileIdentityConfirmed === true },
         sources: sources.map((source, index) => ({
-            index, url: source.url.slice(0, 500), label: source.label.slice(0, 160), ownershipConfirmed: !!source.owned,
+            index, url: source.url.slice(0, 300), label: source.label.slice(0, 160), ownershipConfirmed: !!source.owned,
             passages: [], publicLinks: (source.links || []).filter(link => /coaching|program|services|testimonials|contact|book|schedule|apply/i.test(`${link.text} ${link.url}`)).slice(0, 2).map(link => ({ url: link.url.slice(0, 200), text: link.text.slice(0, 60) })),
         })),
     };
-    while (JSON.stringify(data).length > MAX_AI_INPUT_CHARS - 400 * sources.length && data.sources.some(source => source.publicLinks.length)) {
+    while (JSON.stringify(data).length > maxChars - 400 * sources.length && data.sources.some(source => source.publicLinks.length)) {
         const mostLinks = data.sources.reduce((a, b) => a.publicLinks.length > b.publicLinks.length ? a : b);
         mostLinks.publicLinks.pop();
     }
     const overhead = JSON.stringify(data).length;
-    const budget = Math.max(400, Math.floor((MAX_AI_INPUT_CHARS - overhead) / Math.max(1, sources.length)));
+    const budget = Math.max(200, Math.floor((maxChars - overhead) / Math.max(1, sources.length)));
     for (let i = 0; i < sources.length; i++) {
         const passages = data.sources[i].passages;
         for (const section of evidenceText(sources[i].text, budget).split('\n[…]\n')) {
@@ -241,9 +241,15 @@ function interpretationPayload(sources, input) {
         }
     }
     // Overlaps and JSON escaping add characters; bound the actual request.
-    while (JSON.stringify(data).length > MAX_AI_INPUT_CHARS && data.sources.some(source => source.passages.length > 1)) {
-        const longest = data.sources.reduce((a, b) => JSON.stringify(a.passages).length > JSON.stringify(b.passages).length ? a : b);
+    while (JSON.stringify(data).length > maxChars && data.sources.some(source => source.passages.length > 1)) {
+        const longest = data.sources.filter(source=>source.passages.length>1).reduce((a, b) => JSON.stringify(a.passages).length > JSON.stringify(b.passages).length ? a : b);
         longest.passages.pop();
+    }
+    while(JSON.stringify(data).length>maxChars&&data.sources.some(source=>source.publicLinks.length))data.sources.find(source=>source.publicLinks.length).publicLinks.pop();
+    while(JSON.stringify(data).length>maxChars&&data.sources.some(source=>source.passages.length)) {
+        const longest=data.sources.filter(source=>source.passages.length).reduce((a,b)=>JSON.stringify(a.passages).length>JSON.stringify(b.passages).length?a:b);
+        const passage=longest.passages.at(-1);
+        if(passage.text.length>100)passage.text=passage.text.slice(0,-100);else longest.passages.pop();
     }
     return data;
 }
@@ -256,14 +262,31 @@ async function extractWithAI(sources, input, options = {}) {
     const GroqModule = require('groq-sdk'); const Groq = GroqModule.default || GroqModule;
     const client = new Groq({ apiKey: keys[Math.floor(Math.random() * keys.length)], timeout: 14000, maxRetries: 0 });
     const model = process.env.PROSPECT_RESEARCH_MODEL?.trim() || DEFAULT_RESEARCH_MODEL;
-    const payload = interpretationPayload(sources, input);
-    const response = await client.chat.completions.create({
-        model, temperature: 0, max_completion_tokens: 6000, response_format: { type: 'json_object' },
+    const payload = interpretationPayload(sources, input, options.compactAI?4000:MAX_AI_INPUT_CHARS);
+    if(options.aiBudget) {
+        const slot=await options.aiBudget.reserve(model,Math.ceil((RESEARCH_PROMPT.length+JSON.stringify(payload).length)/3)+3000);
+        if(!slot.ready)throw Object.assign(new Error('Shared research budget is waiting.'),{code:'AI_DEFERRED',retryAt:slot.retryAt});
+    }
+    let response;
+    try { response = await client.chat.completions.create({
+        model, temperature: 0, max_completion_tokens: 3000, response_format: { type: 'json_object' },
         // GPT-OSS includes reasoning in its completion budget. Leave enough room
         // for all seven evidence-backed findings, rather than truncating the JSON.
         ...(model.startsWith('openai/gpt-oss-') ? { reasoning_effort: 'low' } : {}),
         messages: [{ role: 'system', content: RESEARCH_PROMPT }, { role: 'user', content: JSON.stringify(payload) }],
-    });
+    }); } catch(error) {
+        if(Number(error.status)===429) {
+            const header=error.headers?.get?.('retry-after')||error.headers?.['retry-after'];
+            let delay=Number(header)*1000;
+            if(!delay) {
+                const duration=String(error.message||'').match(/try again in\s+([^\.]+(?:\.\d+)?\s*[smh])/i)?.[1]||'';
+                delay=[...duration.matchAll(/(\d+(?:\.\d+)?)\s*(ms|s|m|h)/g)].reduce((sum,m)=>sum+Number(m[1])*({ms:1,s:1000,m:60000,h:3600000}[m[2]]),0);
+            }
+            error.retryAt=new Date(Date.now()+Math.max(60000,delay||(/tokens per day|TPD|requests per day|RPD/i.test(error.message||'')?3600000:60000))).toISOString();
+            if(options.aiBudget)await options.aiBudget.cool(model,error.retryAt);
+        }
+        throw error;
+    }
     if (response.choices[0]?.finish_reason === 'length') throw Object.assign(new Error('Incomplete assessment response.'), { code: 'OUTPUT_TRUNCATED' });
     const parsed = JSON.parse(response.choices[0]?.message?.content || '{}');
     if (!parsed.facts || typeof parsed.facts !== 'object' || Array.isArray(parsed.facts)) throw Object.assign(new Error('Missing assessment findings.'), { code: 'INVALID_RESPONSE' });
@@ -283,7 +306,8 @@ function interpretationFailure(error) {
     // Provider messages can echo request content or credentials. Persist a known
     // cause and status only; keep infrastructure failures distinct from poor fit.
     const status = Number(error?.status);
-    const cause = status === 404 ? 'the configured AI model is unavailable'
+    const cause = error?.code==='AI_DEFERRED'?'the shared AI token budget is waiting'
+        : status === 404 ? 'the configured AI model is unavailable'
         : status === 401 || status === 403 ? 'the AI credentials or model access need attention'
         : status === 429 ? 'the AI provider rate limit was reached'
         : status === 413 ? 'the research request exceeded the AI provider size limit'
@@ -365,7 +389,10 @@ async function researchProspect(input, options = {}) {
     // Retain a plausible existing address as unconfirmed, without claiming a mailbox check.
     if (input.email && !research.contacts.some(c => c.address === input.email.toLowerCase()) && !isUnsafeContact(input.email)) research.contacts.push({ address: input.email.toLowerCase(), source: input.emailSource === 'pattern_guess' ? 'pattern_guess' : 'website', url: research.website, ownership: input.emailSource === 'pattern_guess' && ownedHost && onDomain(input.email.split('@')[1], ownedHost) ? 'GUESSED' : 'UNCONFIRMED' });
     try {
-        const ai = pages.length || (input.profileIdentityConfirmed && research.segments.length) ? await extractWithAI(sources, input, options) : null;
+        // Clear, grounded rule evidence needs no AI call. Spend the scarce AI
+        // budget only where it can resolve missing qualification evidence.
+        const needsAI=options.extract||!input.profileIdentityConfirmed||['independentBusiness','paidOffer','targetMarket'].some(key=>research.facts[key].state==='UNKNOWN');
+        const ai = needsAI&&(pages.length || (input.profileIdentityConfirmed && research.segments.length)) ? await extractWithAI(sources, input, options) : null;
         if (ai?.facts) {
             research.engine = 'ai';
             if (ownedHost && Array.isArray(ai.segments)) {
@@ -385,9 +412,10 @@ async function researchProspect(input, options = {}) {
                 if (fact.state === 'INDICATED' && research.facts[key].state === 'OBSERVED') continue;
                 research.facts[key] = fact;
             }
-        } else if (pages.length) research.limitations.push('Automated interpretation is unavailable. Conservative public evidence was retained for review.');
+        } else if (needsAI&&pages.length) research.limitations.push('Automated interpretation is unavailable. Conservative public evidence was retained for review.');
     } catch (error) {
         research.limitations.push(interpretationFailure(error));
+        options.onAIError?.(error);
     }
     research.contacts = [...new Map(research.contacts.map(c => [c.address, c])).values()];
     return validateResearch(research);

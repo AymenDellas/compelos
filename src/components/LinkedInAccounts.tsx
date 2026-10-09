@@ -11,6 +11,8 @@ async function readSettings(): Promise<WorkerSettings> {
 function statusLabel(a:WorkerAccount) {
  if(a.logoutPending)return a.status==='paused'?'Sign-out needs attention':'Signing out';
  if(a.signedOut)return 'Signed out';
+ if(a.online&&a.status==='awaiting_login')return 'Waiting for login';
+ if(a.loginPending)return 'Sign-in requested';
  if (a.online) return a.status==='processing'?'Processing':a.status==='paused'?'Daily limit reached':a.status==='starting'?'Starting':'Ready';
  return a.status==='paused'?'Needs attention':'Offline';
 }
@@ -48,7 +50,7 @@ export default function LinkedInAccounts() {
      <button className="btn btn-outline w-full justify-center" onClick={()=>setEditing(true)}>Manage accounts</button>
     </>}
    </div>
-   <p className="panel-note">Each account has its own browser session. Only leads with an attributable email enter Qualified.</p>
+   <p className="panel-note">{config&&!config.supervisorOnline?'Worker supervisor is offline. Start Start_Compel_Lead_Qualifier.bat on the worker computer; sign-in requests wait until it is running.':'Each account has its own browser session. Only leads with an attributable email enter Qualified.'}</p>
   </section>
   {editing&&config&&<AccountEditor initial={config} liveAccounts={config.accounts} onClose={()=>setEditing(false)} onSaved={value=>{setConfig(value);setEditing(false);}}/>}
  </>;
@@ -73,7 +75,7 @@ function AccountEditor({initial,liveAccounts,onClose,onSaved}:{initial:WorkerSet
   try{
    const response=await fetch('/api/linkedin-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
    const value=await response.json();if(!response.ok)throw new Error(value.error);
-   setNotice('Sign-in requested. A browser will open on the computer running the worker. Complete any LinkedIn security check there.');
+   setNotice(initial.supervisorOnline?'Sign-in requested. A visible browser opens on the worker computer within 10 seconds. Enter your LinkedIn login there.':'Sign-in queued, but the worker supervisor is offline. Start Start_Compel_Lead_Qualifier.bat on the worker computer to open the login browser.');
   }catch(e){setError(e instanceof Error?e.message:'Could not request sign-in.');}
  }
  async function signOut(id:string) {
@@ -100,7 +102,7 @@ function AccountEditor({initial,liveAccounts,onClose,onSaved}:{initial:WorkerSet
       <legend className="sr-only">LinkedIn account {index+1}</legend>
       <div className="flex items-center justify-between gap-3">
        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={a.enabled} onChange={e=>{update(index,{enabled:e.target.checked});if(!e.target.checked)setActiveCount(n=>Math.min(n,enabled-1));}} className="accent-[var(--signal)]"/> Account {index+1}</label>
-       <div className="flex items-center gap-2"><span className="text-xs text-[var(--text-dim)]">{a.id?statusLabel(a as WorkerAccount):'New account'}</span><button type="button" className="btn btn-ghost !text-[var(--bad)] !text-xs" onClick={()=>{setAccounts(current=>current.filter((_,i)=>i!==index));setActiveCount(n=>Math.min(n,enabled-(a.enabled?1:0)));}}>Remove</button></div>
+       <div className="flex items-center gap-2"><span className="text-xs text-[var(--text-dim)]">{a.id?statusLabel(liveAccounts.find(other=>other.id===a.id)||a as WorkerAccount):'New account'}</span><button type="button" className="btn btn-ghost !text-[var(--bad)] !text-xs" onClick={()=>{setAccounts(current=>current.filter((_,i)=>i!==index));setActiveCount(n=>Math.min(n,enabled-(a.enabled?1:0)));}}>Remove</button></div>
       </div>
       {a.id&&<SessionIdentity account={liveAccounts.find(other=>other.id===a.id)||a as WorkerAccount} accounts={liveAccounts}/>}
       <div className="grid sm:grid-cols-2 gap-3">
@@ -109,7 +111,7 @@ function AccountEditor({initial,liveAccounts,onClose,onSaved}:{initial:WorkerSet
        <label className="space-y-1"><span className="field-label">Password</span><input className="field w-full" type="password" required={!a.id} maxLength={256} value={a.password||''} onChange={e=>update(index,{password:e.target.value})} autoComplete="new-password" placeholder={a.id?'Leave blank to keep saved password':'LinkedIn password'}/></label>
        <label className="space-y-1"><span className="field-label">Profiles per day</span><input className="field w-full" type="number" required min={1} max={400} value={a.dailyLimit} onChange={e=>update(index,{dailyLimit:Number(e.target.value)})}/></label>
       </div>
-      {a.reason&&<p className="field-hint break-words">{a.reason}</p>}
+      {(liveAccounts.find(other=>other.id===a.id)?.reason||a.reason)&&<p className="field-hint break-words">{liveAccounts.find(other=>other.id===a.id)?.reason||a.reason}</p>}
       {a.id&&<div className="flex flex-wrap gap-2">
        <button type="button" className="btn btn-outline !text-xs" disabled={liveAccounts.find(other=>other.id===a.id)?.logoutPending} onClick={()=>signIn(a.id!)}>Sign in on worker computer</button>
        <button type="button" className="btn btn-outline !text-xs" aria-label={`Sign out LinkedIn account ${a.email}`} disabled={liveAccounts.find(other=>other.id===a.id)?.signedOut||liveAccounts.find(other=>other.id===a.id)?.logoutPending&&liveAccounts.find(other=>other.id===a.id)?.status!=='paused'} onClick={()=>signOut(a.id!)}>Sign out LinkedIn</button>

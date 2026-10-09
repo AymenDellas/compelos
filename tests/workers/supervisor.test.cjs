@@ -7,7 +7,7 @@ function supervisor(selectedIds=['one']) {
  const accounts=[{id:'one',label:'Account 1',changed_at:'version-1',archived:false,login_requested_at:null},
   {id:'two',label:'Account 2',changed_at:'version-1',archived:false,login_requested_at:'request-1'}];
  const launches=[],errors=[];
- const pool={query:async(sql,values)=>({rows:sql.startsWith('SELECT status')?[{status:{status:'offline'}}]:accounts.filter(a=>!a.archived&&(a.login_requested_at||a.logout_requested_at||values[0].includes(a.id)))}),end:async()=>{}};
+ const pool={query:async(sql,values)=>({rows:sql.startsWith('UPDATE')?[]:sql.startsWith('SELECT status')?[{status:{status:'offline'}}]:accounts.filter(a=>!a.archived&&(a.login_requested_at||a.logout_requested_at||values[0].includes(a.id)))}),end:async()=>{}};
  const modules={
   'node:fs':{readFileSync:()=>'',mkdirSync(){},existsSync:()=>false},'node:path':path,
   'node:child_process':{fork:(_file,args)=>{

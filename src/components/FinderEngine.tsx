@@ -1,4 +1,5 @@
 "use client";
+import { AI_HOOK_GENERATION_ENABLED } from "@/lib/hook-settings";
 
 import React, { useState, useRef } from "react";
 import { Radar, Search, MessageCircle, Play, Loader2, Copy, AlertCircle, Upload, StopCircle, Download } from "lucide-react";
@@ -619,11 +620,11 @@ export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (url
 
                         <button
                             onClick={handleGenerateHook}
-                            disabled={generating || !websiteUrl}
+                            disabled={!AI_HOOK_GENERATION_ENABLED || generating || !websiteUrl}
                             className="btn btn-outline w-full"
                         >
                             {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                            Write an opening line
+                            {AI_HOOK_GENERATION_ENABLED ? 'Write an opening line' : 'AI hooks disabled'}
                         </button>
 
                         {hookResult && !hookResult.error && (
@@ -686,7 +687,7 @@ export default function FinderEngine({ onPushToEngine }: { onPushToEngine?: (url
                         </div>
 
                         {!isBulkProcessing ? (
-                            <button onClick={runBulkHooks} disabled={!csvFile} className="btn btn-outline w-full">
+                            <button onClick={runBulkHooks} disabled={!AI_HOOK_GENERATION_ENABLED || !csvFile} title="AI hook generation is disabled" className="btn btn-outline w-full">
                                 <Play className="w-3.5 h-3.5" />
                                 Write them all
                             </button>
