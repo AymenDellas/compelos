@@ -24,6 +24,19 @@ test('the real enrichment function retains business fit but rejects qualificatio
     assert.equal(result.prospectQualification.tier, 'A');
     assert.equal(actualInput.url, r.linkedinUrl); assert.equal(result.prospectQualification.contact.channel, 'LINKEDIN_ONLY');
 });
+
+test('the worker qualifies email/activity without AI or business gates, and retries an unknown activity check', async () => {
+    for (const unknown of [false, true]) {
+        const r=research({facts:Object.fromEntries(q.FACT_KEYS.map(key=>[key,q.emptyFact()])),segments:[],lastActivityAt:unknown?null:new Date().toISOString(),activityStatus:unknown?'Unknown':'Active'});
+        let options;
+        const enrich=load('enrichAndFinalize','function isProcessRunning',{
+            researchProspect:async (_input,value)=>{options=value;return r;},assessProspect:q.assessProspect,prioritizeEmails:emails=>emails,hostOf:q.hostOf,
+        });
+        const result=await enrich({url:r.linkedinUrl,emails:[],logs:[]},null);
+        assert.equal(options.ai,false);assert.equal(result.status,unknown?'ERROR':'QUALIFIED');
+        if(unknown)assert.equal(result.failure.stage,'linkedin');
+    }
+});
 test('the real CRM persistence path sends evidence without generating opening lines or using sales outcomes', async () => {
     let payload, url; let hookCalls = 0;
     const persist = load('nativePostProcess', 'async function main(', {

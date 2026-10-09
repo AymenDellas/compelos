@@ -7,15 +7,18 @@ export type ProspectFact = { state: FactState; value: string; reason: string; ev
 export type ProspectReview = { facts: Partial<Record<FactKey, { state: FactState; note: string; url?: string }>>; segment?: string; contactOwnership?: string; contactEmail?: string; note?: string; reviewedAt?: string };
 export type ProspectResearch = {
     version: number; researchedAt: string; engine: 'rules' | 'ai' | 'manual'; profileIdentityConfirmed: boolean;
-    headline: string; about: string; profileLocation: string; latestPostText: string; lastActivityAt: string | null; linkedinUrl: string;
+    headline: string; about: string; profileLocation: string; latestPostText: string; lastActivityAt: string | null; activityStatus: 'Active' | 'Inactive' | 'Unknown'; linkedinUrl: string;
     website: string; websiteStatus: 'OWNED' | 'PROFILE_PLATFORM' | 'UNCONFIRMED' | 'NONE';
     segments: ProspectSegment[]; segment: ProspectSegment; facts: Record<FactKey, ProspectFact>;
     pages: { url: string; label: string; status: 'inspected' | 'blocked'; note: string }[]; limitations: string[];
     contacts: { address: string; source: 'linkedin' | 'website' | 'pattern_guess' | 'manual'; url: string; ownership: 'PUBLISHED' | 'DOMAIN_MATCH' | 'GUESSED' | 'UNCONFIRMED' }[];
+    description: {url: string; text: string} | null;
+    crawl: {version: number; complete: boolean; visited: string[]; pending: string[]; failed: string[]; roots: string[]; matchedHosts: string[]; discovered: number; inspected: number; contactPages: number; descriptionPages: number; stoppedReason: string; candidates: {address: string; url: string; explicit: boolean; contactPage: boolean}[]} | null;
 };
 export type ProspectAssessment = {
     version: number; researchedAt: string; tier: ProspectTier; segment: ProspectSegment; segments: ProspectSegment[]; score: number;
     businessFit: 'MATCH' | 'POTENTIAL' | 'OUTSIDE_ICP' | 'UNKNOWN'; readiness: 'READY_TO_APPROACH' | 'EARLY' | 'NEEDS_REVIEW'; engagementReady: boolean;
+    qualification: {policy: 'EMAIL_ACTIVITY_V1'; qualified: boolean; activity: 'RECENT' | 'INACTIVE' | 'UNKNOWN'; activityAgeDays: number | null; attributableEmail: boolean; needsRetry: boolean};
     contact: { channel: 'EMAIL_READY' | 'EMAIL_NEEDS_VERIFICATION' | 'LINKEDIN_ONLY' | 'UNAVAILABLE' | 'OWNERSHIP_UNCLEAR'; ownership: string; email: string };
     blockers: string[]; unknowns: string[]; cautions: string[]; nextAction: string; research: ProspectResearch; baseResearch: ProspectResearch;
 };

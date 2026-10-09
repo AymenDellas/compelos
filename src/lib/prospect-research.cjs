@@ -10,9 +10,9 @@ const {
     segmentsFromText, emptyResearch, makeFact, groundedFact, validateResearch,
 } = require('./prospect-qualification.cjs');
 
-const MAX_PAGES = 5;
+const MAX_PAGES = 200;
 const MAX_BYTES = 900000;
-const MAX_TOTAL_MS = 45000;
+const MAX_TOTAL_MS = 90000;
 const DEFAULT_RESEARCH_MODEL = 'openai/gpt-oss-120b';
 const MAX_AI_INPUT_CHARS = 8000;
 const publicAddress = address => { try { return ipaddr.process(address).range() === 'unicast'; } catch { return false; } };
@@ -71,14 +71,35 @@ async function fetchPublicPage(value, options = {}, redirects = 0) {
 
 function parsePage(html, url) {
     const $ = cheerio.load(html);
+    const structuredContacts = [];
+    const collectStructured = value => {
+        if (!value || typeof value !== 'object') return;
+        for (const [key, item] of Object.entries(value)) {
+            if (key === 'email' && typeof item === 'string') structuredContacts.push(item.replace(/^mailto:/i, ''));
+            else if (typeof item === 'object') collectStructured(item);
+        }
+    };
+    $('script[type="application/ld+json"]').each((_i, node) => { try { collectStructured(JSON.parse($(node).text())); } catch { /* malformed structured data */ } });
+    $('[data-cfemail]').each((_i, node) => {
+        const encoded = $(node).attr('data-cfemail') || '';
+        if (!/^[a-f\d]+$/i.test(encoded) || encoded.length % 2) return;
+        const key = parseInt(encoded.slice(0, 2), 16);
+        $(node).text(Array.from({ length: (encoded.length - 2) / 2 }, (_v, i) => String.fromCharCode(parseInt(encoded.slice(i * 2 + 2, i * 2 + 4), 16) ^ key)).join(''));
+    });
+    const metaDescription = normalText($('meta[name="description"],meta[property="og:description"]').first().attr('content'));
+    let canonical = '';
+    try { const href = $('link[rel="canonical"]').first().attr('href'); if (href) canonical = publicUrl(new URL(href, url).href).href; } catch { /* invalid canonical */ }
     $('script,style,noscript,svg,template').remove();
     const title = normalText($('title').first().text());
     const h1 = normalText($('h1').first().text());
     // HTML textContent joins adjacent blocks ("TestimonialsAva..."). Keep word
     // boundaries so offer/client sections survive extraction and source checks.
     $('br').replaceWith(' ');
-    $('p,div,section,article,li,h1,h2,h3,h4,h5,h6,footer,header,nav').each((_i, node) => { $(node).prepend(' '); $(node).append(' '); });
-    const body = normalText($('body').text()).slice(0, 20000);
+    $('p,div,section,article,li,h1,h2,h3,h4,h5,h6,footer,header,nav,a,span').each((_i, node) => { $(node).prepend(' '); $(node).append(' '); });
+    // Scan the full visible text for contacts before shortening research excerpts.
+    const body = normalText($('body').text());
+    const paragraphs = $('main p,article p,section p,p').toArray().map(node => normalText($(node).text())).filter(text => text.length >= 50 && !/cookie|all rights reserved/i.test(text));
+    const description = (paragraphs.filter(text => /\b(coach(?:ing)?|help|leadership|career|business|founder|our practice|about)\b/i.test(text)).slice(0, 3).join(' ') || metaDescription || paragraphs[0] || '').slice(0, 2000);
     const links = [];
     $('a[href]').each((_i, node) => {
         const href = $(node).attr('href') || '';
@@ -89,15 +110,22 @@ function parsePage(html, url) {
         } catch { /* unsupported link */ }
     });
     const contacts = [];
-    $('a[href^="mailto:"]').each((_i, node) => {
-        const address = ($(node).attr('href') || '').replace(/^mailto:/i, '').split('?')[0].trim().toLowerCase();
-        if (!isUnsafeContact(address)) contacts.push({ address, explicit: true });
+    const addContact = (value, explicit) => {
+        const address = value.trim().toLowerCase().replace(/[.,;:]$/, '');
+        if (isUnsafeContact(address)) return;
+        const existing = contacts.find(contact => contact.address === address);
+        if (existing) existing.explicit ||= explicit;
+        else contacts.push({ address, explicit });
+    };
+    $('a[href]').each((_i, node) => {
+        const href = $(node).attr('href') || '';
+        if (!/^mailto:/i.test(href)) return;
+        try { decodeURIComponent(href.replace(/^mailto:/i, '').split('?')[0]).split(/[,;]/).forEach(address => addContact(address, true)); } catch { /* malformed URI */ }
     });
-    for (const address of body.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []) {
-        const normalized = address.toLowerCase();
-        if (!isUnsafeContact(normalized) && !contacts.some(c => c.address === normalized)) contacts.push({ address: normalized, explicit: false });
-    }
-    return { url, title, h1, text: [title, h1, body].filter(Boolean).join('\n'), links: links.slice(0, 150), contacts: contacts.slice(0, 30) };
+    structuredContacts.forEach(address => addContact(address, true));
+    const readable = body.replace(/\s*(?:\[at\]|\(at\))\s*/gi, '@').replace(/\s*(?:\[dot\]|\(dot\))\s*/gi, '.');
+    for (const address of readable.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []) addContact(address, false);
+    return { url, canonical, title, h1, description, text: [title, h1, metaDescription, body.slice(0, 20000)].filter(Boolean).join('\n'), links, contacts: contacts.slice(0, 30), readable: body.length >= 100 || description.length >= 50 || contacts.length > 0 };
 }
 
 function excerpt(text, pattern) {
@@ -111,10 +139,11 @@ function evidence(source, quote) {
 }
 function escape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function nameOnPage(page, input) {
-    const first = normalText(input.firstName).toLowerCase();
-    const last = normalText(input.lastName).split(/[,|]/)[0].replace(/\b(?:pcc|acc|mcc|phd|mba|cpcc)\b/ig, '').trim().toLowerCase();
+    const normalize = value => normalText(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().toLowerCase();
+    const first = normalize(String(input.firstName || '').replace(/^(?:dr\.?|prof\.?)\s+/i, ''));
+    const last = normalize(String(input.lastName || '').split(/[,|]/)[0].replace(/\b(?:pcc|acc|mcc|phd|mba|cpcc|esq|ma|ms|msc)\b/ig, ''));
     if (first.length < 2 || last.length < 2) return false;
-    return new RegExp(`\\b${escape(first)}\\s+${escape(last)}\\b`, 'i').test(page.text);
+    return (` ${normalize(page.text)} `).includes(` ${first} ${last} `);
 }
 function ownedPage(page, input) {
     if (isPlatformWebsite(page.url) || !nameOnPage(page, input) || !/\bcoach(?:ing|es)?\b/i.test(page.text)) return false;
@@ -125,7 +154,7 @@ function ownedPage(page, input) {
     const personalBrand = brand.includes(first) && brand.includes(last);
     const ownerHeadline = /\b(founder|owner|independent|self[- ]employed|private practice|solopreneur)\b/i.test(input.headline || '');
     const personalPractice = /\b(?:work with me|my (?:clients|practice|coaching|approach)|i (?:help|coach|work|am))\b/i.test(page.text);
-    return personalPractice && (personalBrand || ownerHeadline);
+    return (personalPractice || ownerHeadline) && (personalBrand || ownerHeadline);
 }
 
 function deriveRules(input, research, sources, pages) {
@@ -216,6 +245,9 @@ function evidenceText(text, budget) {
 }
 
 function interpretationPayload(sources, input, maxChars=MAX_AI_INPUT_CHARS) {
+    // The crawler can inspect hundreds of routes. Optional business analysis
+    // must still fit the provider's bounded request; original indices stay intact.
+    sources = sources.slice(0, 6);
     const data = {
         identifiedCoach: { name: `${input.firstName || ''} ${input.lastName || ''}`.trim().slice(0, 200), identityConfirmed: input.profileIdentityConfirmed === true },
         sources: sources.map((source, index) => ({
@@ -327,62 +359,36 @@ async function researchProspect(input, options = {}) {
     const activityAge = input.lastActivityAt ? (Date.parse(researchedAt) - Date.parse(input.lastActivityAt)) / 86400000 : Infinity;
     if (input.latestPostText && activityAge >= 0 && activityAge <= 90) sources.push({ url: sources[0].url, text: normalText(input.latestPostText), label: 'LinkedIn activity', kind: 'PROFILE', observedAt: input.lastActivityAt });
     else if (input.latestPostText) research.limitations.push('Undated or older profile activity was retained as context, but cannot establish current demand.');
-    const pages = [];
-    const fetchPage = options.fetchPage || fetchPublicPage;
-    const candidates = [...new Set([...(input.websites || []), input.website].filter(Boolean))].slice(0, 8).sort((a, b) => Number(isPlatformWebsite(a)) - Number(isPlatformWebsite(b)));
-    const deadline = Date.now() + MAX_TOTAL_MS;
-    const visited = new Set();
-    const queue = candidates.map(url => ({ url, label: 'Linked website', primary: true }));
-    let ownedHost = '';
-    let attempts = 0;
-    while (queue.length && attempts < MAX_PAGES && Date.now() < deadline - 15000) {
-        const item = queue.shift();
-        let normalized;
-        try { normalized = publicUrl(item.url).href; } catch (error) { research.limitations.push(error.message); continue; }
-        if (visited.has(normalized)) continue;
-        visited.add(normalized);
-        // Keep personal platform/profile URLs intact; never crawl their platform homepage.
-        if (isPlatformWebsite(normalized)) {
-            if (!research.website) { research.website = normalized; research.websiteStatus = 'PROFILE_PLATFORM'; }
-            research.pages.push({ url: normalized, label: 'Shared platform or reference', status: 'blocked', note: 'This is not an owned business domain. Its email addresses are not attributed to this coach.' });
-            continue;
-        }
-        if (ownedHost && !onDomain(hostOf(normalized), ownedHost)) continue;
-        attempts++;
-        try {
-            const fetched = await fetchPage(normalized, { timeoutMs: Math.min(10000, deadline - Date.now() - 15000) });
-            const page = parsePage(fetched.html, fetched.url || normalized);
-            const own = ownedPage(page, input) || (ownedHost && hostOf(page.url) === ownedHost);
-            pages.push(page);
-            sources.push({ url: page.url, text: page.text, links: page.links, label: page.title || item.label, kind: 'WEBSITE', owned: !!own, observedAt: researchedAt });
-            research.pages.push({ url: page.url, label: page.title || item.label, status: 'inspected', note: own ? 'Identity matched to the coach’s personal practice.' : 'Website identity needs confirmation; contacts are not attributed.' });
-            if (own) {
-                if (!ownedHost) { ownedHost = hostOf(page.url); research.website = page.url; research.websiteStatus = 'OWNED'; }
-                const priority = /\b(?:coaching|program|programme|packages?|work with|services|about|testimonials?|results|contact|book|schedule|apply)\b/i;
-                const internal = page.links.filter(l => hostOf(l.url) === ownedHost && priority.test(`${l.text} ${new URL(l.url).pathname}`) && !/privacy|terms|login|blog|category|tag\//i.test(l.url));
-                internal.sort((a, b) => Number(!/coaching|program|work with|services/i.test(a.text)) - Number(!/coaching|program|work with|services/i.test(b.text)));
-                queue.unshift(...internal.slice(0, MAX_PAGES - attempts).map(l => ({ url: l.url, label: l.text || 'Practice page' })));
-            } else if (!research.website) { research.website = page.url; research.websiteStatus = 'UNCONFIRMED'; }
-        } catch (error) {
-            const note = error.name === 'TimeoutError' ? 'Website research timed out.' : String(error.message || 'Website could not be read.').slice(0, 300);
-            research.pages.push({ url: normalized, label: item.label, status: 'blocked', note });
-            research.limitations.push(`${hostOf(normalized)}: ${note}`);
-        }
-    }
+    const candidates = [...new Set([...(input.websites || []), input.website].filter(Boolean))].slice(0, 8);
+    const { crawlWebsiteRoutes } = require('./website-crawler.cjs');
+    const crawled = await crawlWebsiteRoutes(input, {
+        publicUrl, parsePage, ownedPage, fetchPage: options.fetchPage || fetchPublicPage, now: researchedAt,
+        maxPages: options.maxPages || MAX_PAGES, maxTimeMs: options.maxTimeMs || MAX_TOTAL_MS,
+        previousResearch: options.previousResearch,
+    });
+    const pages = crawled.parsed;
+    sources.push(...crawled.sources);
+    research.pages = crawled.pages;
+    research.crawl = crawled.crawl;
+    research.description = crawled.description;
+    const ownedHost = crawled.crawl.matchedHosts[0] || '';
+    const linkedWebsite = candidates.find(url => !isPlatformWebsite(url));
+    research.website = ownedHost ? crawled.crawl.roots.find(url => hostOf(url) === ownedHost) || linkedWebsite : linkedWebsite || candidates[0] || '';
+    research.websiteStatus = ownedHost ? 'OWNED' : linkedWebsite ? 'UNCONFIRMED' : research.website ? 'PROFILE_PLATFORM' : 'NONE';
+    if (!crawled.crawl.complete) research.limitations.push('Website crawl incomplete: ' + (crawled.crawl.stoppedReason || crawled.crawl.failed.length + ' routes could not be read.') );
     deriveRules(input, research, sources, pages);
     if (!research.profileIdentityConfirmed) research.limitations.push('LinkedIn profile identity needs confirmation. A failed fetch is not a poor-fit verdict.');
     if (!ownedHost) research.limitations.push('No website could be confidently matched to this coach’s practice.');
     if (!pages.length) research.limitations.push('No public practice pages could be inspected. Missing evidence remains unknown.');
-    if (ownedHost) {
-        for (const source of sources.filter(s => s.owned)) {
-            const page = pages.find(p => p.url === source.url);
-            for (const c of page?.contacts || []) {
-                const domain = c.address.split('@')[1];
-                // A foreign company address is never rescued merely because it exists.
-                if (onDomain(domain, ownedHost) || (FREE_MAIL.has(domain) && c.explicit)) research.contacts.push({ address: c.address, source: 'website', url: page.url, ownership: onDomain(domain, ownedHost) ? 'DOMAIN_MATCH' : 'PUBLISHED' });
-            }
-        }
+    for (const c of crawled.crawl.candidates) {
+        if (!crawled.crawl.matchedHosts.includes(hostOf(c.url))) continue;
+        const domain = c.address.split('@')[1];
+        const sameDomain = onDomain(domain, hostOf(c.url));
+        // A practice's real contact page can publish a different brand's inbox.
+        // Unrelated foreign addresses in testimonials or vendor links stay out.
+        if (sameDomain || c.explicit && (FREE_MAIL.has(domain) || c.contactPage)) research.contacts.push({ address: c.address, source: 'website', url: c.url, ownership: sameDomain ? 'DOMAIN_MATCH' : 'PUBLISHED' });
     }
+    if (options.previousResearch) research.contacts.push(...options.previousResearch.contacts.filter(contact => !research.contacts.some(current => current.address === contact.address)));
     for (const address of input.emailSource === 'linkedin' ? (input.emails || []) : []) {
         if (!isUnsafeContact(address)) research.contacts.unshift({ address: address.toLowerCase(), source: 'linkedin', url: sources[0].url, ownership: input.profileIdentityConfirmed ? 'PUBLISHED' : 'UNCONFIRMED' });
     }
@@ -412,7 +418,7 @@ async function researchProspect(input, options = {}) {
                 if (fact.state === 'INDICATED' && research.facts[key].state === 'OBSERVED') continue;
                 research.facts[key] = fact;
             }
-        } else if (needsAI&&pages.length) research.limitations.push('Automated interpretation is unavailable. Conservative public evidence was retained for review.');
+        } else if (options.ai !== false && needsAI&&pages.length) research.limitations.push('Automated interpretation is unavailable. Conservative public evidence was retained for review.');
     } catch (error) {
         research.limitations.push(interpretationFailure(error));
         options.onAIError?.(error);

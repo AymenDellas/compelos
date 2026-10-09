@@ -110,9 +110,8 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   await pool.query('UPDATE compel_worker_jobs SET retry_at=NOW() WHERE id=$1',[resume.job.jobId]);
   const model=process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b';
   assert.equal((await core.reserveResearch(pool,model,4000)).ready,true);
-  assert.equal((await core.claim(pool,'legacy-0','recovery')).limited,true,'an expired per-job wait must still respect the shared provider cooldown');
-  assert.equal((await core.queueStatus(pool)).waitingCount,1);
-  await pool.query('UPDATE compel_research_budget SET next_at=NOW() WHERE id=$1',['groq/research/'+model]);
+  assert.equal((await core.claim(pool,'legacy-0','recovery',{requiresAI:true})).limited,true,'AI-dependent jobs must still respect the shared provider cooldown');
+  assert.equal((await core.queueStatus(pool)).waitingCount,0,'email/activity workers do not wait on an unused AI budget');
   const secondResume=await core.claim(pool,'legacy-0','recovery');assert.equal(secondResume.job.retryCount,1);assert.equal(secondResume.dailyCount,beforeRetry);
   await core.complete(pool,secondResume.job.jobId,'recovery',{...savedProfile,status:'REJECTED'});
   const reservations=await Promise.all([core.reserveResearch(pool,'fixture-model',4000),core.reserveResearch(pool,'fixture-model',4000)]);
@@ -136,6 +135,22 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   await saveWorkerResearch(pool,{linkedinUrl:r.linkedinUrl,research:replacement,email:'other@avamorgan.test'});
   lead=(await pool.query('SELECT * FROM leads WHERE id=$1',[saved.id])).rows[0];
   assert.equal(lead.email_verification_method,null);assert.equal(lead.email_verification_score,null);assert.equal(lead.do_not_contact,true);assert.equal(lead.contacted_source,'PLATFORM');
+  // Qualification can land immediately while a large website continues from
+  // its saved graph. Continuations neither block new leads nor consume quota.
+  const continuationResearch={...r,crawl:{version:1,complete:false,pending:['https://avamorgan.test/real-route'],failed:[],stoppedReason:'Time budget reached'}};
+  const partial={...savedProfile,status:'QUALIFIED',primaryEmail:'ava@avamorgan.test',prospectQualification:{research:continuationResearch}};
+  const continuationBatch=await core.enqueue(pool,[savedProfile.url]);
+  await pool.query('UPDATE compel_worker_jobs SET checkpoint=$2::jsonb WHERE id=$1',[continuationBatch.jobs[0],JSON.stringify(partial)]);
+  const parent=await core.claim(pool,'legacy-0','recovery');
+  await core.complete(pool,parent.job.jobId,'recovery',partial);
+  assert.equal((await core.jobStatus(pool,parent.job.jobId)).status,'done');
+  const continuation=(await pool.query("SELECT * FROM compel_worker_jobs WHERE status='pending' AND payload->>'websiteContinuation'='true'")).rows[0];
+  assert.ok(continuation);assert.equal(continuation.checkpoint.primaryEmail,'ava@avamorgan.test');
+  await pool.query('UPDATE compel_worker_jobs SET retry_at=NOW() WHERE id=$1',[continuation.id]);
+  const resumed=await core.claim(pool,'legacy-0','recovery');
+  assert.equal(resumed.job.websiteContinuation,true);assert.equal(resumed.dailyCount,beforeRetry);
+  await core.complete(pool,resumed.job.jobId,'recovery',{...partial,prospectQualification:{research:{...r,crawl:{version:1,complete:true,pending:[],failed:[]}}}});
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM compel_worker_jobs WHERE status='pending'")).rows[0].count,0);
  }finally{
   await raw.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);await raw.end();
  }

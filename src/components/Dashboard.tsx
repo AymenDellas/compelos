@@ -158,7 +158,7 @@ function ConfirmDialog({ open, message, onConfirm, onCancel }: {
  */
 const LEAD_STATUS: Record<string, { label: string; mark: string }> = {
     QUALIFIED: { label: 'Qualified', mark: 'mark-ok' },
-    REJECTED: { label: 'Not a fit', mark: 'mark-idle' },
+    REJECTED: { label: 'Not qualified', mark: 'mark-idle' },
     ACTIVITY_FAILED: { label: 'Not posting', mark: 'mark-warn' },
     SCANNING: { label: 'Scanning', mark: 'mark-info' },
     PENDING: { label: 'Waiting', mark: 'mark-idle' },
@@ -226,6 +226,7 @@ function describeLead(l: any): string {
     }
     if (l.status === 'ACTIVITY_FAILED') return `${who} — skipped, no recent posts`;
     if (l.status === 'ERROR') return `${who} — ${failureOf(l).reason}`;
+    if (l.status === 'REJECTED' && l.prospectQualification?.nextAction) return `${who} — ${l.prospectQualification.nextAction}`;
     return `${who} — ${String(status).toLowerCase()}`;
 }
 
@@ -1539,6 +1540,8 @@ export default function Dashboard() {
                                                             {lead.timedOut && <span className="badge badge-warn">TIMED OUT</span>}
                                                         </div>
                                                         {lead.status === 'ERROR' && <p className="mt-1 text-xs text-[var(--text-dim)] max-w-64">{failureOf(lead).reason}</p>}
+                                                        {lead.status === 'REJECTED' && lead.prospectQualification?.nextAction && <p className="mt-1 text-xs text-[var(--text-dim)] max-w-64">{lead.prospectQualification.nextAction}</p>}
+                                                        {lead.prospectQualification?.research?.crawl && <p className="mt-1 text-xs text-[var(--text-faint)] max-w-64">{lead.prospectQualification.research.crawl.inspected} pages read · {lead.prospectQualification.research.crawl.complete ? 'Crawl complete' : 'Crawl incomplete'}</p>}
                                                     </td>
                                                     <td className="px-4 py-2.5 align-top">
                                                         {sites.length > 0 ? (

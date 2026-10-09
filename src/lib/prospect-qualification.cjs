@@ -3,6 +3,7 @@
 // Shared by the LinkedIn worker, server and browser. No network calls or CRM outcomes.
 const VERSION = 1;
 const RESEARCH_MAX_AGE_DAYS = 90;
+const ACTIVITY_MAX_AGE_DAYS = 30;
 const SEGMENTS = ['EXECUTIVE', 'CAREER', 'BUSINESS'];
 const SEGMENT_LABELS = { EXECUTIVE: 'Executive coaching', CAREER: 'Career coaching', BUSINESS: 'Business coaching', UNKNOWN: 'Segment needs review' };
 const DEFAULT_TITLES = ['Executive Coach', 'Leadership Coach', 'Career Coach', 'Business Coach'];
@@ -44,7 +45,8 @@ const isUnsafeContact = address => {
     const [local, host] = email.split('@');
     return [...VENDOR_DOMAINS].some(d => onDomain(host, d))
         || /^(?:no[-_.]?reply|do[-_.]?not[-_.]?reply|postmaster|abuse|privacy|security|legal|notifications?)$/.test(local)
-        || /\d{5,}/.test(local) || /^(?:your[-_.]?(?:name|email)|john[-_.]?doe|jane[-_.]?doe|test|sample)$/.test(local);
+        || /\d{5,}/.test(local) || /^(?:your[-_.]?(?:name|email)|john[-_.]?doe|jane[-_.]?doe|test|sample|example|email|name|username)$/.test(local)
+        || /\.(?:png|jpe?g|gif|webp|svg|ico|woff2?|css|js)$/i.test(host);
 };
 
 function segmentsFromText(value) {
@@ -71,10 +73,11 @@ function emptyResearch(input = {}, now = new Date().toISOString()) {
         headline: normalText(input.headline).slice(0, 1000), about: normalText(input.about).slice(0, 5000),
         profileLocation: normalText(input.profileLocation).slice(0, 500),
         latestPostText: normalText(input.latestPostText).slice(0, 2500), lastActivityAt: input.lastActivityAt || null,
+        activityStatus: ['Active', 'Inactive', 'Unknown'].includes(input.activityStatus) ? input.activityStatus : 'Unknown',
         linkedinUrl: input.linkedinUrl || input.url || '', website: '', websiteStatus: 'NONE',
         segments: segmentsFromText(input.headline), segment: segmentsFromText(input.headline)[0] || 'UNKNOWN',
         facts: Object.fromEntries(FACT_KEYS.map(key => [key, emptyFact()])),
-        pages: [], limitations: [], contacts: [],
+        pages: [], limitations: [], contacts: [], description: null, crawl: null,
     };
 }
 
@@ -94,7 +97,7 @@ function groundedFact(candidate, sources) {
 function validateResearch(value) {
     if (!value || value.version !== VERSION || !value.facts || !Array.isArray(value.segments)) throw new Error('Invalid prospect research.');
     if (!Number.isFinite(Date.parse(value.researchedAt))) throw new Error('Research needs a valid date.');
-    if (JSON.stringify(value).length > 100000) throw new Error('Prospect research is too large.');
+    if (JSON.stringify(value).length > 1500000) throw new Error('Prospect research is too large.');
     const research = emptyResearch(value, value.researchedAt);
     research.linkedinUrl = typeof research.linkedinUrl === 'string' && validHttpUrl(research.linkedinUrl) ? research.linkedinUrl.slice(0, 2000) : '';
     research.lastActivityAt = validDate(value.lastActivityAt) ? value.lastActivityAt : null;
@@ -109,7 +112,17 @@ function validateResearch(value) {
         const evidence = (Array.isArray(fact.evidence) ? fact.evidence : []).slice(0, 4).filter(e => e && typeof e.excerpt === 'string' && e.excerpt.length >= 8 && typeof e.url === 'string' && validHttpUrl(e.url) && ['WEBSITE', 'PROFILE', 'MANUAL'].includes(e.source)).map(e => ({ url: e.url.slice(0, 2000), excerpt: e.excerpt.slice(0, 700), source: e.source, observedAt: validDate(e.observedAt) ? e.observedAt : research.researchedAt }));
         research.facts[key] = fact.state !== 'UNKNOWN' && !evidence.length ? emptyFact('Evidence is required for this finding.') : makeFact(fact.state, fact.value, fact.reason, evidence);
     }
-    research.pages = (Array.isArray(value.pages) ? value.pages : []).slice(0, 8).filter(p => p && typeof p.url === 'string' && validHttpUrl(p.url)).map(p => ({ url: p.url.slice(0, 2000), label: normalText(p.label).slice(0, 150), status: p.status === 'inspected' ? 'inspected' : 'blocked', note: normalText(p.note).slice(0, 400) }));
+    research.pages = (Array.isArray(value.pages) ? value.pages : []).slice(0, 1000).filter(p => p && typeof p.url === 'string' && validHttpUrl(p.url)).map(p => ({ url: p.url.slice(0, 1000), label: normalText(p.label).slice(0, 150), status: p.status === 'inspected' ? 'inspected' : 'blocked', note: normalText(p.note).slice(0, 400) }));
+    if (value.description && validHttpUrl(value.description.url)) research.description = { url: value.description.url.slice(0, 1000), text: normalText(value.description.text).slice(0, 2000) };
+    if (value.crawl && value.crawl.version === 1) {
+        const urls = values => [...new Set((Array.isArray(values) ? values : []).filter(validHttpUrl).map(url => url.slice(0, 1000)))].slice(0, 2000);
+        const c = value.crawl;
+        research.crawl = { version: 1, complete: c.complete === true, visited: urls(c.visited), pending: urls(c.pending), failed: urls(c.failed), roots: urls(c.roots), matchedHosts: (c.matchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
+            discovered: Math.max(0, Number(c.discovered) || 0), inspected: Math.max(0, Number(c.inspected) || 0), contactPages: Math.max(0, Number(c.contactPages) || 0), descriptionPages: Math.max(0, Number(c.descriptionPages) || 0), stoppedReason: normalText(c.stoppedReason).slice(0, 200),
+            candidates: (Array.isArray(c.candidates) ? c.candidates : []).slice(0, 150).filter(contact => contact && !isUnsafeContact(contact.address) && validHttpUrl(contact.url)).map(contact => ({ address: normalText(contact.address).toLowerCase(), url: contact.url.slice(0, 1000), explicit: contact.explicit === true, contactPage: contact.contactPage === true })),
+        };
+        research.crawl.complete = research.crawl.complete && !research.crawl.pending.length && !research.crawl.failed.length && !research.crawl.stoppedReason;
+    }
     research.limitations = (Array.isArray(value.limitations) ? value.limitations : []).slice(0, 12).map(s => normalText(s).slice(0, 500));
     research.contacts = (Array.isArray(value.contacts) ? value.contacts : []).slice(0, 15).filter(c => c && !isUnsafeContact(c.address)).map(c => ({ address: String(c.address).trim().toLowerCase().slice(0, 320), source: ['linkedin', 'website', 'pattern_guess', 'manual'].includes(c.source) ? c.source : 'website', url: validHttpUrl(c.url) ? String(c.url).slice(0, 2000) : '', ownership: validHttpUrl(c.url) && ['PUBLISHED', 'DOMAIN_MATCH', 'GUESSED', 'UNCONFIRMED'].includes(c.ownership) ? c.ownership : 'UNCONFIRMED' }));
     return research;
@@ -155,12 +168,6 @@ function assessProspect(researchInput, context = {}) {
     const blockers = [];
     const researchAge = (Date.parse(context.now || new Date().toISOString()) - Date.parse(research.researchedAt)) / 86400000;
     const researchFresh = researchAge <= RESEARCH_MAX_AGE_DAYS && researchAge >= -1;
-    if (!researchFresh) blockers.push('Refresh the public business research before approaching this coach.');
-    if (!research.segments.length) blockers.push('Executive, career or business coaching has not been established.');
-    if (!positive('independentBusiness')) blockers.push('Independent ownership needs review.');
-    if (!positive('paidOffer')) blockers.push('An identifiable paid coaching offer needs review.');
-    if (!positive('targetMarket')) blockers.push('The coach’s location or target market needs confirmation.');
-    if (!research.profileIdentityConfirmed && !context.review?.segment) blockers.push('Confirm the identity of the coaching profile.');
     const contraryCore = ['independentBusiness', 'marketingControl', 'targetMarket'].some(key => f[key].state === 'NEGATIVE');
     const explicitlyOther = research.segments.length === 0 && /\b(?:sports?|football|soccer|basketball|agile|scrum|fitness|health|wellness|nutrition)\s+coach(?:ing)?\b/i.test(research.headline);
     const fit = contraryCore || explicitlyOther ? 'OUTSIDE_ICP'
@@ -168,9 +175,8 @@ function assessProspect(researchInput, context = {}) {
         : research.segments.length ? 'POTENTIAL' : 'UNKNOWN';
     const weights = { independentBusiness: 20, paidOffer: 20, clientProof: 15, demandSignals: 15, funnelOpportunity: 20, marketingControl: 10 };
     let score = Object.entries(weights).reduce((sum, [key, weight]) => sum + (observed(key) ? weight : positive(key) ? Math.round(weight * 0.55) : 0), 0);
-    // Outreach qualification establishes ICP and a real coaching offer. Client
-    // results, current promotion and a funnel problem improve ranking; they are
-    // discovery-call questions, not prerequisites for sending an introduction.
+    // Business tiers are advisory rankings retained for discovery calls.
+    // They do not determine lead qualification or CRM placement.
     const ready = researchFresh && fit === 'MATCH' && positive('targetMarket')
         && !['capacity', 'economics', 'clientProof'].some(key => f[key].state === 'NEGATIVE')
         && (research.profileIdentityConfirmed || context.review?.segment);
@@ -199,20 +205,30 @@ function assessProspect(researchInput, context = {}) {
         const age = Math.max(0, Math.floor((Date.parse(context.now || new Date().toISOString()) - Date.parse(research.lastActivityAt)) / 86400000));
         if (age > 30) { score = Math.max(0, score - (age > 90 ? 8 : 4)); cautions.push(`Latest known LinkedIn activity was ${age} days ago; this lowers freshness, not business fit.`); }
     }
-    const interpretationIncomplete = research.limitations.some(note => /^Automated interpretation (?:failed|could not complete|is unavailable)/.test(note));
-    const nextAction = tier === 'A' ? (contactability === 'EMAIL_READY' ? 'Qualified coach; ready for email outreach.' : contactability === 'LINKEDIN_ONLY' ? 'Not qualified for email outreach: no email found. Retry contact research.' : contactability === 'OWNERSHIP_UNCLEAR' ? 'Not qualified for email outreach: confirm who owns the email.' : 'Qualified coach; verify the email before sending.')
-        : tier === 'B' && interpretationIncomplete ? 'Retry automated research or review the sources manually; the automated assessment is incomplete.'
-        : tier === 'B' ? `Not qualified: ${blockers[0] || 'insufficient evidence of the coaching practice and target market.'}`
-        : tier === 'C' ? 'Not qualified: the offer, client base or available capacity does not meet the criteria.' : 'Not qualified: outside the requested coaching ICP.';
+    // Business facts rank prospects; they do not gate the email/activity qualifier.
+    const activityAge = research.lastActivityAt ? (Date.parse(context.now || new Date().toISOString()) - Date.parse(research.lastActivityAt)) / 86400000 : null;
+    const activity = activityAge !== null && activityAge >= 0 && activityAge <= ACTIVITY_MAX_AGE_DAYS ? 'RECENT'
+        : activityAge !== null && activityAge > ACTIVITY_MAX_AGE_DAYS || research.activityStatus === 'Inactive' ? 'INACTIVE' : 'UNKNOWN';
+    const attributableEmail = Boolean(email && !isUnsafeContact(email) && ownerConfirmed);
+    if (!research.profileIdentityConfirmed) blockers.push('LinkedIn profile identity could not be confirmed; retry the scrape.');
+    if (activity === 'INACTIVE') blockers.push('No LinkedIn activity within the last 30 days.');
+    else if (activity === 'UNKNOWN') blockers.push('LinkedIn activity could not be confirmed; retry the activity check.');
+    if (!attributableEmail) blockers.push(!email ? 'No attributable email found.' : 'Email ownership needs confirmation.');
+    const qualified = research.profileIdentityConfirmed && activity === 'RECENT' && attributableEmail;
+    const needsRetry = !research.profileIdentityConfirmed || activity === 'UNKNOWN' || (activity !== 'INACTIVE' && !attributableEmail && research.crawl?.complete === false);
+    const qualification = { policy: 'EMAIL_ACTIVITY_V1', qualified, activity, activityAgeDays: activityAge === null ? null : Math.floor(activityAge), attributableEmail, needsRetry };
+    const nextAction = qualified ? (context.emailProven ? 'Qualified: email found and recent activity confirmed.' : 'Qualified: email found and recent activity confirmed. Verify the email before sending.')
+        : needsRetry ? `Research incomplete: ${blockers[0] || 'continue crawling the remaining website routes.'}` : `Not qualified: ${blockers.join(' ')}`;
     return { version: VERSION, researchedAt: research.researchedAt, tier, segment: research.segment, segments: research.segments,
-        score, businessFit: fit, readiness: tier === 'A' ? 'READY_TO_APPROACH' : tier === 'C' ? 'EARLY' : 'NEEDS_REVIEW',
+        score, businessFit: fit, qualification, readiness: qualified ? 'READY_TO_APPROACH' : activity === 'INACTIVE' ? 'EARLY' : 'NEEDS_REVIEW',
         engagementReady: tier === 'A' && observed('economics') && observed('capacity') && observed('marketingControl') && observed('demandSignals'),
         contact: { channel: contactability, ownership, email }, blockers, unknowns, cautions, nextAction, research, baseResearch };
 }
 
 function isContactNow(assessment) {
-    const age = assessment ? (Date.now() - Date.parse(assessment.researchedAt)) / 86400000 : Infinity;
-    return Boolean(assessment && assessment.version === VERSION && assessment.tier === 'A' && assessment.businessFit === 'MATCH' && age >= -1 && age <= RESEARCH_MAX_AGE_DAYS);
+    const research = assessment?.research;
+    const activityAge = research?.lastActivityAt ? (Date.now() - Date.parse(research.lastActivityAt)) / 86400000 : Infinity;
+    return Boolean(assessment?.version === VERSION && research?.profileIdentityConfirmed && activityAge >= 0 && activityAge <= ACTIVITY_MAX_AGE_DAYS);
 }
 function hasAttributableEmail(assessment) {
     return Boolean(assessment && isContactNow(assessment) && assessment.contact?.email && !isUnsafeContact(assessment.contact.email)

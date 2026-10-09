@@ -235,7 +235,7 @@ async function enqueue(pool, urls, options = {}) {
  const jobs=queued.map(entry=>entry.id);
  return {jobs,queuedCount:jobs.length,skipped,queued};
 }
-async function claim(pool,id,owner) {
+async function claim(pool,id,owner,options={}) {
  const client=await pool.connect();
  try {
   await client.query('BEGIN');
@@ -247,8 +247,8 @@ async function claim(pool,id,owner) {
   await client.query(`INSERT INTO compel_worker_usage(account_id,day) VALUES($1,(NOW() AT TIME ZONE 'UTC')::date) ON CONFLICT DO NOTHING`,[id]);
   const usage=(await client.query(`SELECT count FROM compel_worker_usage WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date FOR UPDATE`,[id])).rows[0];
   const job=(await client.query(`SELECT * FROM compel_worker_jobs WHERE ((status='pending' AND (retry_at IS NULL OR retry_at<=NOW())) OR (status='processing' AND lease_until<NOW()))
-   AND (result->'failure'->>'code' IS DISTINCT FROM 'AI_RATE_LIMIT' OR NOT EXISTS(SELECT 1 FROM compel_research_budget WHERE id=$1 AND next_at>NOW()))
-   ORDER BY (checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b')])).rows[0];
+   AND ($2 IS FALSE OR result->'failure'->>'code' IS DISTINCT FROM 'AI_RATE_LIMIT' OR NOT EXISTS(SELECT 1 FROM compel_research_budget WHERE id=$1 AND next_at>NOW()))
+   ORDER BY (COALESCE(payload->>'websiteContinuation','false')<>'true') DESC,(checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b'),options.requiresAI===true])).rows[0];
   if (!job?.checkpoint&&usage.count >= account.daily_limit) { await client.query('COMMIT'); return {limited:true,dailyCount:usage.count,dailyLimit:account.daily_limit}; }
   if (!job) { await client.query('COMMIT'); return null; }
   await client.query(`UPDATE compel_worker_jobs SET status='processing',account_id=$2,owner=$3,lease_until=NOW()+interval '15 minutes' WHERE id=$1`,[job.id,id,owner]);
@@ -257,7 +257,19 @@ async function claim(pool,id,owner) {
  } catch(error) { await client.query('ROLLBACK'); throw error; } finally {client.release();}
 }
 async function complete(pool,id,owner,result) {
- const update=await pool.query(`UPDATE compel_worker_jobs SET status='done',result=$3::jsonb,completed_at=NOW(),lease_until=NULL WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result)]);
+ const crawl=result?.prospectQualification?.research?.crawl;
+ // Qualification is saved immediately. Large/temporarily blocked sites finish
+ // crawling in a separate cached-profile job, without a new LinkedIn visit.
+ const update=await pool.query(`WITH finished AS (
+  UPDATE compel_worker_jobs SET status='done',result=$3::jsonb,completed_at=NOW(),lease_until=NULL
+   WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW() RETURNING *
+ ), continuation AS (
+  INSERT INTO compel_worker_jobs(id,profile_key,payload,checkpoint,retry_at,retry_count)
+  SELECT $4,profile_key,payload || jsonb_build_object('jobId',$4::text,'websiteContinuation',true),$3::jsonb,NOW()+interval '30 seconds',
+   CASE WHEN $5 THEN 0 ELSE retry_count+1 END FROM finished
+  WHERE $6 AND ($5 OR retry_count<3) ON CONFLICT DO NOTHING RETURNING id
+ ) SELECT id,(SELECT id FROM continuation) AS continuation_id FROM finished`,
+ [id,owner,json(result),'job_'+randomUUID(),Boolean(crawl?.pending?.length),Boolean(result.status==='QUALIFIED'&&crawl&&!crawl.complete&&!/storage limit/i.test(crawl.stoppedReason))]);
  if (!update.rowCount) throw new Error('Job lease lost; result was not overwritten.');
 }
 async function checkpoint(pool,id,owner,result) {
@@ -265,7 +277,9 @@ async function checkpoint(pool,id,owner,result) {
  if(!update.rowCount)throw new Error('Job lease lost before saving the scraped profile.');
 }
 async function defer(pool,id,owner,result,retryAt) {
- const update=await pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL,result=$3::jsonb,retry_at=$4,retry_count=retry_count+1 WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result),retryAt]);
+ const update=await pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL,result=$3::jsonb,retry_at=$4,retry_count=retry_count+1,
+  checkpoint=CASE WHEN $3::jsonb->'failure'->>'stage'='linkedin' THEN NULL ELSE checkpoint END
+  WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result),retryAt]);
  if(!update.rowCount)throw new Error('Job lease lost before scheduling recovery.');
 }
 async function retryFailed(pool) {
@@ -327,11 +341,11 @@ async function importResult(pool,id,wrapper) {
 }
 async function queueStatus(pool) {
  const config=await settings(pool);
- const rows=(await pool.query(`WITH budget AS (SELECT next_at FROM compel_research_budget WHERE id=$1), jobs AS (
-  SELECT *, GREATEST(retry_at,CASE WHEN result->'failure'->>'code'='AI_RATE_LIMIT' THEN (SELECT next_at FROM budget) END) AS ready_at FROM compel_worker_jobs)
+ const rows=(await pool.query(`WITH jobs AS (
+  SELECT *, retry_at AS ready_at FROM compel_worker_jobs)
   SELECT count(*) FILTER(WHERE status IN ('pending','processing'))::integer AS pending,
    count(*) FILTER(WHERE status='pending' AND ready_at>NOW())::integer AS waiting,
-   min(ready_at) FILTER(WHERE status='pending' AND ready_at>NOW()) AS next_retry FROM jobs`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b')])).rows[0];
+   min(ready_at) FILTER(WHERE status='pending' AND ready_at>NOW()) AS next_retry FROM jobs`)).rows[0];
  const recent=(await pool.query(`SELECT id,result,completed_at FROM compel_worker_jobs WHERE status='done' ORDER BY completed_at DESC LIMIT 100`)).rows;
  const selected=config.accounts.filter(a=>a.enabled&&!a.signedOut&&!a.logoutPending).slice(0,config.activeCount);
  const live=selected.filter(a=>a.online), busy=live.find(a=>a.status==='processing');

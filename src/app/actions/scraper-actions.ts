@@ -11,6 +11,7 @@ import { savedRuns } from '@/lib/saved-runs';
 // ── Types ──
 
 export type Lead = {
+    prospectQualification?: import('@/lib/prospect-qualification.cjs').ProspectAssessment;
     url: string;
     status: 'PENDING' | 'SCANNING' | 'QUALIFIED' | 'REJECTED' | 'ACTIVITY_FAILED' | 'ACTIVE_NO_CONTACT' | 'ERROR';
     firstName?: string;

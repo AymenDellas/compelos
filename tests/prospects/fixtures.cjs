@@ -4,6 +4,7 @@ const NOW = '2026-10-06T12:00:00.000Z';
 function research(overrides = {}) {
     const value = emptyResearch({ linkedinUrl: 'https://www.linkedin.com/in/ava-morgan', headline: 'Independent Executive Coach | Founder', profileIdentityConfirmed: true }, NOW);
     value.website = 'https://avamorgan.test'; value.websiteStatus = 'OWNED';
+    value.lastActivityAt = NOW; value.activityStatus = 'Active';
     const quote = { url: value.website, excerpt: 'I am Ava Morgan, an independent executive coach serving leaders in Canada.', source: 'WEBSITE', observedAt: NOW };
     for (const key of FACT_KEYS) {
         if (['economics', 'capacity'].includes(key)) continue;
