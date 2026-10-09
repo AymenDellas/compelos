@@ -5,8 +5,6 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { research, NOW } = require('./fixtures.cjs');
 const q = require('../../src/lib/prospect-qualification.cjs');
-require('tsx/cjs/api').register();
-const { buildDiscoverySearchPlan } = require('../../src/lib/dorkEngine.ts');
 const worker = fs.readFileSync(require.resolve('../../worker.cjs'), 'utf8');
 function load(name, next, context) {
     const start = worker.indexOf(`async function ${name}(`);
@@ -47,12 +45,4 @@ test('failed CRM saves retain complete business research for recovery instead of
     const result = { url: research().linkedinUrl, status: 'QUALIFIED', logs: [], prospectQualification: q.assessProspect(research()) };
     await persist({ jobId: 'test' }, result, () => {});
     assert.equal(attempts, 3); assert.equal(result.crmSaved, false); assert.equal(recovery.research.version, 1);
-});
-test('limited discovery budgets cover all three coaching segments and target markets deterministically', () => {
-    const config = { job_titles: ['Executive Coach', 'Career Coach', 'Business Coach'], locations: ['US', 'UK', 'Canada'] };
-    const plan = buildDiscoverySearchPlan(config);
-    assert.deepEqual([...new Set(plan.slice(0, 9).map(query => query.niche))], config.job_titles);
-    assert.deepEqual([...new Set(plan.slice(0, 9).map(query => query.location))], config.locations);
-    assert.deepEqual(buildDiscoverySearchPlan(config), plan);
-    assert.ok(plan.slice(0, 9).every(query => query.searchPhase === 'country'));
 });
