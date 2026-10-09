@@ -11,6 +11,9 @@ export type VerificationBatchReport<T extends VerificationLead = VerificationLea
     updated: T[];
     skipped: { id: string; reason: 'NO_EMAIL' | 'NOT_FOUND' }[];
     failed: { id: string; reason: string }[];
+    remainingCredits?: number | null;
+    verificationProvider?: string;
+    stopRun?: boolean;
 };
 
 /** Every requested row gets an outcome; a save failure cannot hide other saved results. */
@@ -33,9 +36,17 @@ export async function verifyCrmEmailBatch<T extends VerificationLead>(ids: strin
     }
     if (!candidates.length) return report;
     const results = await dependencies.verify(candidates.map(lead => ({ address: lead.email!.trim(), source: 'crm' })));
+    const balances = results.flatMap(result => result.remainingCredits != null ? [result.remainingCredits] : []);
+    report.remainingCredits = balances.length ? Math.min(...balances) : null;
+    report.verificationProvider = results.find(result => result.verificationProvider)?.verificationProvider;
+    report.stopRun = results.some(result => result.stopRun);
     for (let index = 0; index < candidates.length; index++) {
         const lead = candidates[index];
         const result = results[index];
+        if (result?.error) {
+            report.failed.push({ id: lead.id, reason: result.error });
+            continue;
+        }
         if (!result || result.email.toLowerCase().trim() !== lead.email!.toLowerCase().trim()) {
             report.failed.push({ id: lead.id, reason: 'No matching verification result was returned. Retry this lead.' });
             continue;
@@ -89,6 +100,8 @@ export type VerificationRun = {
     failed: number;
     causes: Record<UnknownCause, number>;
     phase: 'running' | 'complete' | 'stopped';
+    remainingCredits?: number | null;
+    verificationProvider?: string;
 };
 
 export function startVerificationRun(total: number): VerificationRun {
@@ -99,6 +112,10 @@ export function startVerificationRun(total: number): VerificationRun {
 /** Count persisted verdicts, explicit skips and failures separately. */
 export function addVerificationBatch(run: VerificationRun, report: VerificationBatchReport): VerificationRun {
     const next = { ...run, causes: { ...run.causes } };
+    if (report.verificationProvider) {
+        next.verificationProvider = report.verificationProvider;
+        next.remainingCredits = report.remainingCredits;
+    }
     next.processed += report.updated.length + report.skipped.length + report.failed.length;
     next.noEmail += report.skipped.filter(row => row.reason === 'NO_EMAIL').length;
     next.missing += report.skipped.filter(row => row.reason === 'NOT_FOUND').length;

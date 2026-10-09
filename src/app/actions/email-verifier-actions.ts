@@ -1,5 +1,6 @@
 "use server";
 import { requireAdmin } from '@/lib/dashboard-auth';
+import { qevConfigured, verifyQevBatch, QEV_PROVIDER } from '@/lib/quickemailverification';
 
 import dns from "dns";
 import { resolveMailDomain } from '@/lib/email-dns';
@@ -8,7 +9,7 @@ import { randomBytes } from "crypto";
 import { DISPOSABLE_DOMAINS, ROLE_ACCOUNTS, FREE_PROVIDERS } from "@/lib/email-constants";
 
 // ── Configuration ──
-// This verifier is deliberately self-hosted: DNS + direct SMTP only.
+// QuickEmailVerification is primary when configured; direct SMTP remains a local fallback.
 // Use a real hostname and sender address that your server owns. The defaults
 // preserve the existing Revlane deployment but can be overridden per runtime.
 const SMTP_HELO = process.env.EMAIL_VERIFY_HELO || "verify.revlane.io";
@@ -161,8 +162,13 @@ export type VerificationResult = {
     checks: EmailCheckResults;
     reason: string;
     provider?: string;
-    /** Only a non-catch-all SMTP_DIRECT result can be VALID and sendable. */
-    method?: "SMTP_DIRECT" | "DNS_PREFILTER" | "LOCAL_PREFILTER";
+    method?: "SMTP_DIRECT" | "DNS_PREFILTER" | "LOCAL_PREFILTER" | "QUICKEMAILVERIFICATION";
+    verificationProvider?: string;
+    safeToSend?: boolean;
+    remainingCredits?: number | null;
+    /** Request failures are not mailbox verdicts and must not overwrite CRM results. */
+    error?: string;
+    stopRun?: boolean;
     checkedAt?: string;
     expiresAt?: string;
     source?: string;
@@ -171,9 +177,15 @@ export type VerificationResult = {
 /** Configuration readiness does not claim network reachability or reputation. */
 export async function getVerificationReadiness() {
     await requireAdmin();
+    if (qevConfigured()) return {
+        ready: true, selfHostedReady: false, provider: QEV_PROVIDER,
+        message: 'QuickEmailVerification is configured. Credits appear after each verification batch.',
+    };
     const identityValid = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/i.test(SMTP_HELO)
         && isValidSyntax(SMTP_MAIL_FROM.toLowerCase());
     return {
+        ready: identityValid,
+        provider: 'Direct SMTP',
         selfHostedReady: identityValid,
         message: identityValid
             ? `Direct SMTP is configured (EHLO ${SMTP_HELO}); connectivity and sender reputation require the SMTP diagnostic.`
@@ -304,6 +316,7 @@ function applySmtpResult(checks: EmailCheckResults, smtp: SmtpResult): void {
 
 export async function verifyEmail(email: string, source?: string): Promise<VerificationResult> {
     await requireAdmin();
+    if (qevConfigured()) return (await verifyQevBatch([{ address: email, source }]))[0];
     const e = email.toLowerCase().trim();
 
     const checks: EmailCheckResults = {
@@ -357,6 +370,7 @@ export async function verifyEmailBatchFast(
 ): Promise<VerificationResult[]> {
     await requireAdmin();
     if (emails.length > 100) throw new Error("A verification request may contain at most 100 emails");
+    if (qevConfigured()) return verifyQevBatch(emails);
     const results: VerificationResult[] = new Array(emails.length);
 
     // ── Phase 1: Pre-filter ──

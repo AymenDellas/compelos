@@ -5,6 +5,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { Loader2, Search, AlertCircle, XCircle, Trash2, Download, ShieldCheck, RefreshCcw, Zap, Phone, Radar, Upload, Mail, ChevronDown, Settings2, Ban, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hasFreshSmtpProof, hasExpiredSmtpProof } from '@/lib/email-verification-proof';
+import VerificationProviderStatus from '@/components/VerificationProviderStatus';
 import { verifyLeadEmailsAction, bulkDeleteLeadsAction, toggleContactedAction, generateHookAction, importLeadsAction, markLeadsContactedAction, setLeadOutcomeAction, setDoNotContactAction, suppressJunkAddressesAction } from "@/app/actions/crm-actions";
 import { syncContactedFromGmailAction, clearUnconfirmedContactedAction, type GmailSyncReport } from "@/app/actions/gmail-actions";
 import { importCampaignReportsAction } from "@/app/actions/campaign-import-actions";
@@ -53,7 +54,7 @@ interface LeadRecord {
 const isQualifiedStage = (status: string) => status === 'QUALIFIED' || status === 'OUTREACH';
 
 /**
- * A VALID label is only trustworthy if an actual direct-SMTP check produced it and
+ * A VALID label is only trustworthy if an actual safe verification produced it and
  * that check hasn't expired.
  *
  * The score is part of the test, not decoration. A past data-recovery script
@@ -478,31 +479,13 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
         }
     };
 
-    /**
-     * Chunk size is a feedback decision, not a throughput one. Addresses are grouped
-     * by domain server-side so one connection can carry several recipients, but real
-     * lead lists are almost entirely distinct domains (a measured run: 98 domains
-     * across 100 addresses), so a bigger chunk buys close to nothing in connections
-     * and costs everything in visible progress — the whole request lands at once, so
-     * a 100-address chunk means fourteen minutes of unchanged screen. At 25 the table
-     * starts moving within a couple of minutes and keeps moving.
-     */
-    const VERIFY_CHUNK = 25;
+    // Small batches expose saved results and the latest provider credit balance quickly.
+    const VERIFY_CHUNK = 5;
 
     const handleVerifySelected = async () => {
         if (selectedIds.size === 0 || verifyActiveRef.current) return;
 
         const idsToVerify = Array.from(selectedIds);
-
-        // Recipient servers, not this code, set the pace: ~8s per address in the
-        // measured run. Say so before committing someone to a 40-minute wait.
-        const estimateMin = Math.max(1, Math.round((idsToVerify.length * 8) / 60));
-        if (idsToVerify.length > VERIFY_CHUNK && !window.confirm(
-            `Verify ${idsToVerify.length} leads?\n\n`
-            + `This probes each recipient's mail server directly and takes roughly `
-            + `${estimateMin} minute${estimateMin === 1 ? '' : 's'}. Results appear in the table `
-            + `as they land, and you can stop at any point without losing what's done.`
-        )) return;
 
         cancelVerifyRef.current = false;
         verifyActiveRef.current = true;
@@ -527,6 +510,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                 // Only saved results and explicit skips are cleared. Failures remain retryable.
                 const settledIds = new Set([...report.updated, ...report.skipped].map(row => row.id));
                 setSelectedIds(prev => new Set([...prev].filter(id => !settledIds.has(id))));
+                if (report.stopRun) { cancelVerifyRef.current = true; break; }
             } catch (err) {
                 // A failed chunk used to vanish into the browser console, which is why
                 // a broken run and a slow one looked identical from the table.
@@ -1077,7 +1061,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                             <button
                                 onClick={handleVerifySelected}
                                 disabled={verifying}
-                                title="Probes each recipient's mail server directly. Expect roughly 8 seconds per address."
+                                title="Verify selected emails with the configured provider. Saved results and remaining credits appear as batches finish."
                                 className="btn btn-outline"
                             >
                                 {verifying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
@@ -1111,7 +1095,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                             <button
                                 onClick={handleExportValid}
                                 disabled={validCount === 0}
-                                title="Only mailboxes direct SMTP confirmed exist. Excludes do-not-contact and duplicate addresses."
+                                title="Only fresh, safe-to-send verification results. Excludes do-not-contact and duplicate addresses."
                                 className="btn btn-primary"
                             >
                                 <Send className="w-3.5 h-3.5" />
@@ -1285,9 +1269,10 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                                         {verifyRun.failed > 0 && <> · <span className="num">{verifyRun.failed}</span> failed (retry)</>}
                                     </span>
                                 )}
+                                <VerificationProviderStatus provider={verifyRun.verificationProvider} remainingCredits={verifyRun.remainingCredits} />
                                 <span className="label-micro">
                                     {!verifying ? 'saved results stay in the CRM' : verifyRun.processed === 0
-                                        ? 'probing mail servers — first results in a minute or two'
+                                        ? 'verifying selected emails'
                                         : 'results land as each batch completes'}
                                 </span>
                                 {verifying ? <button
@@ -1372,7 +1357,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                         <div className="flex flex-wrap items-center gap-2">
                             <select value={emailFilter} onChange={e => setEmailFilter(e.target.value)} className="field cursor-pointer">
                                 <option value="ALL">Any email status</option>
-                                <option value="PROVEN_VALID">Valid — SMTP proven</option>
+                                <option value="PROVEN_VALID">Valid — safe to send</option>
                                 <option value="UNPROVEN_VALID">Valid label, no proof</option>
                                 <option value="VALID">Valid — any</option>
                                 <option value="RISKY">Risky</option>
@@ -1407,7 +1392,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                         {unprovenCount > 0 && (
                             <button
                                 onClick={() => setEmailFilter('UNPROVEN_VALID')}
-                                title="These carry a VALID label that no SMTP check produced. They're excluded from exports until re-verified."
+                                title="These carry a VALID label without fresh verification evidence. They're excluded from exports until re-verified."
                                 className="mark mark-warn hover:opacity-80 transition-opacity"
                             >
                                 <span className="num">{unprovenCount}</span>
@@ -1600,8 +1585,8 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                                                                         : "mark-idle"
                                                 )}
                                                 title={isUnprovenValid(lead)
-                                                    ? hasExpiredSmtpProof(lead) ? `SMTP proof expired ${new Date(lead.email_verification_expires_at!).toLocaleString()}; reverify before sending`
-                                                        : 'SMTP proof is missing or incomplete; reverify before sending'
+                                                    ? hasExpiredSmtpProof(lead) ? `Verification expired ${new Date(lead.email_verification_expires_at!).toLocaleString()}; reverify before sending`
+                                                        : 'Verification evidence is missing or incomplete; reverify before sending'
                                                     : lead.email_verification_reason || lead.email_status}
                                             >
                                                 {isProvenValid(lead) ? 'VALID' : hasExpiredSmtpProof(lead) ? 'EXPIRED' : isUnprovenValid(lead) ? 'REVERIFY' : lead.email_status === 'UNKNOWN' ? getUnknownLabel(lead.email_verification_reason) : (lead.email_status || 'UNVERIFIED')}

@@ -28,19 +28,19 @@ export async function verifyLeadEmailAction(id: string) {
     const lead = await getLead(id);
     if (!lead || !lead.email) return null;
     const readiness = await getVerificationReadiness();
-    if (!readiness.selfHostedReady) throw new Error(readiness.message);
+    if (!readiness.ready) throw new Error(readiness.message);
     const result = await verifyEmail(lead.email, "crm");
     return await updateLeadEmailVerification(id, toPersistedVerification(result));
 }
 
-/** Batch direct-SMTP verification without weakening the send gate. */
+/** Batch verification through the configured primary provider. */
 export async function verifyLeadEmailsAction(ids: string[]) {
     await requireAdmin();
     return verifyCrmEmailBatch(ids, {
         getLeads: getLeadsByIds,
         verify: async emails => {
             const readiness = await getVerificationReadiness();
-            if (!readiness.selfHostedReady) throw new Error(readiness.message);
+            if (!readiness.ready) throw new Error(readiness.message);
             return verifyEmailBatchFast(emails);
         },
         save: (id, result) => updateLeadEmailVerification(id, toPersistedVerification(result)),

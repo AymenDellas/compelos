@@ -13,27 +13,31 @@ import type { VerificationResult } from "@/app/actions/email-verifier-actions";
  *
  * The invariant it enforces, independently of whatever the verifier concluded:
  *
- *   VALID means direct SMTP accepted this address **and** a random address at the
- *   same domain was refused at mailbox level.
+ *   VALID requires QuickEmailVerification's explicit safe-to-send verdict, or
+ *   direct SMTP accepting this recipient and rejecting a randomized recipient.
  *
  * A catch-all domain cannot meet that bar, and no provider is exempt from it. A
  * previous revision waived it for Google Workspace on the reasoning that a
  * catch-all "accepts email without bouncing"; accepting at RCPT is not a promise
  * to deliver, and that waiver put 106 unproven addresses on the send list.
  *
- * Anything arriving as VALID without the proof is recorded as RISKY — still live,
+ * Anything arriving as VALID without evidence is downgraded — still live,
  * still exportable via `?include=risky` — with the downgrade written into the
  * reason so it shows up in the CRM instead of vanishing.
  */
 export function toPersistedVerification(result: VerificationResult): EmailVerificationUpdate {
+    if (result.error) throw new Error(result.error);
+    const providerSafe = result.method === 'QUICKEMAILVERIFICATION' && result.safeToSend === true
+        && result.checks.catchAll === false && !result.checks.disposable
+        && !result.checks.roleAccount && !result.checks.systemAddress;
     const provenDeliverable =
-        result.method === "SMTP_DIRECT" &&
+        providerSafe || (result.method === "SMTP_DIRECT" &&
         result.checks.smtpValid === true &&
         result.checks.catchAll === false && !result.checks.policyBlocked
-        && !result.checks.disposable && !result.checks.systemAddress && !result.checks.freeProvider;
+        && !result.checks.disposable && !result.checks.systemAddress && !result.checks.freeProvider);
 
     const downgraded = result.status === "VALID" && !provenDeliverable;
-    const unsupportedInvalid = result.status === 'INVALID' && result.checks.syntax
+    const unsupportedInvalid = result.status === 'INVALID' && result.method !== 'QUICKEMAILVERIFICATION' && result.checks.syntax
         && result.checks.smtpValid !== false && result.checks.dnsStatus !== 'NO_MAIL';
     const status = unsupportedInvalid ? 'UNKNOWN'
         : downgraded ? (result.checks.smtpValid === true ? 'RISKY' : 'UNKNOWN') : result.status;
@@ -43,7 +47,7 @@ export function toPersistedVerification(result: VerificationResult): EmailVerifi
         status,
         method: result.method,
         reason: unsupportedInvalid ? `${result.reason} · downgraded: no definitive DNS or mailbox refusal evidence` : downgraded
-            ? `${result.reason} · downgraded: VALID requires a refused random recipient at this domain`
+            ? `${result.reason} · downgraded: no safe-to-send verification evidence`
             : result.reason,
         score: status === 'UNKNOWN' ? Math.min(result.score, 35) : downgraded ? Math.min(result.score, 70) : result.score,
         checkedAt: result.checkedAt,

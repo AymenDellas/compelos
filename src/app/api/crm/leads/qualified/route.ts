@@ -2,14 +2,14 @@ import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import { getAllLeads, isQualifiedStage, isProvenContacted, type LeadRecord } from '@/lib/db';
 import { isExportableUnverifiable, type SendTier } from '@/lib/send-tiers';
-import { hasFreshSmtpProof } from '@/lib/email-verification-proof';
+import { hasFreshEmailVerification } from '@/lib/email-verification-proof';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * The send list. This is the one place where the strict gate is applied, and it
- * stays strict on purpose: an address only qualifies if direct SMTP proved the
- * mailbox exists and that proof has not expired. Everything upstream is allowed
+ * stays strict on purpose: an address requires a safe provider verdict or direct
+ * SMTP proof, and that verification must be fresh. Everything upstream is allowed
  * to be permissive — leads keep their place in the CRM regardless of email
  * status — because nothing upstream actually sends mail.
  *
@@ -67,7 +67,7 @@ export async function GET(req: Request) {
                 // VALID + SMTP_DIRECT + a year-long expiry on 935 rows without ever
                 // running a check, forging every other field this gate reads; only a
                 // real verification run produces a score.
-                return hasFreshSmtpProof(l);
+                return hasFreshEmailVerification(l);
             }
             // RISKY means the recipient server accepted mail but the address could
             // not be shown to be unique — it will deliver, it may not be a person.

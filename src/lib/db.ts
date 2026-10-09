@@ -213,8 +213,8 @@ export async function revokeUnprovenEmailLabels(client: Pick<import('pg').PoolCl
             AND COALESCE(outcome,'')<>'BOUNCED' AND do_not_contact IS NOT TRUE RETURNING id`);
     const result = await client.query(`UPDATE leads SET email_status='UNVERIFIED',
         email_verification_expires_at=NULL, email_verification_score=NULL,
-        email_verification_reason=CONCAT_WS(' · ',NULLIF(email_verification_reason,''),'Label reset: no stored direct SMTP proof')
-        WHERE email_status='VALID' AND (email_verification_method IS DISTINCT FROM 'SMTP_DIRECT'
+        email_verification_reason=CONCAT_WS(' · ',NULLIF(email_verification_reason,''),'Label reset: no stored verification proof')
+        WHERE email_status='VALID' AND (COALESCE(email_verification_method,'') NOT IN ('SMTP_DIRECT','QUICKEMAILVERIFICATION')
             OR email_verified_at IS NULL OR email_verification_expires_at IS NULL)
         RETURNING id`);
     return (result.rowCount || 0) + (legacy.rowCount || 0);

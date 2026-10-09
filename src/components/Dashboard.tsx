@@ -55,7 +55,8 @@ import {
     type SavedRun,
 } from "@/app/actions/scraper-actions";
 import { scrapeWebsiteEmails, type WebsiteScrapeResult } from "@/app/actions/scraper-actions";
-import { getVerificationReadiness, verifyEmail, verifyEmailBatchFast, type VerificationResult } from "@/app/actions/email-verifier-actions";
+import { getVerificationReadiness, verifyEmailBatchFast, type VerificationResult } from "@/app/actions/email-verifier-actions";
+import VerificationProviderStatus from '@/components/VerificationProviderStatus';
 
 // ── Worker API helper: submit job & poll until done ──
 async function processLeadViaWorker(linkedinUrl: string): Promise<Lead> {
@@ -179,7 +180,8 @@ function LeadStatusMark({ status }: { status: string }) {
  * says so plainly and never takes the failure colour.
  */
 function VerifyMark({ result }: { result: VerificationResult }) {
-    if (result.status === 'VALID') return <span className="mark mark-ok">Proven</span>;
+    if (result.error) return <span className="mark mark-warn">Check failed</span>;
+    if (result.status === 'VALID') return <span className="mark mark-ok">Safe to send</span>;
     if (result.status === 'INVALID') return <span className="mark mark-bad">No mailbox</span>;
     if (result.status === 'RISKY') {
         return (
@@ -916,7 +918,7 @@ export default function Dashboard() {
             .map(e => e.trim().toLowerCase())
             .filter(e => e.length > 3 && e.includes('@'));
 
-        // Deduplicate emails to avoid wasting SMTP connections
+        // Deduplicate emails to avoid spending credits on repeated addresses.
         const emails = [...new Set(rawEmails)];
         const dupeCount = rawEmails.length - emails.length;
 
@@ -925,9 +927,14 @@ export default function Dashboard() {
             return;
         }
 
-        const readiness = await getVerificationReadiness();
-        if (!readiness.selfHostedReady) {
-            addToast(readiness.message, 'error');
+        try {
+            const readiness = await getVerificationReadiness();
+            if (!readiness.ready) {
+                addToast(readiness.message, 'error');
+                return;
+            }
+        } catch {
+            addToast('Could not connect to the verifier. Reload and try again.', 'error');
             return;
         }
 
@@ -942,7 +949,8 @@ export default function Dashboard() {
         setUnbouncerTotal(emails.length);
 
         const allResults: VerificationResult[] = [];
-        const BATCH_SIZE = 100; // Process 100 emails per server call
+        const BATCH_SIZE = 5; // Small batches keep progress and credit balances current.
+        let requestFailed = false;
 
         for (let i = 0; i < emails.length; i += BATCH_SIZE) {
             if (unbouncerCancelledRef.current) {
@@ -961,38 +969,29 @@ export default function Dashboard() {
             try {
                 addToast(`Processing batch ${batchNum}/${totalBatches} (${batch.length} emails)...`, 'info');
                 
-                // Server Actions cannot cancel a running direct SMTP call. Finish
+                // Server Actions cannot cancel a running provider call. Finish
                 // the current bounded batch, then honour cancellation before the next.
                 const batchResults = await verifyEmailBatchFast(batchPayload);
                 allResults.push(...batchResults);
-            } catch (err: any) {
-                // Recover with the same self-hosted direct SMTP verifier.
-                console.error(`Batch ${batchNum} failed; retrying direct checks individually:`, err);
-                for (const email of batch) {
-                    if (unbouncerCancelledRef.current) break;
-                    try {
-                        const result = await verifyEmail(email, unbouncerSourceMap[email]);
-                        allResults.push(result);
-                    } catch {
-                        allResults.push({
-                            email,
-                            status: 'UNKNOWN',
-                            score: 0,
-                            checks: { syntax: false, mxRecord: false, disposable: false, roleAccount: false, freeProvider: false, smtpValid: null, catchAll: null },
-                            reason: 'Verification failed',
-                        });
-                    }
+                if (batchResults.some(result => result.stopRun)) {
+                    requestFailed = true;
+                    addToast(batchResults.find(result => result.error)?.reason || 'Verification stopped. Retry later.', 'error');
                 }
+            } catch {
+                // An automatic retry could charge twice for a partially completed request.
+                requestFailed = true;
+                addToast('Verification request failed. Completed results are preserved; retry the remaining addresses.', 'error');
             }
 
             // Update UI once per batch (not per email)
             setUnbouncerResults([...allResults]);
             setUnbouncerProgress(Math.min(allResults.length, emails.length));
+            if (requestFailed) break;
         }
 
         setUnbouncerProcessing(false);
         const validCount = allResults.filter(r => r.status === 'VALID').length;
-        addToast(`Done! ${validCount} valid out of ${allResults.length} emails verified.`, 'success');
+        if (!requestFailed && !unbouncerCancelledRef.current) addToast(`Done! ${validCount} safe to send out of ${allResults.length} emails checked.`, 'success');
     };
 
     const handleUnbouncerCancel = () => {
@@ -1774,12 +1773,16 @@ export default function Dashboard() {
                                             </button>
                                             <button onClick={handleUnbouncerExportValid} className="btn btn-outline">
                                                 <ShieldCheck className="w-3.5 h-3.5" />
-                                                Export proven only
+                                                Export safe to send
                                             </button>
                                         </>
                                     )}
                                 </div>
 
+                                <VerificationProviderStatus
+                                    provider={unbouncerResults.find(result => result.verificationProvider)?.verificationProvider}
+                                    remainingCredits={unbouncerResults.length ? unbouncerResults[unbouncerResults.length - 1].remainingCredits : undefined}
+                                />
                                 {unbouncerProcessing && (
                                     <div>
                                         <div className="bar-track">
@@ -1809,13 +1812,13 @@ export default function Dashboard() {
                                 <div className="figures">
                                     <div className="fig">
                                         <div className="fig-value fig-value-signal">{verifyCounts.VALID.toLocaleString()}</div>
-                                        <p className="label-micro mt-2">Proven</p>
-                                        <p className="fig-sub">The server confirmed this exact mailbox</p>
+                                        <p className="label-micro mt-2">Safe to send</p>
+                                        <p className="fig-sub">Verified mailbox, with safety checks passed</p>
                                     </div>
                                     <div className="fig">
                                         <div className="fig-value fig-value-warn">{verifyCounts.RISKY.toLocaleString()}</div>
-                                        <p className="label-micro mt-2">Unproven</p>
-                                        <p className="fig-sub">Mail is accepted, but every address would be</p>
+                                        <p className="label-micro mt-2">Risky</p>
+                                        <p className="fig-sub">Catch-all, disposable, role or other unsafe address</p>
                                     </div>
                                     <div className="fig">
                                         <div className="fig-value">{verifyCounts.UNKNOWN.toLocaleString()}</div>
@@ -1828,8 +1831,8 @@ export default function Dashboard() {
                                     </div>
                                     <div className="fig">
                                         <div className="fig-value" style={{ color: 'var(--bad)' }}>{verifyCounts.INVALID.toLocaleString()}</div>
-                                        <p className="label-micro mt-2">No mailbox</p>
-                                        <p className="fig-sub">The server said this address does not exist</p>
+                                        <p className="label-micro mt-2">Invalid</p>
+                                        <p className="fig-sub">Invalid address, domain or rejected mailbox</p>
                                     </div>
                                 </div>
 
@@ -1893,8 +1896,8 @@ export default function Dashboard() {
                                         </table>
                                     </div>
                                     <div className="panel-note">
-                                        <span>Only <strong className="text-[var(--signal)]">Proven</strong> is safe to send to.</span>
-                                        <span>&ldquo;No answer&rdquo; usually means the recipient&rsquo;s server refused this computer &mdash; it says nothing about the address.</span>
+                                        <span>Only <strong className="text-[var(--signal)]">Safe to send</strong> results are included in the safe export.</span>
+                                        <span>&ldquo;No answer&rdquo; means verification was inconclusive. Check failed results can be retried.</span>
                                     </div>
                                 </section>
                             </>
