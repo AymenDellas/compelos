@@ -9,10 +9,13 @@ async function readSettings(): Promise<WorkerSettings> {
  return response.json();
 }
 function statusLabel(a:WorkerAccount) {
+ if(a.logoutPending)return a.status==='paused'?'Sign-out needs attention':'Signing out';
+ if(a.signedOut)return 'Signed out';
  if (a.online) return a.status==='processing'?'Processing':a.status==='paused'?'Daily limit reached':a.status==='starting'?'Starting':'Ready';
  return a.status==='paused'?'Needs attention':'Offline';
 }
 function SessionIdentity({account,accounts}:{account:WorkerAccount;accounts:WorkerAccount[]}) {
+ if(account.signedOut)return <p className="field-hint">LinkedIn signed out. Sign in on the worker computer to reconnect.</p>;
  const identity=account.signedIn;
  if(!identity)return <p className="field-hint">Signed-in LinkedIn profile not confirmed yet.</p>;
  const duplicates=accounts.filter(other=>other.id!==account.id&&other.signedIn&&(
@@ -40,7 +43,7 @@ export default function LinkedInAccounts() {
     {error?<p role="alert" className="text-sm text-[var(--bad)]">{error}</p>:!config?<p className="text-sm text-[var(--text-dim)]">Loading accounts…</p>:<>
      <p className="text-sm text-[var(--text-dim)]"><span className="num text-[var(--text)]">{config.activeCount}</span> selected to run · <span className="num">{config.accounts.length}</span> saved</p>
      {config.accounts.length===0?<p className="field-hint">Add your LinkedIn accounts to start qualification.</p>:config.accounts.map(a=><div key={a.id} className="space-y-1"><div className="flex justify-between gap-3 text-xs">
-      <span className="truncate" title={a.email}>{a.label}</span><span className="text-[var(--text-dim)] shrink-0">{a.enabled?statusLabel(a):'Disabled'} · <span className="num">{a.dailyCount}/{a.dailyLimit}</span></span>
+      <span className="truncate" title={a.email}>{a.label}</span><span className="text-[var(--text-dim)] shrink-0">{a.enabled||a.signedOut||a.logoutPending?statusLabel(a):'Disabled'} · <span className="num">{a.dailyCount}/{a.dailyLimit}</span></span>
      </div><SessionIdentity account={a} accounts={config.accounts}/></div>)}
      <button className="btn btn-outline w-full justify-center" onClick={()=>setEditing(true)}>Manage accounts</button>
     </>}
@@ -73,6 +76,14 @@ function AccountEditor({initial,liveAccounts,onClose,onSaved}:{initial:WorkerSet
    setNotice('Sign-in requested. A browser will open on the computer running the worker. Complete any LinkedIn security check there.');
   }catch(e){setError(e instanceof Error?e.message:'Could not request sign-in.');}
  }
+ async function signOut(id:string) {
+  setSaving(true);setError('');setNotice('');
+  try {
+   const response=await fetch('/api/linkedin-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,action:'logout'})});
+   const value=await response.json();if(!response.ok)throw new Error(value.error||'Could not request sign-out.');
+   onSaved(value);
+  }catch(e){setError(e instanceof Error?e.message:'Could not request sign-out.');}finally{setSaving(false);}
+ }
  return <dialog ref={dialog} onCancel={onClose} onClose={onClose} className="m-auto p-0 overflow-hidden w-[min(720px,calc(100vw-24px))] max-h-[90dvh] rounded-lg border border-[var(--line)] bg-[var(--surface-1)] text-[var(--text)] backdrop:bg-black/70">
   <form onSubmit={save} className="flex flex-col max-h-[90dvh]">
    <div className="panel-head shrink-0 !px-5 !py-4"><Users className="w-4 h-4"/> LinkedIn accounts<button type="button" className="btn btn-ghost ml-auto !p-1.5" aria-label="Close account settings" onClick={onClose} disabled={saving}><X className="w-4 h-4"/></button></div>
@@ -99,11 +110,14 @@ function AccountEditor({initial,liveAccounts,onClose,onSaved}:{initial:WorkerSet
        <label className="space-y-1"><span className="field-label">Profiles per day</span><input className="field w-full" type="number" required min={1} max={400} value={a.dailyLimit} onChange={e=>update(index,{dailyLimit:Number(e.target.value)})}/></label>
       </div>
       {a.reason&&<p className="field-hint break-words">{a.reason}</p>}
-      {a.id&&<button type="button" className="btn btn-outline !text-xs" onClick={()=>signIn(a.id!)}>Sign in on worker computer</button>}
+      {a.id&&<div className="flex flex-wrap gap-2">
+       <button type="button" className="btn btn-outline !text-xs" disabled={liveAccounts.find(other=>other.id===a.id)?.logoutPending} onClick={()=>signIn(a.id!)}>Sign in on worker computer</button>
+       <button type="button" className="btn btn-outline !text-xs" aria-label={`Sign out LinkedIn account ${a.email}`} disabled={liveAccounts.find(other=>other.id===a.id)?.signedOut||liveAccounts.find(other=>other.id===a.id)?.logoutPending&&liveAccounts.find(other=>other.id===a.id)?.status!=='paused'} onClick={()=>signOut(a.id!)}>Sign out LinkedIn</button>
+      </div>}
      </fieldset>)}
     </div>
     <button type="button" className="btn btn-outline" disabled={saving||accounts.length>=10} onClick={()=>{setAccounts(current=>[...current,{label:`Account ${current.length+1}`,email:'',password:'',enabled:true,dailyLimit:400,hasPassword:false,dailyCount:0,status:'offline',reason:'',online:false,loginPending:false,updatedAt:null}]);if(!accounts.length)setActiveCount(1);}}><Plus className="w-3.5 h-3.5"/> Add account</button>
-    <p className="field-hint">Passwords are encrypted and never shown again. Security checks open on the worker computer. Daily counters reset at midnight UTC. The worker computer or server must stay running.</p>
+    <p className="field-hint">Passwords are encrypted and never shown again. Sign out clears that worker's LinkedIn session and disables it until you reconnect. Security checks open on the worker computer. Daily counters reset at midnight UTC. The worker computer or server must stay running.</p>
     {notice&&<p role="status" className="text-sm text-[var(--signal)]">{notice}</p>}
     {error&&<p role="alert" className="text-sm text-[var(--bad)]">{error}</p>}
    </div>

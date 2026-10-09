@@ -72,23 +72,23 @@ async function tick(){
   // Once consumed, a sign-in request is no longer in the database. Let an
   // already running manual browser finish even when its account isn't selected.
   const manualIds=[...children].filter(([,entry])=>entry.child&&entry.manual).map(([id])=>id);
-  const requested=(await pool.query('SELECT * FROM compel_linkedin_accounts WHERE (login_requested_at IS NOT NULL OR id=ANY($1::text[])) AND archived IS FALSE ORDER BY position',[manualIds])).rows;
+  const requested=(await pool.query('SELECT * FROM compel_linkedin_accounts WHERE (login_requested_at IS NOT NULL OR logout_requested_at IS NOT NULL OR id=ANY($1::text[])) AND archived IS FALSE ORDER BY position',[manualIds])).rows;
   const desired=new Map(selected.map(a=>[a.id,a]));
   for(const a of requested)desired.set(a.id,a);
   for(const [id,entry]of children){
    const account=desired.get(id);
-   if(entry.child&&(!account||entry.version!==String(account.changed_at)||account.login_requested_at&&!entry.manual))await stop(entry);
+   if(entry.child&&(!account||entry.version!==String(account.changed_at)||account.logout_requested_at&&!entry.logout||account.login_requested_at&&!entry.manual))await stop(entry);
   }
   for(const account of desired.values()){
    if(stopping)return;
-   const version=String(account.changed_at),manual=!!account.login_requested_at;
+   const version=String(account.changed_at),logout=!!account.logout_requested_at,manual=!logout&&!!account.login_requested_at;
    const entry=children.get(account.id)||{child:null,blocked:false,lastStart:0,version};
    if(entry.child)continue;
    if(!manual&&entry.blocked&&entry.version===version)continue;
-   if(!manual&&Date.now()-entry.lastStart<60000)continue;
-   const child=fork(path.join(root,'worker.cjs'),['--account',account.id,...(manual?['--login','--check-login']:[])],{cwd:root,windowsHide:true,stdio:['ignore','inherit','inherit','ipc']});
-   Object.assign(entry,{child,version,manual,lastStart:Date.now(),blocked:false});children.set(account.id,entry);
-   console.log(`[Accounts] Started ${account.label}${manual?' for sign-in':''}.`);
+   if(!manual&&Date.now()-entry.lastStart<60000&&(!logout||entry.logout&&entry.version===version))continue;
+   const child=fork(path.join(root,'worker.cjs'),['--account',account.id,...(logout?['--logout']:manual?['--login','--check-login']:[])],{cwd:root,windowsHide:true,stdio:['ignore','inherit','inherit','ipc']});
+   Object.assign(entry,{child,version,manual,logout,lastStart:Date.now(),blocked:false});children.set(account.id,entry);
+   console.log(`[Accounts] Started ${account.label}${logout?' for sign-out':manual?' for sign-in':''}.`);
    child.once('exit',async code=>{
     entry.child=null;
     // Successful sign-in should proceed to normal work on the next settings

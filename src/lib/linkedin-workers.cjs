@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS compel_linkedin_accounts (
  daily_limit INTEGER NOT NULL DEFAULT 400 CHECK(daily_limit BETWEEN 1 AND 400), position INTEGER NOT NULL,
  login_requested_at TIMESTAMPTZ, changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE UNIQUE INDEX IF NOT EXISTS compel_linkedin_active_email ON compel_linkedin_accounts(lower(email)) WHERE archived IS FALSE;
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS logout_requested_at TIMESTAMPTZ;
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS signed_out_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS compel_worker_usage (account_id TEXT NOT NULL, day DATE NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(account_id,day));
 CREATE TABLE IF NOT EXISTS compel_worker_sessions (account_id TEXT PRIMARY KEY, owner TEXT NOT NULL, lease_until TIMESTAMPTZ NOT NULL, status JSONB NOT NULL DEFAULT '{}', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS compel_worker_jobs (
@@ -84,7 +86,7 @@ async function settings(pool) {
  await ensure(pool);
  const config = (await pool.query('SELECT * FROM compel_worker_config WHERE id=1')).rows[0];
  const rows = (await pool.query(`SELECT a.id,a.label,a.email,a.enabled,a.daily_limit,a.position,(a.secret<>'') AS has_password,
-  a.login_requested_at,s.status,s.updated_at,s.lease_until,COALESCE(u.count,0) AS daily_count
+  a.login_requested_at,a.logout_requested_at,a.signed_out_at,s.status,s.updated_at,s.lease_until,COALESCE(u.count,0) AS daily_count
   FROM compel_linkedin_accounts a LEFT JOIN compel_worker_sessions s ON s.account_id=a.id
   LEFT JOIN compel_worker_usage u ON u.account_id=a.id AND u.day=(NOW() AT TIME ZONE 'UTC')::date
   WHERE a.archived IS FALSE ORDER BY a.position,a.id`)).rows;
@@ -92,9 +94,9 @@ async function settings(pool) {
   id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,
   dailyCount:a.daily_count,status:a.status?.status || 'offline',reason:a.status?.reason || '',
   online:!!a.lease_until && new Date(a.lease_until).getTime() > Date.now(),
-  loginPending:!!a.login_requested_at, updatedAt:a.updated_at || null,
+  loginPending:!!a.login_requested_at, logoutPending:!!a.logout_requested_at, signedOut:!!a.signed_out_at, updatedAt:a.updated_at || null,
   memoryMB:a.status?.memoryMB || 0,avgJobDurationMs:a.status?.avgJobDurationMs || 0,url:a.status?.url || '',
-  signedIn:cleanIdentity(a.status?.signedIn),
+  signedIn:a.signed_out_at?null:cleanIdentity(a.status?.signedIn),
  })) };
 }
 async function saveSettings(pool, body) {
@@ -148,7 +150,7 @@ async function importAccounts(pool, accounts, legacyUsage) {
 }
 async function selectedAccounts(pool) {
  await ensure(pool);
- return (await pool.query(`SELECT a.* FROM compel_linkedin_accounts a WHERE a.enabled IS TRUE AND a.archived IS FALSE
+ return (await pool.query(`SELECT a.* FROM compel_linkedin_accounts a WHERE a.enabled IS TRUE AND a.archived IS FALSE AND a.logout_requested_at IS NULL AND a.signed_out_at IS NULL
   ORDER BY a.position,a.id LIMIT (SELECT active_count FROM compel_worker_config WHERE id=1)`)).rows;
 }
 async function acquireSession(pool, id, owner) {
@@ -168,8 +170,25 @@ async function releaseSession(pool,id,owner,status) {
 }
 async function requestLogin(pool,id) {
  await ensure(pool);
- const result = await pool.query('UPDATE compel_linkedin_accounts SET login_requested_at=NOW() WHERE id=$1 AND archived IS FALSE RETURNING id',[id]);
- if (!result.rowCount) throw new Error('Account not found.');
+ const result = await pool.query('UPDATE compel_linkedin_accounts SET login_requested_at=NOW(),signed_out_at=NULL WHERE id=$1 AND archived IS FALSE AND logout_requested_at IS NULL RETURNING id',[id]);
+ if (!result.rowCount) throw new Error('Account not found or sign-out is still pending.');
+}
+async function requestLogout(pool,id) {
+ await ensure(pool);
+ const client=await pool.connect();
+ try {
+  await client.query('BEGIN');
+  await client.query('SELECT id FROM compel_worker_config WHERE id=1 FOR UPDATE');
+  const result=await client.query('UPDATE compel_linkedin_accounts SET enabled=FALSE,login_requested_at=NULL,logout_requested_at=NOW(),changed_at=NOW() WHERE id=$1 AND archived IS FALSE RETURNING id',[id]);
+  if(!result.rowCount)throw new Error('Account not found.');
+  await client.query('UPDATE compel_worker_config SET active_count=LEAST(active_count,(SELECT count(*) FROM compel_linkedin_accounts WHERE enabled IS TRUE AND archived IS FALSE)),revision=revision+1 WHERE id=1');
+  await client.query('COMMIT');
+ }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+}
+async function finishLogout(pool,id,token) {
+ if(!token)return false;
+ const result=await pool.query('UPDATE compel_linkedin_accounts SET logout_requested_at=NULL,signed_out_at=NOW() WHERE id=$1 AND logout_requested_at=$2::timestamptz',[id,token]);
+ return result.rowCount===1;
 }
 async function consumeLoginRequest(pool,id,token) {
  // Use PostgreSQL's exact text timestamp. A JavaScript Date discards the
@@ -203,8 +222,8 @@ async function claim(pool,id,owner) {
  const client=await pool.connect();
  try {
   await client.query('BEGIN');
-  const account=(await client.query(`SELECT a.* FROM compel_linkedin_accounts a WHERE a.id=$1 AND a.enabled IS TRUE AND a.archived IS FALSE
-   AND a.id IN (SELECT id FROM compel_linkedin_accounts WHERE enabled IS TRUE AND archived IS FALSE ORDER BY position,id LIMIT(SELECT active_count FROM compel_worker_config WHERE id=1)) FOR SHARE`,[id])).rows[0];
+  const account=(await client.query(`SELECT a.* FROM compel_linkedin_accounts a WHERE a.id=$1 AND a.enabled IS TRUE AND a.archived IS FALSE AND a.logout_requested_at IS NULL AND a.signed_out_at IS NULL
+   AND a.id IN (SELECT id FROM compel_linkedin_accounts WHERE enabled IS TRUE AND archived IS FALSE AND logout_requested_at IS NULL AND signed_out_at IS NULL ORDER BY position,id LIMIT(SELECT active_count FROM compel_worker_config WHERE id=1)) FOR SHARE`,[id])).rows[0];
   if (!account) { await client.query('COMMIT'); return {disabled:true}; }
   const session=(await client.query('SELECT account_id FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW() FOR UPDATE',[id,owner])).rows[0];
   if (!session) throw new Error('Account session lease lost.');
@@ -252,7 +271,7 @@ async function queueStatus(pool) {
  const config=await settings(pool);
  const rows=(await pool.query(`SELECT count(*) FILTER(WHERE status IN ('pending','processing'))::integer AS pending FROM compel_worker_jobs`)).rows[0];
  const recent=(await pool.query(`SELECT id,result,completed_at FROM compel_worker_jobs WHERE status='done' ORDER BY completed_at DESC LIMIT 100`)).rows;
- const selected=config.accounts.filter(a=>a.enabled).slice(0,config.activeCount);
+ const selected=config.accounts.filter(a=>a.enabled&&!a.signedOut&&!a.logoutPending).slice(0,config.activeCount);
  const live=selected.filter(a=>a.online), busy=live.find(a=>a.status==='processing');
  const dailyCount=Number((await pool.query("SELECT COALESCE(sum(count),0)::integer AS total FROM compel_worker_usage WHERE day=(NOW() AT TIME ZONE 'UTC')::date")).rows[0].total);
  const dailyLimit=selected.reduce((sum,a)=>sum+a.dailyLimit,0);
@@ -270,4 +289,4 @@ async function queueStatus(pool) {
   dailyStats:{date:new Date().toISOString().slice(0,10),count:dailyCount,limit:dailyLimit},
   recentResults:recent.map(row=>({jobId:row.id,result:normalizeResult(row.result),completedAt:row.completed_at}))};
 }
-module.exports={SCHEMA,ensure,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,enqueue,claim,complete,jobStatus,clearQueue,queueStatus,importResult,json};
+module.exports={SCHEMA,ensure,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,claim,complete,jobStatus,clearQueue,queueStatus,importResult,json};

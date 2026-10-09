@@ -38,6 +38,7 @@ const DEFAULT_DAILY_SCRAPE_LIMIT = '400';
 const RESUME_MODE = process.argv.includes('--resume');
 const MANUAL_LOGIN_MODE = process.argv.includes('--login');
 const CHECK_LOGIN_MODE = process.argv.includes('--check-login');
+const SIGN_OUT_MODE = process.argv.includes('--logout');
 const accountArg = process.argv.indexOf('--account');
 const ACCOUNT_ID = accountArg >= 0 ? process.argv[accountArg + 1] : null;
 if (accountArg >= 0 && !/^(?:legacy-\d+|[a-f0-9-]{36})$/.test(ACCOUNT_ID || '')) throw new Error('Invalid worker account ID.');
@@ -126,10 +127,10 @@ async function startDatabaseAccount() {
         ssl: process.env.DATABASE_CA_CERT ? { ca: process.env.DATABASE_CA_CERT.replace(/\\n/g, '\n'), rejectUnauthorized: true } : { rejectUnauthorized: false } });
     const owner = require('node:crypto').randomUUID();
     await core.ensure(pool);
-    const account = (await pool.query('SELECT *,login_requested_at::text AS login_request_token FROM compel_linkedin_accounts WHERE id=$1 AND archived IS FALSE', [ACCOUNT_ID])).rows[0];
+    const account = (await pool.query('SELECT *,login_requested_at::text AS login_request_token,logout_requested_at::text AS logout_request_token FROM compel_linkedin_accounts WHERE id=$1 AND archived IS FALSE', [ACCOUNT_ID])).rows[0];
     if (!account || !await core.acquireSession(pool, ACCOUNT_ID, owner)) { await pool.end(); return false; }
     dbWorker = { core, pool, owner, account, timer: null };
-    process.env.LINKEDIN_ACCOUNTS = JSON.stringify([{ email: account.email, password: core.decrypt(account.secret) }]);
+    if (!SIGN_OUT_MODE) process.env.LINKEDIN_ACCOUNTS = JSON.stringify([{ email: account.email, password: core.decrypt(account.secret) }]);
     if (MANUAL_LOGIN_MODE) await core.consumeLoginRequest(pool, ACCOUNT_ID, account.login_request_token);
     let updating = false;
     dbWorker.timer = setInterval(async () => {
@@ -1286,7 +1287,7 @@ async function shutdown(signal, exitCode = 0) {
     isShuttingDown = true;
     if (dbWorker) await settleJobs();
     log(`${signal} received — shutting down gracefully...`);
-    writeStatus('offline', { reason: signal });
+    if (!SIGN_OUT_MODE || !['signed_out','paused'].includes(latestStatus.status)) writeStatus('offline', { reason: signal });
 
     let launchingBrowser = null;
     if (browserLaunchTask) {
@@ -1483,6 +1484,24 @@ async function main() {
     loadEnv();
     if (!acquireWorkerLock()) return;
     if (await startDatabaseAccount() === false) { releaseWorkerLock(); return; }
+    if (SIGN_OUT_MODE) {
+        if (!dbWorker?.account.logout_request_token) { await shutdown('No sign-out request.'); return; }
+        const profileDir = path.join(BROWSER_PROFILES_DIR, dbWorker.account.profile_key);
+        try {
+            browser = await launchBrowser(profileDir, true);
+            if (isShuttingDown) return;
+            await require('./src/lib/linkedin-signout.cjs').signOut(browser,log);
+            await killBrowserProcess(browser,browserPid); browser=null; browserPid=null;
+            if (!await dbWorker.core.finishLogout(dbWorker.pool,ACCOUNT_ID,dbWorker.account.logout_request_token)) throw new Error('Account request changed before sign-out was saved.');
+            signedInIdentity=null;
+            writeStatus('signed_out',{reason:'LinkedIn signed out. Use Sign in on worker computer to reconnect.'});
+            await shutdown('LinkedIn signed out');
+        } catch(error) {
+            writeStatus('paused',{reason:`Sign-out failed: ${error.message}`});
+            await shutdown('Sign-out failed',1);
+        }
+        return;
+    }
     const accounts = getAccounts();
     const profileDir = path.join(BROWSER_PROFILES_DIR, dbWorker ? dbWorker.account.profile_key : 'account-0');
     if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });

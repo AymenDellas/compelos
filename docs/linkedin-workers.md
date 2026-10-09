@@ -55,3 +55,7 @@ the existing verifier and send-proof requirements remain separate.
 Validation: `npm run test:workers` uses an isolated PostgreSQL schema and covers
 concurrent claims, lease recovery, per-account limits, password encryption and
 CRM persistence. It never scrapes LinkedIn or submits real test leads.
+
+## Signing out an account
+
+**Sign out LinkedIn** in Manage accounts disables that account, stops its browser after in-flight results save, and clears only its worker profile's LinkedIn session. The worker confirms that opening the feed redirects to login before reporting **Signed out**. Saved credentials and daily usage remain; the account cannot automatically sign back in until **Sign in on worker computer** is requested. Enable it and select the desired running account count to resume qualification.

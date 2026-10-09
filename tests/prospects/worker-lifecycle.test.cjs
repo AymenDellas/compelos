@@ -11,7 +11,7 @@ const source = fs.readFileSync(workerPath, 'utf8');
 
 // Execute the complete worker entry point with an in-memory queue and browser.
 // No real environment files, jobs, LinkedIn sessions or CRM requests are used.
-async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicate = false, closeHangs = false, extraTabs = 0, loginFails = false, navigationFailures = 0, manualLogin = false, checkLogin = false, accountId = null }) {
+async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicate = false, closeHangs = false, extraTabs = 0, loginFails = false, navigationFailures = 0, manualLogin = false, checkLogin = false, accountId = null, signOut = false }) {
     const root = path.dirname(workerPath);
     const queueDir = path.join(root, 'queue');
     const files = new Map();
@@ -25,6 +25,7 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
     }
     const logs = [], errors = [], exits = [], launches = [], signals = new Map(), signalTasks = [], killed = [], closedTabs = [], browserEvents = [];
     let newPages = 0;
+    let cookies=[{name:'li_at',domain:'.linkedin.com'}],logoutSaved=false;
     let alive = false, stopRequested = false;
     const requestStop = () => {
         if (stopRequested) return;
@@ -58,7 +59,7 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
             browserEvents.push('navigate');
             if (navigationFailures > 0) { navigationFailures--; throw Object.assign(new Error('Navigation timeout of 45000 ms exceeded'), { name: 'TimeoutError' }); }
         },
-        url: () => loginFails ? 'https://www.linkedin.com/login' : 'https://www.linkedin.com/feed/', evaluate: async () => true,
+        url: () => loginFails || signOut ? 'https://www.linkedin.com/login' : 'https://www.linkedin.com/feed/', evaluate: async () => true,
     };
     const makeBrowser = options => ({
         process: () => ({ pid: 1234 }),
@@ -81,6 +82,7 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
             newPages++; browserEvents.push('new-page'); return page;
         },
         close: async () => { if (closeHangs) await new Promise(() => {}); alive = false; },
+        cookies:async()=>cookies,deleteCookie:async(...values)=>{cookies=cookies.filter(cookie=>!values.includes(cookie));},
     });
     const modules = {
         fs: fakeFs, path,
@@ -95,10 +97,12 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
         './src/lib/prospect-qualification.cjs': qualification,
         './src/lib/prospect-research.cjs': { researchProspect: () => assert.fail('No live research') },
         './src/lib/linkedin-session-identity.cjs': require('../../src/lib/linkedin-session-identity.cjs'),
+        './src/lib/linkedin-signout.cjs': require('../../src/lib/linkedin-signout.cjs'),
         http: {}, https: {},
-        pg: { Pool: class { async query() { return {rows:[{id:accountId,email:`${accountId}@example.invalid`,secret:'encrypted',profile_key:`profile-${accountId}`} ]}; } async end() {} } },
+        pg: { Pool: class { async query() { return {rows:[{id:accountId,email:`${accountId}@example.invalid`,secret:'encrypted',profile_key:`profile-${accountId}`,logout_request_token:signOut?'logout-token':null} ]}; } async end() {} } },
         'node:crypto': require('node:crypto'),
-        './src/lib/linkedin-workers.cjs': { ensure:async()=>{},acquireSession:async()=>true,decrypt:()=> 'fixture',releaseSession:async()=>{},consumeLoginRequest:async()=>true,
+        './src/lib/linkedin-workers.cjs': { ensure:async()=>{},acquireSession:async()=>true,decrypt:()=>{assert.equal(signOut,false,'sign-out must not read or use saved passwords');return 'fixture';},releaseSession:async()=>{},consumeLoginRequest:async()=>true,
+            finishLogout:async()=>{logoutSaved=true;return true;},
             claim:async()=>({job:JSON.parse(files.get(path.join(queueDir,'fixture-000.json'))),dailyCount:1,dailyLimit:400}),
             complete:async()=>{},heartbeat:async()=>{} },
     };
@@ -106,7 +110,7 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
         __dirname: root, global: {},
         require: name => { assert.ok(Object.hasOwn(modules, name), `Unexpected module: ${name}`); return modules[name]; },
         process: {
-            pid: 4444, argv: ['node', workerPath, ...(accountId ? ['--account',accountId] : []), ...(manualLogin ? ['--login'] : []), ...(checkLogin ? ['--check-login'] : [])], env: { DAILY_SCRAPE_LIMIT: '0' }, platform: 'win32',
+            pid: 4444, argv: ['node', workerPath, ...(accountId ? ['--account',accountId] : []), ...(manualLogin ? ['--login'] : []), ...(checkLogin ? ['--check-login'] : []), ...(signOut ? ['--logout'] : [])], env: { DAILY_SCRAPE_LIMIT: '0' }, platform: 'win32',
             on: (name, handler) => signals.set(name, handler), exit: code => { exits.push(code); signals.get('exit')?.(); },
             memoryUsage: () => ({ rss: 64 * 1024 * 1024 }),
             kill: pid => { if (duplicate && pid === 7777) return; if (pid !== 1234 || !alive) throw new Error('fixture process exited'); },
@@ -129,6 +133,12 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
     assert.deepEqual(errors, []);
     const statusPath = path.join(root, 'queue-results', accountId ? `worker-status-${accountId}.json` : 'worker-status.json');
     const status = files.has(statusPath) ? JSON.parse(files.get(statusPath)) : null;
+    if(signOut) {
+        assert.equal(status.status,'signed_out');assert.equal(status.signedIn,null);assert.equal(logoutSaved,true);
+        assert.equal(cookies.length,0);assert.equal(alive,false);assert.equal(files.has(pidFile),false);
+        assert.equal([...files.keys()].filter(file=>path.dirname(file)===queueDir).length,370,'sign-out cannot process or remove queued leads');
+        assert.deepEqual(exits,[0]);return {launches,logs};
+    }
     if (duplicate || loginFails || status?.reason?.includes('Browser could not load')) {
         assert.equal([...files.keys()].filter(file => path.dirname(file) === queueDir).length, 370);
         assert.equal(alive, false);
@@ -154,6 +164,10 @@ test('account workers launch distinct browser profiles and use their own login i
     assert.match(second.launches[0].userDataDir,/profile-legacy-1$/);
     assert.equal(first.configuredAccounts[0].email,'legacy-0@example.invalid');
     assert.equal(second.configuredAccounts[0].email,'legacy-1@example.invalid');
+});
+test('account sign-out clears authentication, preserves every queued lead and never auto-logins',async()=>{
+    const result=await runWorker({accountId:'legacy-0',signOut:true});
+    assert.equal(result.launches.length,1);assert.ok(result.launches[0].headless);
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
