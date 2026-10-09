@@ -52,3 +52,7 @@ test('actual canonical aliases do not expand endlessly duplicated pagination rou
     }});
     assert.equal(calls.length,2);assert.equal(r.crawl.complete,true);assert.equal(r.crawl.inspected,1);
 });
+test('professional credentials and Unicode accents do not conceal an otherwise matching practice identity',async()=>{
+    const r=await researchProspect({...input,firstName:'Dané',lastName:'Johnson (ICF PCC)'},{ai:false,fetchPage:async url=>({url,html:'<title>Dane Johnson Coaching</title><p>Dane Johnson helps leaders through practical leadership coaching and communication workshops.</p><a href="mailto:hello@practice.test">Contact</a>'})});
+    assert.equal(r.websiteStatus,'OWNED');assert.equal(r.contacts[0].address,'hello@practice.test');
+});

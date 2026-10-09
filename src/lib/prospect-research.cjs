@@ -141,7 +141,7 @@ function escape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function nameOnPage(page, input) {
     const normalize = value => normalText(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().toLowerCase();
     const first = normalize(String(input.firstName || '').replace(/^(?:dr\.?|prof\.?)\s+/i, ''));
-    const last = normalize(String(input.lastName || '').split(/[,|]/)[0].replace(/\b(?:pcc|acc|mcc|phd|mba|cpcc|esq|ma|ms|msc)\b/ig, ''));
+    const last = normalize(String(input.lastName || '').split(/[,|]/)[0].replace(/\([^)]*\)/g, '').replace(/\b(?:icf|pcc|acc|mcc|phd|mba|cpcc|esq|ma|ms|msc|cec|sbc)\b/ig, ''));
     if (first.length < 2 || last.length < 2) return false;
     return (` ${normalize(page.text)} `).includes(` ${first} ${last} `);
 }
@@ -373,7 +373,7 @@ async function researchProspect(input, options = {}) {
     research.description = crawled.description;
     const ownedHost = crawled.crawl.matchedHosts[0] || '';
     const linkedWebsite = candidates.find(url => !isPlatformWebsite(url));
-    research.website = ownedHost ? crawled.crawl.roots.find(url => hostOf(url) === ownedHost) || linkedWebsite : linkedWebsite || candidates[0] || '';
+    research.website = ownedHost ? crawled.crawl.roots.find(url => hostOf(url) === ownedHost) || linkedWebsite : crawled.crawl.roots[0] || linkedWebsite || candidates[0] || '';
     research.websiteStatus = ownedHost ? 'OWNED' : linkedWebsite ? 'UNCONFIRMED' : research.website ? 'PROFILE_PLATFORM' : 'NONE';
     if (!crawled.crawl.complete) research.limitations.push('Website crawl incomplete: ' + (crawled.crawl.stoppedReason || crawled.crawl.failed.length + ' routes could not be read.') );
     deriveRules(input, research, sources, pages);
