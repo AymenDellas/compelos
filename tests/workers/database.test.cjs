@@ -59,6 +59,14 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   config=await core.saveSettings(pool,{...config,activeCount:1,accounts:config.accounts.map(a=>({...a,dailyLimit:1}))});
   assert.equal((await core.claim(pool,'legacy-0','one')).limited,true);
   await core.requestLogin(pool,'legacy-1');assert.equal((await core.settings(pool)).accounts[1].loginPending,true);
+  await pool.query("UPDATE compel_linkedin_accounts SET login_requested_at='2026-10-09 00:11:49.280123+00' WHERE id='legacy-1'");
+  const request=(await pool.query("SELECT login_requested_at,login_requested_at::text AS token FROM compel_linkedin_accounts WHERE id='legacy-1'")).rows[0];
+  assert.equal(await core.consumeLoginRequest(pool,'legacy-1',request.login_requested_at),false,'a hydrated Date loses the PostgreSQL microseconds');
+  assert.equal(await core.consumeLoginRequest(pool,'legacy-1',request.token),true);
+  assert.equal((await core.settings(pool)).accounts[1].loginPending,false);
+  await core.requestLogin(pool,'legacy-1');
+  assert.equal(await core.consumeLoginRequest(pool,'legacy-1',request.token),false,'a newer sign-in request must survive an old browser');
+  assert.equal((await core.settings(pool)).accounts[1].loginPending,true);
   const beforeRemove=config.accounts[0].dailyCount;
   config=await core.saveSettings(pool,{...config,activeCount:1,accounts:config.accounts.filter(a=>a.id!=='legacy-0')});
   config=await core.saveSettings(pool,{...config,activeCount:2,accounts:[...config.accounts,{label:'Restored',email:'first@example.test',password:'private',enabled:true,dailyLimit:400}]});

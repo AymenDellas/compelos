@@ -124,11 +124,11 @@ async function startDatabaseAccount() {
         ssl: process.env.DATABASE_CA_CERT ? { ca: process.env.DATABASE_CA_CERT.replace(/\\n/g, '\n'), rejectUnauthorized: true } : { rejectUnauthorized: false } });
     const owner = require('node:crypto').randomUUID();
     await core.ensure(pool);
-    const account = (await pool.query('SELECT * FROM compel_linkedin_accounts WHERE id=$1 AND archived IS FALSE', [ACCOUNT_ID])).rows[0];
+    const account = (await pool.query('SELECT *,login_requested_at::text AS login_request_token FROM compel_linkedin_accounts WHERE id=$1 AND archived IS FALSE', [ACCOUNT_ID])).rows[0];
     if (!account || !await core.acquireSession(pool, ACCOUNT_ID, owner)) { await pool.end(); return false; }
     dbWorker = { core, pool, owner, account, timer: null };
     process.env.LINKEDIN_ACCOUNTS = JSON.stringify([{ email: account.email, password: core.decrypt(account.secret) }]);
-    if (MANUAL_LOGIN_MODE) await pool.query('UPDATE compel_linkedin_accounts SET login_requested_at=NULL WHERE id=$1 AND login_requested_at=$2', [ACCOUNT_ID, account.login_requested_at]);
+    if (MANUAL_LOGIN_MODE) await core.consumeLoginRequest(pool, ACCOUNT_ID, account.login_request_token);
     let updating = false;
     dbWorker.timer = setInterval(async () => {
         if (updating) return;

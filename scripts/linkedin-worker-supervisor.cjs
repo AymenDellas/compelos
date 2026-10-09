@@ -69,7 +69,10 @@ async function tick(){
   if(fs.existsSync(path.join(data,'worker-supervisor.stop'))){fs.unlinkSync(path.join(data,'worker-supervisor.stop'));await shutdown();return;}
   await importLegacyQueue();
   const selected=await core.selectedAccounts(pool);
-  const requested=(await pool.query('SELECT * FROM compel_linkedin_accounts WHERE login_requested_at IS NOT NULL AND archived IS FALSE ORDER BY position')).rows;
+  // Once consumed, a sign-in request is no longer in the database. Let an
+  // already running manual browser finish even when its account isn't selected.
+  const manualIds=[...children].filter(([,entry])=>entry.child&&entry.manual).map(([id])=>id);
+  const requested=(await pool.query('SELECT * FROM compel_linkedin_accounts WHERE (login_requested_at IS NOT NULL OR id=ANY($1::text[])) AND archived IS FALSE ORDER BY position',[manualIds])).rows;
   const desired=new Map(selected.map(a=>[a.id,a]));
   for(const a of requested)desired.set(a.id,a);
   for(const [id,entry]of children){
@@ -86,8 +89,11 @@ async function tick(){
    const child=fork(path.join(root,'worker.cjs'),['--account',account.id,...(manual?['--login','--check-login']:[])],{cwd:root,windowsHide:true,stdio:['ignore','inherit','inherit','ipc']});
    Object.assign(entry,{child,version,manual,lastStart:Date.now(),blocked:false});children.set(account.id,entry);
    console.log(`[Accounts] Started ${account.label}${manual?' for sign-in':''}.`);
-   child.once('exit',async()=>{
+   child.once('exit',async code=>{
     entry.child=null;
+    // Successful sign-in should proceed to normal work on the next settings
+    // check; the crash backoff is for failures, not completed login checks.
+    if(entry.manual&&code===0)entry.lastStart=0;
     if(stopping)return;
     try{
      const row=(await pool.query('SELECT status FROM compel_worker_sessions WHERE account_id=$1',[account.id])).rows[0];

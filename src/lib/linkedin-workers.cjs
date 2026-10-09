@@ -169,6 +169,13 @@ async function requestLogin(pool,id) {
  const result = await pool.query('UPDATE compel_linkedin_accounts SET login_requested_at=NOW() WHERE id=$1 AND archived IS FALSE RETURNING id',[id]);
  if (!result.rowCount) throw new Error('Account not found.');
 }
+async function consumeLoginRequest(pool,id,token) {
+ // Use PostgreSQL's exact text timestamp. A JavaScript Date discards the
+ // microseconds, so comparing it to the original timestamp never clears it.
+ if (!token) return false;
+ const result=await pool.query('UPDATE compel_linkedin_accounts SET login_requested_at=NULL WHERE id=$1 AND login_requested_at=$2::timestamptz',[id,token]);
+ return result.rowCount===1;
+}
 async function enqueue(pool, urls, options = {}) {
  await ensure(pool); const entries=[], skipped=[];
  if (!Array.isArray(urls) || urls.length > 5000) throw new Error('Submit up to 5,000 LinkedIn profiles.');
@@ -261,4 +268,4 @@ async function queueStatus(pool) {
   dailyStats:{date:new Date().toISOString().slice(0,10),count:dailyCount,limit:dailyLimit},
   recentResults:recent.map(row=>({jobId:row.id,result:normalizeResult(row.result),completedAt:row.completed_at}))};
 }
-module.exports={SCHEMA,ensure,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,enqueue,claim,complete,jobStatus,clearQueue,queueStatus,importResult,json};
+module.exports={SCHEMA,ensure,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,enqueue,claim,complete,jobStatus,clearQueue,queueStatus,importResult,json};

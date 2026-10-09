@@ -97,7 +97,7 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
         http: {}, https: {},
         pg: { Pool: class { async query() { return {rows:[{id:accountId,email:`${accountId}@example.invalid`,secret:'encrypted',profile_key:`profile-${accountId}`} ]}; } async end() {} } },
         'node:crypto': require('node:crypto'),
-        './src/lib/linkedin-workers.cjs': { ensure:async()=>{},acquireSession:async()=>true,decrypt:()=> 'fixture',releaseSession:async()=>{},
+        './src/lib/linkedin-workers.cjs': { ensure:async()=>{},acquireSession:async()=>true,decrypt:()=> 'fixture',releaseSession:async()=>{},consumeLoginRequest:async()=>true,
             claim:async()=>({job:JSON.parse(files.get(path.join(queueDir,'fixture-000.json'))),dailyCount:1,dailyLimit:400}),
             complete:async()=>{},heartbeat:async()=>{} },
     };
