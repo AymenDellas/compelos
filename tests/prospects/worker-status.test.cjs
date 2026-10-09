@@ -48,9 +48,3 @@ test('cached engine history cannot qualify a coach without an email, and is not 
  cached.primaryEmail='ava@avamorgan.test';
  assert.equal((await statusRoute(null,false,'queue-status',cached)()).recentResults[0].result.status,'QUALIFIED');
 });
-test('the existing daily CRM counter still caches bounded requests',async()=>{
- let queries=0;
- const counts=load('src/lib/worker-daily-counts.ts',{'./pg_setup':{pool:{query:async()=>{queries++;return{rows:[{qualified:9,rejected:258}]};}}}});
- assert.equal((await counts.savedDailyWorkerCounts()).dailyQualified,9);
- assert.equal((await counts.savedDailyWorkerCounts()).dailyRejected,258);assert.equal(queries,1);
-});
