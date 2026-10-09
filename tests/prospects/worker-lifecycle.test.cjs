@@ -94,6 +94,7 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
         'puppeteer-extra-plugin-stealth': () => ({}),
         './src/lib/prospect-qualification.cjs': qualification,
         './src/lib/prospect-research.cjs': { researchProspect: () => assert.fail('No live research') },
+        './src/lib/linkedin-session-identity.cjs': require('../../src/lib/linkedin-session-identity.cjs'),
         http: {}, https: {},
         pg: { Pool: class { async query() { return {rows:[{id:accountId,email:`${accountId}@example.invalid`,secret:'encrypted',profile_key:`profile-${accountId}`} ]}; } async end() {} } },
         'node:crypto': require('node:crypto'),

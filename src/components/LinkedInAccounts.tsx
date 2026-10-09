@@ -12,6 +12,17 @@ function statusLabel(a:WorkerAccount) {
  if (a.online) return a.status==='processing'?'Processing':a.status==='paused'?'Daily limit reached':a.status==='starting'?'Starting':'Ready';
  return a.status==='paused'?'Needs attention':'Offline';
 }
+function SessionIdentity({account,accounts}:{account:WorkerAccount;accounts:WorkerAccount[]}) {
+ const identity=account.signedIn;
+ if(!identity)return <p className="field-hint">Signed-in LinkedIn profile not confirmed yet.</p>;
+ const duplicates=accounts.filter(other=>other.id!==account.id&&other.signedIn&&(
+  !!identity.profileUrl&&other.signedIn.profileUrl===identity.profileUrl||!!identity.memberUrn&&other.signedIn.memberUrn===identity.memberUrn));
+ return <div className="space-y-1 text-xs">
+  <p className="text-[var(--text-dim)]">{account.online?'Signed in as':'Last signed in as'}: {identity.profileUrl?<a href={identity.profileUrl} target="_blank" rel="noopener noreferrer" className="text-[var(--text)] underline underline-offset-2">{identity.name} ↗</a>:<span className="text-[var(--text)]">{identity.name}</span>}</p>
+  {identity.profileUrl&&<p className="text-[var(--text-dim)] break-all">{new URL(identity.profileUrl).pathname}</p>}
+  {duplicates.length>0&&<p className="text-[var(--bad)]">Same LinkedIn profile as {duplicates.map(other=>other.label).join(', ')}.</p>}
+ </div>;
+}
 export default function LinkedInAccounts() {
  const [config,setConfig]=useState<WorkerSettings|null>(null),[error,setError]=useState(''),[editing,setEditing]=useState(false);
  useEffect(()=>{
@@ -28,18 +39,18 @@ export default function LinkedInAccounts() {
    <div className="panel-body space-y-3">
     {error?<p role="alert" className="text-sm text-[var(--bad)]">{error}</p>:!config?<p className="text-sm text-[var(--text-dim)]">Loading accounts…</p>:<>
      <p className="text-sm text-[var(--text-dim)]"><span className="num text-[var(--text)]">{config.activeCount}</span> selected to run · <span className="num">{config.accounts.length}</span> saved</p>
-     {config.accounts.length===0?<p className="field-hint">Add your LinkedIn accounts to start qualification.</p>:config.accounts.map(a=><div key={a.id} className="flex justify-between gap-3 text-xs">
+     {config.accounts.length===0?<p className="field-hint">Add your LinkedIn accounts to start qualification.</p>:config.accounts.map(a=><div key={a.id} className="space-y-1"><div className="flex justify-between gap-3 text-xs">
       <span className="truncate" title={a.email}>{a.label}</span><span className="text-[var(--text-dim)] shrink-0">{a.enabled?statusLabel(a):'Disabled'} · <span className="num">{a.dailyCount}/{a.dailyLimit}</span></span>
-     </div>)}
+     </div><SessionIdentity account={a} accounts={config.accounts}/></div>)}
      <button className="btn btn-outline w-full justify-center" onClick={()=>setEditing(true)}>Manage accounts</button>
     </>}
    </div>
    <p className="panel-note">Each account has its own browser session. Only leads with an attributable email enter Qualified.</p>
   </section>
-  {editing&&config&&<AccountEditor initial={config} onClose={()=>setEditing(false)} onSaved={value=>{setConfig(value);setEditing(false);}}/>}
+  {editing&&config&&<AccountEditor initial={config} liveAccounts={config.accounts} onClose={()=>setEditing(false)} onSaved={value=>{setConfig(value);setEditing(false);}}/>}
  </>;
 }
-function AccountEditor({initial,onClose,onSaved}:{initial:WorkerSettings;onClose:()=>void;onSaved:(value:WorkerSettings)=>void}) {
+function AccountEditor({initial,liveAccounts,onClose,onSaved}:{initial:WorkerSettings;liveAccounts:WorkerAccount[];onClose:()=>void;onSaved:(value:WorkerSettings)=>void}) {
  const dialog=useRef<HTMLDialogElement>(null);
  const [accounts,setAccounts]=useState<Draft[]>(initial.accounts.map(a=>({...a,password:''}))),[activeCount,setActiveCount]=useState(initial.activeCount);
  const [saving,setSaving]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
@@ -80,6 +91,7 @@ function AccountEditor({initial,onClose,onSaved}:{initial:WorkerSettings;onClose
        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={a.enabled} onChange={e=>{update(index,{enabled:e.target.checked});if(!e.target.checked)setActiveCount(n=>Math.min(n,enabled-1));}} className="accent-[var(--signal)]"/> Account {index+1}</label>
        <div className="flex items-center gap-2"><span className="text-xs text-[var(--text-dim)]">{a.id?statusLabel(a as WorkerAccount):'New account'}</span><button type="button" className="btn btn-ghost !text-[var(--bad)] !text-xs" onClick={()=>{setAccounts(current=>current.filter((_,i)=>i!==index));setActiveCount(n=>Math.min(n,enabled-(a.enabled?1:0)));}}>Remove</button></div>
       </div>
+      {a.id&&<SessionIdentity account={liveAccounts.find(other=>other.id===a.id)||a as WorkerAccount} accounts={liveAccounts}/>}
       <div className="grid sm:grid-cols-2 gap-3">
        <label className="space-y-1"><span className="field-label">Account name</span><input className="field w-full" required maxLength={80} value={a.label} onChange={e=>update(index,{label:e.target.value})} placeholder="e.g. Main account"/></label>
        <label className="space-y-1"><span className="field-label">LinkedIn email</span><input className="field w-full" type="email" required readOnly={!!a.id} value={a.email} onChange={e=>update(index,{email:e.target.value})} autoComplete="off" placeholder="you@example.com"/></label>

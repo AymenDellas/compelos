@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { researchProspect } = require('./src/lib/prospect-research.cjs');
+const { identityFromMe } = require('./src/lib/linkedin-session-identity.cjs');
 const { VERSION: QUALIFICATION_VERSION, assessProspect, pipelineForAssessment, extractMatchingProfile, extractProfileLocation, extractProfileContactInfo, isPlatformWebsite, isUnsafeContact, hostOf } = require('./src/lib/prospect-qualification.cjs');
 
 puppeteerExtra.use(StealthPlugin());
@@ -43,6 +44,7 @@ if (accountArg >= 0 && !/^(?:legacy-\d+|[a-f0-9-]{36})$/.test(ACCOUNT_ID || ''))
 let dbWorker = null;
 let settleJobs = async () => {};
 let latestStatus = { status: 'starting' };
+let signedInIdentity = null;
 
 // ── Ensure dirs exist ──
 if (!fs.existsSync(QUEUE_DIR)) fs.mkdirSync(QUEUE_DIR, { recursive: true });
@@ -281,7 +283,7 @@ function purgeOldResults() {
 
 // ── Write worker status ──
 function writeStatus(status, extra = {}) {
-    latestStatus = { status, qualificationVersion: QUALIFICATION_VERSION, accountId: ACCOUNT_ID, ...extra, updatedAt: new Date().toISOString() };
+    latestStatus = { status, qualificationVersion: QUALIFICATION_VERSION, accountId: ACCOUNT_ID, ...extra, signedIn: signedInIdentity, updatedAt: new Date().toISOString() };
     try {
         fs.writeFileSync(
             path.join(RESULTS_DIR, ACCOUNT_ID ? `worker-status-${ACCOUNT_ID}.json` : 'worker-status.json'),
@@ -1625,6 +1627,10 @@ async function main() {
             }
         }
 
+        const me = await voyagerFetch(page, '/voyager/api/me');
+        signedInIdentity = me?.status === 200 ? identityFromMe(me.data) : null;
+        if (signedInIdentity) log(`Signed in as ${signedInIdentity.name} (${signedInIdentity.profileUrl || signedInIdentity.memberUrn}).`);
+        else log('Signed-in LinkedIn profile could not be confirmed; no saved email was substituted.');
         log('🟢 Worker is READY. Watching queue/ for jobs...');
         log(`   Queue dir: ${QUEUE_DIR}`);
         log(`   Results dir: ${RESULTS_DIR}`);

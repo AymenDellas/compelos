@@ -38,7 +38,8 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   const [first,second]=await Promise.all([core.claim(pool,'legacy-0','one'),core.claim(pool,'legacy-1','two')]);
   assert.notEqual(first.job.jobId,second.job.jobId);
   assert.equal(first.dailyCount,3);assert.equal(second.dailyCount,1);
-  await core.heartbeat(pool,'legacy-0','one',{status:'processing'});
+  await core.heartbeat(pool,'legacy-0','one',{status:'processing',signedIn:{name:'Fixture First',profileUrl:'https://www.linkedin.com/in/first/',memberUrn:'urn:li:fs_miniProfile:fixtureFirst',checkedAt:new Date().toISOString()}});
+  assert.equal((await core.settings(pool)).accounts[0].signedIn.name,'Fixture First');
   await assert.rejects(core.heartbeat(pool,'legacy-0','impostor',{}));
   await pool.query(`UPDATE compel_worker_jobs SET lease_until=NOW()-interval '1 minute' WHERE id=$1`,[first.job.jobId]);
   const recovered=await core.claim(pool,'legacy-1','two');assert.equal(recovered.job.jobId,first.job.jobId);

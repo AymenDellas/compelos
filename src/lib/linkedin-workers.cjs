@@ -3,6 +3,7 @@
 // Shared by Next.js and the persistent worker. Vercel never stores queue files
 // or launches browsers: the database carries settings, leases and results.
 const { randomUUID, randomBytes, createCipheriv, createDecipheriv, createHash } = require('node:crypto');
+const {cleanIdentity}=require('./linkedin-session-identity.cjs');
 const ready = new WeakMap();
 // Browser text can contain lone UTF-16 surrogates or NULs. PostgreSQL JSONB
 // rejects those even though JSON.stringify accepts them. Keep normal emoji.
@@ -93,6 +94,7 @@ async function settings(pool) {
   online:!!a.lease_until && new Date(a.lease_until).getTime() > Date.now(),
   loginPending:!!a.login_requested_at, updatedAt:a.updated_at || null,
   memoryMB:a.status?.memoryMB || 0,avgJobDurationMs:a.status?.avgJobDurationMs || 0,url:a.status?.url || '',
+  signedIn:cleanIdentity(a.status?.signedIn),
  })) };
 }
 async function saveSettings(pool, body) {

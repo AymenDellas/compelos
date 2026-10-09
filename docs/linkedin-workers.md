@@ -6,6 +6,12 @@ want available, then choose how many run at once. The first N enabled accounts
 run, in list order; 0 pauses all accounts. Changes are picked up every 10 seconds.
 An already claimed lead finishes saving before its browser stops.
 
+Each account shows **Signed in as**, with the name and profile link returned
+by LinkedIn for that browser session. This is independent of the saved login
+email. Matching profiles are flagged across accounts. Offline sessions show
+the last confirmed identity; an unavailable identity is never guessed from
+the configured email or account name.
+
 Each account has a stable browser profile and its own daily counter (1–400,
 reset at midnight UTC). The configured limit is a budget, not a guarantee from
 LinkedIn. Security challenges can still interrupt an account.

@@ -1,4 +1,5 @@
-export type WorkerAccount = { id: string; label: string; email: string; enabled: boolean; dailyLimit: number; hasPassword: boolean; dailyCount: number; status: string; reason: string; online: boolean; loginPending: boolean; updatedAt: string | null };
+export type LinkedInIdentity = {name:string;profileUrl:string;memberUrn:string;checkedAt:string|null};
+export type WorkerAccount = { id: string; label: string; email: string; enabled: boolean; dailyLimit: number; hasPassword: boolean; dailyCount: number; status: string; reason: string; online: boolean; loginPending: boolean; updatedAt: string | null; signedIn?:LinkedInIdentity|null };
 export type WorkerSettings = { revision: number; activeCount: number; accounts: WorkerAccount[] };
 export function ensure(pool: unknown): Promise<void>;
 export function settings(pool: unknown): Promise<WorkerSettings>;
