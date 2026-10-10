@@ -614,7 +614,7 @@ export default function Dashboard() {
             const response = await fetch('/api/queue-batch', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'retry_failed'})});
             const data = await response.json();
             if(!response.ok) throw new Error(data.error || 'Could not schedule recovery.');
-            addToast(data.queuedCount ? `Recovery queued for ${data.queuedCount} failed profiles; ${data.researchOnly} use their saved scrape.` : 'No failed profiles to recover in the latest batch.', data.queuedCount ? 'success' : 'info');
+            addToast(data.queuedCount ? `Recovery queued for ${data.queuedCount} failed profiles; ${data.researchOnly} use their saved scrape.` : 'No failed profiles available to retry.', data.queuedCount ? 'success' : 'info');
             if(data.queuedCount) {setQueueSize(n=>n+data.queuedCount);setIsProcessing(true);}
         } catch(error) {addToast(error instanceof Error ? error.message : 'Could not schedule recovery.', 'error');}
         finally {setRetryingFailed(false);}
@@ -1376,7 +1376,7 @@ export default function Dashboard() {
                                             onClick={handleRetryFailed}
                                             disabled={retryingFailed}
                                             className="btn btn-ghost"
-                                            title="Recover failed profiles in the latest batch, using saved scrapes when available"
+                                            title="Recover failed profiles, using saved scrapes when available"
                                         >
                                             <RotateCcw className="w-3.5 h-3.5" />
                                             Retry failed

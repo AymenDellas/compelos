@@ -286,7 +286,9 @@ async function retryFailed(pool) {
  await ensure(pool);const client=await pool.connect();let count=0,researchOnly=0;
  try {
   await client.query('BEGIN');
-  const jobs=(await client.query(`SELECT * FROM compel_worker_jobs WHERE status='done' AND result->>'status'='ERROR' AND created_at>=(SELECT date_trunc('minute',max(created_at)) FROM compel_worker_jobs) FOR UPDATE`)).rows;
+  const jobs=(await client.query(`SELECT j.* FROM compel_worker_jobs j WHERE j.status='done' AND j.result->>'status'='ERROR'
+   AND NOT EXISTS(SELECT 1 FROM compel_worker_jobs newer WHERE newer.profile_key=j.profile_key AND newer.queue_order>j.queue_order)
+   ORDER BY j.created_at FOR UPDATE OF j`)).rows;
   for(const job of jobs) {
    if((await client.query(`SELECT id FROM compel_worker_jobs WHERE profile_key=$1 AND status IN ('pending','processing')`,[job.profile_key])).rowCount)continue;
    const saved=job.result.profileIdentityConfirmed&&failureOf(job.result).stage!=='linkedin'?job.result:job.checkpoint;

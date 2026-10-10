@@ -94,8 +94,10 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   await core.clearQueue(pool);
   const recoveredBatch=await core.enqueue(pool,[savedProfile.url]);
   await pool.query(`UPDATE compel_worker_jobs SET status='done',result=$2::jsonb,completed_at=NOW() WHERE id=$1`,[recoveredBatch.jobs[0],JSON.stringify({...savedProfile,status:'ERROR',logs:['Automated interpretation rate limit (HTTP 429).']})]);
+  const newerBatch=await core.enqueue(pool,['https://www.linkedin.com/in/newer-success/']);
+  await pool.query("UPDATE compel_worker_jobs SET created_at=NOW()+interval '2 minutes',status='done',result='{\"status\":\"REJECTED\"}'::jsonb,completed_at=NOW() WHERE id=$1",[newerBatch.jobs[0]]);
   const retries=await core.retryFailed(pool);
-  assert.equal(retries.researchOnly,1);assert.equal(retries.scrapeCount,0);
+  assert.equal(retries.researchOnly,1,'a newer unrelated batch must not hide older failed profiles');assert.equal(retries.scrapeCount,0);
   await pool.query('UPDATE compel_linkedin_accounts SET daily_limit=1 WHERE id=$1',['legacy-0']);
   const beforeRetry=(await core.settings(pool)).accounts.find(a=>a.id==='legacy-0').dailyCount;
   await core.releaseSession(pool,'legacy-0','one',{status:'offline'});
