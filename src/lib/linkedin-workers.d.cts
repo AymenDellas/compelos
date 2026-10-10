@@ -9,5 +9,7 @@ export function requestLogout(pool: unknown, id: string): Promise<void>;
 export function retryFailed(pool:unknown):Promise<{queuedCount:number;researchOnly:number;scrapeCount:number}>;
 export function enqueue(pool: unknown, urls: unknown[], options?: {nativePostProcess?: boolean;targetRegion?: string;jobId?: string}): Promise<{ jobs: string[]; queuedCount: number; skipped: {url: unknown;reason: string}[]; queued: {id:string;url:string}[] }>;
 export function queueStatus(pool: unknown): Promise<any>;
+export function queueCandidates(pool: unknown): Promise<{id:string;linkedin_url:string;location:string;fit_score:number|null;created_at:string}[]>;
+export function skipCompletedDuplicates(pool: unknown): Promise<number>;
 export function jobStatus(pool: unknown, id: string): Promise<any>;
 export function clearQueue(pool: unknown): Promise<number>;

@@ -223,17 +223,51 @@ async function enqueue(pool, urls, options = {}) {
   if (!url) { skipped.push({url:value,reason:'Invalid LinkedIn person profile'}); continue; }
   const id = options.jobId || `job_${randomUUID()}`;
   const payload={jobId:id,linkedinUrl:url,nativePostProcess:options.nativePostProcess!==false,targetRegion:options.targetRegion||'na',createdAt:new Date().toISOString()};
-  entries.push({id,profile_key:url,payload});
+  entries.push({id,profile_key:url,payload,position:entries.length});
  }
  if(!entries.length)return{jobs:[],queuedCount:0,skipped,queued:[]};
+ const completed=new Set((await pool.query(`SELECT DISTINCT profile_key FROM compel_worker_jobs
+  WHERE profile_key=ANY($1::text[]) AND status='done'
+   AND completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC')`,[entries.map(entry=>entry.profile_key)])).rows.map(row=>row.profile_key));
+ const eligible=entries.filter(entry=>!completed.has(entry.profile_key));
+ for(const entry of entries)if(completed.has(entry.profile_key))skipped.push({url:entry.profile_key,reason:'Already completed today; use Retry failed for failed profiles'});
  const result=await pool.query(`INSERT INTO compel_worker_jobs(id,profile_key,payload)
-  SELECT entry.id,entry.profile_key,entry.payload FROM jsonb_to_recordset($1::jsonb) AS entry(id TEXT,profile_key TEXT,payload JSONB)
-  ON CONFLICT DO NOTHING RETURNING id`,[json(entries)]);
+  SELECT entry.id,entry.profile_key,entry.payload FROM jsonb_to_recordset($1::jsonb) AS entry(id TEXT,profile_key TEXT,payload JSONB,position INTEGER)
+  WHERE NOT EXISTS(SELECT 1 FROM compel_worker_jobs done WHERE done.profile_key=entry.profile_key AND done.status='done'
+   AND done.completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'))
+  ORDER BY entry.position ON CONFLICT DO NOTHING RETURNING id`,[json(eligible)]);
  const inserted=new Set(result.rows.map(row=>row.id));
  const queued=entries.filter(entry=>inserted.has(entry.id)).map(entry=>({id:entry.id,url:entry.profile_key}));
- for(const entry of entries)if(!inserted.has(entry.id))skipped.push({url:entry.profile_key,reason:'Already queued'});
+ for(const entry of eligible)if(!inserted.has(entry.id))skipped.push({url:entry.profile_key,reason:'Already queued or completed today'});
  const jobs=queued.map(entry=>entry.id);
  return {jobs,queuedCount:jobs.length,skipped,queued};
+}
+// A duplicate Inbox row must not bring an assessed/contacted profile back into
+// discovery. Return one candidate per person, before the caller filters region.
+async function queueCandidates(pool) {
+ await ensure(pool);
+ return (await pool.query(`WITH people AS (
+  SELECT id,linkedin_url,location,fit_score,created_at,pipeline_status,do_not_contact,contacted,contacted_source,
+   lower(substring(linkedin_url from '/in/([^/?#]+)')) AS slug FROM leads
+ ), eligible AS (
+  SELECT DISTINCT ON (p.slug) p.id,p.linkedin_url,p.location,p.fit_score,p.created_at
+  FROM people p WHERE p.pipeline_status='INBOX' AND p.slug IS NOT NULL
+   AND NOT EXISTS(SELECT 1 FROM people other WHERE other.slug=p.slug AND
+    (other.pipeline_status IS DISTINCT FROM 'INBOX' OR other.do_not_contact IS TRUE OR (other.contacted IS TRUE AND other.contacted_source IS NOT NULL)))
+   AND NOT EXISTS(SELECT 1 FROM compel_worker_jobs j WHERE j.profile_key='https://www.linkedin.com/in/'||p.slug||'/' AND
+    (j.status IN ('pending','processing') OR j.status='done' AND j.completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC')))
+  ORDER BY p.slug,p.fit_score DESC NULLS LAST,p.created_at,p.id
+ ) SELECT * FROM eligible ORDER BY fit_score DESC NULLS LAST,created_at,id`)).rows;
+}
+// Also protect jobs queued before the enqueue fix, and the small race where a
+// prior job finishes during enqueue. Keep history; only redundant fresh jobs
+// are skipped. Saved research and website continuations remain runnable.
+async function skipCompletedDuplicates(pool) {
+ return (await pool.query(`UPDATE compel_worker_jobs j SET status='cancelled',completed_at=NOW(),
+  result=jsonb_build_object('status','SKIPPED','url',j.profile_key,'reason','Profile already completed today; previous result retained')
+  WHERE j.status='pending' AND j.checkpoint IS NULL AND j.payload->>'websiteContinuation' IS DISTINCT FROM 'true'
+   AND EXISTS(SELECT 1 FROM compel_worker_jobs d WHERE d.profile_key=j.profile_key AND d.status='done'
+    AND d.completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'))`)).rowCount;
 }
 async function claim(pool,id,owner,options={}) {
  const client=await pool.connect();
@@ -246,9 +280,11 @@ async function claim(pool,id,owner,options={}) {
   if (!session) throw new Error('Account session lease lost.');
   await client.query(`INSERT INTO compel_worker_usage(account_id,day) VALUES($1,(NOW() AT TIME ZONE 'UTC')::date) ON CONFLICT DO NOTHING`,[id]);
   const usage=(await client.query(`SELECT count FROM compel_worker_usage WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date FOR UPDATE`,[id])).rows[0];
+  await skipCompletedDuplicates(client);
   const job=(await client.query(`SELECT * FROM compel_worker_jobs WHERE ((status='pending' AND (retry_at IS NULL OR retry_at<=NOW())) OR (status='processing' AND lease_until<NOW()))
+   AND ($3 IS FALSE OR checkpoint IS NOT NULL)
    AND ($2 IS FALSE OR result->'failure'->>'code' IS DISTINCT FROM 'AI_RATE_LIMIT' OR NOT EXISTS(SELECT 1 FROM compel_research_budget WHERE id=$1 AND next_at>NOW()))
-   ORDER BY (COALESCE(payload->>'websiteContinuation','false')<>'true') DESC,(checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b'),options.requiresAI===true])).rows[0];
+   ORDER BY (COALESCE(payload->>'websiteContinuation','false')<>'true') DESC,(checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b'),options.requiresAI===true,usage.count>=account.daily_limit])).rows[0];
   if (!job?.checkpoint&&usage.count >= account.daily_limit) { await client.query('COMMIT'); return {limited:true,dailyCount:usage.count,dailyLimit:account.daily_limit}; }
   if (!job) { await client.query('COMMIT'); return null; }
   await client.query(`UPDATE compel_worker_jobs SET status='processing',account_id=$2,owner=$3,lease_until=NOW()+interval '15 minutes' WHERE id=$1`,[job.id,id,owner]);
@@ -353,7 +389,9 @@ async function queueStatus(pool) {
   SELECT count(*) FILTER(WHERE status IN ('pending','processing'))::integer AS pending,
    count(*) FILTER(WHERE status='pending' AND ready_at>NOW())::integer AS waiting,
    min(ready_at) FILTER(WHERE status='pending' AND ready_at>NOW()) AS next_retry FROM jobs`)).rows[0];
- const recent=(await pool.query(`SELECT id,result,completed_at FROM compel_worker_jobs WHERE status='done' ORDER BY completed_at DESC LIMIT 100`)).rows;
+ const recent=(await pool.query(`SELECT id,result,completed_at FROM (
+  SELECT DISTINCT ON (profile_key) id,result,completed_at FROM compel_worker_jobs WHERE status='done' ORDER BY profile_key,completed_at DESC,queue_order DESC
+ ) latest ORDER BY completed_at DESC LIMIT 100`)).rows;
  const selected=config.accounts.filter(a=>a.enabled&&!a.signedOut&&!a.logoutPending).slice(0,config.activeCount);
  const live=selected.filter(a=>a.online), busy=live.find(a=>a.status==='processing');
  const dailyCount=Number((await pool.query("SELECT COALESCE(sum(count),0)::integer AS total FROM compel_worker_usage WHERE day=(NOW() AT TIME ZONE 'UTC')::date")).rows[0].total);
@@ -364,12 +402,17 @@ async function queueStatus(pool) {
  try {today=(await pool.query(`SELECT count(*) FILTER(WHERE pipeline_status='QUALIFIED' AND NULLIF(trim(email),'') IS NOT NULL)::integer AS qualified,
   count(*) FILTER(WHERE pipeline_status='NOT_QUALIFIED')::integer AS rejected FROM leads WHERE prospect_researched_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC')`)).rows[0];} catch { /* an older database has not received research columns yet */ }
  const ratePerHour=live.reduce((sum,a)=>sum+(a.avgJobDurationMs?Math.round(3600000/a.avgJobDurationMs):0),0);
+ const dailyRemaining=selected.reduce((sum,a)=>sum+Math.max(0,a.dailyLimit-a.dailyCount),0);
+ const limitReached=live.length>0&&live.every(a=>a.dailyCount>=a.dailyLimit);
+ const paused=live.length>0&&live.every(a=>a.status==='paused');
+ const nextDailyResetAt=new Date(new Date().setUTCHours(24,0,0,0)).toISOString();
  return {status:'ok',available:true,queueSize:rows.pending,waitingCount:rows.waiting,nextRetryAt:rows.next_retry,accounts:config.accounts,activeCount:config.activeCount,
-  workerStatus:{status:busy?'processing':live.length?'ready':selected.some(a=>a.status==='paused')?'paused':'offline',stale:!live.length,
+  workerStatus:{status:busy?'processing':paused||limitReached?'paused':live.length?'ready':'offline',stale:!live.length,
+   pauseReason:limitReached?'DAILY_LIMIT':paused?'ACCOUNT_PAUSED':null,nextDailyResetAt,
    dailyCount,dailyLimit,dailyQualified:today.qualified,dailyRejected:today.rejected,activeAccounts:live.length,configuredAccounts:selected.length,
    memoryMB:live.reduce((sum,a)=>sum+a.memoryMB,0),ratePerHour:ratePerHour||null,url:busy?.url||'',waitingCount:rows.waiting,nextRetryAt:rows.next_retry,
-   dailyBudgetCount:selected.reduce((sum,a)=>sum+a.dailyCount,0),dailyRemaining:selected.reduce((sum,a)=>sum+Math.max(0,a.dailyLimit-a.dailyCount),0)},
+   dailyBudgetCount:selected.reduce((sum,a)=>sum+a.dailyCount,0),dailyRemaining},
   dailyStats:{date:new Date().toISOString().slice(0,10),count:dailyCount,limit:dailyLimit},
   recentResults:recent.map(row=>({jobId:row.id,result:normalizeResult(row.result),completedAt:row.completed_at}))};
 }
-module.exports={SCHEMA,ensure,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};
+module.exports={SCHEMA,ensure,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,queueCandidates,skipCompletedDuplicates,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};

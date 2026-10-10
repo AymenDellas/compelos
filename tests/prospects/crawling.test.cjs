@@ -11,6 +11,34 @@ const graph = {
     '/our-story': intro + '<p>We provide coaching for leaders through transitions, communication challenges and team development.</p>',
     '/notes/one': intro, '/notes/two': intro, '/notes/three': intro, '/notes/four': intro,
 };
+
+test('published contacts on an identity-matched site do not require a founder headline or personal business brand', async () => {
+    const coach={...input,headline:'Executive Coach | Leadership Facilitator'};
+    const r=await researchProspect(coach,{ai:false,fetchPage:async url=>({url,html:'<title>Leadership Solutions</title><p>Lori Brewer Collins supports leaders and teams with executive coaching.</p><a href="/contact">Contact</a><a href="mailto:lori@practice.test">Email</a>'})});
+    assert.equal(r.websiteStatus,'UNCONFIRMED','business ownership is still a separate assessment');
+    assert.equal(r.contacts[0].address,'lori@practice.test');
+    assert.equal(assessProspect(r,{email:r.contacts[0].address}).qualification.qualified,true);
+    assert.deepEqual(validateResearch(r).crawl.contactMatchedHosts,['practice.test']);
+});
+
+test('a reciprocal profile link attributes a published contact, but a testimonial name or unrelated profile does not', async () => {
+    const coach={...input,headline:'Executive Coach'};
+    const html='<title>Leadership Solutions</title><p>We support leaders and teams with practical executive coaching.</p><div class="testimonials">Lori Brewer Collins: An excellent program.</div><footer><a href="mailto:leadershipcoach@gmail.com">Contact</a></footer>';
+    const unrelated=await researchProspect(coach,{ai:false,fetchPage:async url=>({url,html:html+'<a href="https://www.linkedin.com/in/someone-else/">LinkedIn</a>'})});
+    assert.equal(unrelated.contacts.length,0);
+    const matched=await researchProspect(coach,{ai:false,maxPages:1,fetchPage:async url=>({url,html:html+'<a href="https://ca.linkedin.com/in/LORI/?trk=website">LinkedIn</a><a href="/contact">Contact us</a>'})});
+    assert.equal(matched.contacts[0].ownership,'PUBLISHED');
+    const resumed=await researchProspect(coach,{ai:false,previousResearch:matched,fetchPage:async url=>({url,html:'<title>Contact us</title><p>Please contact our practice for leadership development and executive coaching.</p><a href="mailto:leadershipcoach@gmail.com">Contact</a>'})});
+    assert.equal(resumed.crawl.complete,true);
+    assert.deepEqual(resumed.crawl.contactMatchedHosts,['practice.test']);
+    assert.equal(resumed.contacts[0].address,'leadershipcoach@gmail.com');
+});
+
+test('multiple explicitly supplied websites in one contact field are split without inventing routes',async()=>{
+    const calls=[];
+    await researchProspect({...input,websites:['https://practice.test, www.second.test']},{ai:false,fetchPage:async url=>{calls.push(url);return {url,html:'<title>Contact</title><p>Our business contact information and leadership services are available on this page.</p>'};}});
+    assert.deepEqual(calls.sort(),['https://practice.test/','https://www.second.test/']);
+});
 test('the actual route graph is exhausted, contact/about routes are prioritized before blog pages, and description plus cross-brand contact are extracted', async () => {
     const calls = [];
     const r = await researchProspect(input, { ai: false, fetchPage: async url => { calls.push(url); assert.ok(graph[new URL(url).pathname], 'No guessed or external routes'); return { url, html: graph[new URL(url).pathname] }; } });

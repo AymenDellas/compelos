@@ -142,7 +142,10 @@ function parsePage(html, url) {
     structuredContacts.forEach(contact => addContact(contact.address, true, contact.businessContact));
     const readable = body.replace(/\s*(?:\[at\]|\(at\))\s*/gi, '@').replace(/\s*(?:\[dot\]|\(dot\))\s*/gi, '.');
     for (const address of readable.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []) addContact(address, false);
-    return { url, canonical, title, h1, description, text: [title, h1, metaDescription, body.slice(0, 20000)].filter(Boolean).join('\n'), links, contacts: contacts.slice(0, 30), readable: body.length >= 100 || description.length >= 50 || contacts.length > 0 };
+    const identityBody = $('body').clone();
+    identityBody.find('blockquote,[class*="testimonial"],[class*="review"],[class*="credit"],[id*="testimonial"],[id*="review"]').remove();
+    const identityText = [title, h1, metaDescription, normalText(identityBody.text())].filter(Boolean).join('\n');
+    return { url, canonical, title, h1, description, identityText, text: [title, h1, metaDescription, body.slice(0, 20000)].filter(Boolean).join('\n'), links, contacts: contacts.slice(0, 30), readable: body.length >= 100 || description.length >= 50 || contacts.length > 0 };
 }
 
 function excerpt(text, pattern) {
@@ -160,7 +163,16 @@ function nameOnPage(page, input) {
     const first = normalize(String(input.firstName || '').replace(/^(?:dr\.?|prof\.?)\s+/i, ''));
     const last = normalize(String(input.lastName || '').split(/[,|]/)[0].replace(/\([^)]*\)/g, '').replace(/\b(?:icf|pcc|acc|mcc|phd|mba|cpcc|esq|ma|ms|msc|cec|sbc)\b/ig, ''));
     if (first.length < 2 || last.length < 2) return false;
-    return (` ${normalize(page.text)} `).includes(` ${first} ${last} `);
+    return (` ${normalize(page.identityText || page.text)} `).includes(` ${first} ${last} `);
+}
+function contactMatchedPage(page, input) {
+    if (!input.profileIdentityConfirmed || isPlatformWebsite(page.url)) return false;
+    // The site was linked by this profile. A matching identity or a reciprocal
+    // profile link establishes contact attribution without requiring a founder
+    // headline or a personal brand. Business scoring remains separate.
+    const {profileUrl}=require('./linkedin-workers.cjs');
+    const person=profileUrl(input.linkedinUrl || input.url);
+    return nameOnPage(page,input) || Boolean(person && page.links.some(link=>profileUrl(link.url)===person));
 }
 function ownedPage(page, input) {
     if (isPlatformWebsite(page.url) || !nameOnPage(page, input) || !/\bcoach(?:ing|es)?\b/i.test(page.text)) return false;
@@ -376,10 +388,10 @@ async function researchProspect(input, options = {}) {
     const activityAge = input.lastActivityAt ? (Date.parse(researchedAt) - Date.parse(input.lastActivityAt)) / 86400000 : Infinity;
     if (input.latestPostText && activityAge >= 0 && activityAge <= 90) sources.push({ url: sources[0].url, text: normalText(input.latestPostText), label: 'LinkedIn activity', kind: 'PROFILE', observedAt: input.lastActivityAt });
     else if (input.latestPostText) research.limitations.push('Undated or older profile activity was retained as context, but cannot establish current demand.');
-    const candidates = [...new Set([...(input.websites || []), input.website].filter(Boolean))].slice(0, 8);
-    const { crawlWebsiteRoutes } = require('./website-crawler.cjs');
+    const { crawlWebsiteRoutes, websiteInputs } = require('./website-crawler.cjs');
+    const candidates = websiteInputs(input);
     const crawled = await crawlWebsiteRoutes(input, {
-        publicUrl, parsePage, ownedPage, fetchPage: options.fetchPage || fetchPublicPage, now: researchedAt,
+        publicUrl, parsePage, ownedPage, contactMatchedPage, fetchPage: options.fetchPage || fetchPublicPage, now: researchedAt,
         maxPages: options.maxPages || MAX_PAGES, maxTimeMs: options.maxTimeMs || MAX_TOTAL_MS, maxRoutes: options.maxRoutes,
         previousResearch: options.previousResearch,
     });
@@ -398,7 +410,7 @@ async function researchProspect(input, options = {}) {
     if (!ownedHost) research.limitations.push('No website could be confidently matched to this coach’s practice.');
     if (!pages.length) research.limitations.push('No public practice pages could be inspected. Missing evidence remains unknown.');
     for (const c of crawled.crawl.candidates) {
-        if (!crawled.crawl.matchedHosts.includes(hostOf(c.url))) continue;
+        if (![...crawled.crawl.matchedHosts,...crawled.crawl.contactMatchedHosts].includes(hostOf(c.url))) continue;
         const domain = c.address.split('@')[1];
         const sameDomain = onDomain(domain, hostOf(c.url));
         // A practice's real contact page can publish a different brand's inbox.

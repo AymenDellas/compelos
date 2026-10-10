@@ -46,6 +46,9 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   await assert.rejects(core.complete(pool,first.job.jobId,'one',{status:'QUALIFIED'}));
   await core.complete(pool,recovered.job.jobId,'two',{status:'REJECTED',primaryEmail:''});
   assert.equal((await core.jobStatus(pool,recovered.job.jobId)).status,'done');
+  const completedAgain=await core.enqueue(pool,[recovered.job.linkedinUrl]);
+  assert.equal(completedAgain.queuedCount,0,'completed profiles cannot consume another allowance on a repeated batch');
+  assert.match(completedAgain.skipped[0].reason,/completed today/);
   await core.clearQueue(pool);assert.equal((await core.jobStatus(pool,second.job.jobId)).status,'processing');
   await core.releaseSession(pool,'legacy-1','two',{status:'offline'});
   assert.equal((await core.jobStatus(pool,second.job.jobId)).status,'queued');
@@ -141,31 +144,56 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   // its saved graph. Continuations neither block new leads nor consume quota.
   const continuationResearch={...r,crawl:{version:1,complete:false,pending:['https://avamorgan.test/real-route'],failed:[],stoppedReason:'Time budget reached'}};
   const partial={...savedProfile,status:'QUALIFIED',primaryEmail:'ava@avamorgan.test',prospectQualification:{research:continuationResearch}};
-  const continuationBatch=await core.enqueue(pool,[savedProfile.url]);
+  const continuationBatch=await core.enqueue(pool,['https://www.linkedin.com/in/continuation-fixture/']);
   await pool.query('UPDATE compel_worker_jobs SET checkpoint=$2::jsonb WHERE id=$1',[continuationBatch.jobs[0],JSON.stringify(partial)]);
   const parent=await core.claim(pool,'legacy-0','recovery');
   await core.complete(pool,parent.job.jobId,'recovery',partial);
   assert.equal((await core.jobStatus(pool,parent.job.jobId)).status,'done');
   const continuation=(await pool.query("SELECT * FROM compel_worker_jobs WHERE status='pending' AND payload->>'websiteContinuation'='true'")).rows[0];
   assert.ok(continuation);assert.equal(continuation.checkpoint.primaryEmail,'ava@avamorgan.test');
+  const freshBehindLimit=await core.enqueue(pool,['https://www.linkedin.com/in/fresh-at-cap/']);
   await pool.query('UPDATE compel_worker_jobs SET retry_at=NOW() WHERE id=$1',[continuation.id]);
   const resumed=await core.claim(pool,'legacy-0','recovery');
   assert.equal(resumed.job.websiteContinuation,true);assert.equal(resumed.dailyCount,beforeRetry);
   assert.equal(resumed.job.retryCount,1);
   await core.complete(pool,resumed.job.jobId,'recovery',partial);
   for(const retryCount of [2,3]){
-   const next=(await pool.query("SELECT id FROM compel_worker_jobs WHERE status='pending'")).rows[0];
+   const next=(await pool.query("SELECT id FROM compel_worker_jobs WHERE status='pending' AND checkpoint IS NOT NULL")).rows[0];
    assert.ok(next);await pool.query('UPDATE compel_worker_jobs SET retry_at=NOW() WHERE id=$1',[next.id]);
    const claimed=await core.claim(pool,'legacy-0','recovery');
    assert.equal(claimed.job.retryCount,retryCount,'pending routes cannot reset the continuation counter');
    await core.complete(pool,claimed.job.jobId,'recovery',partial);
   }
+  assert.equal((await core.jobStatus(pool,freshBehindLimit.jobs[0])).status,'queued','fresh work is retained at the cap while cached continuations finish');
+  await core.clearQueue(pool);
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM compel_worker_jobs WHERE status='pending'")).rows[0].count,0);
-  const blockedBatch=await core.enqueue(pool,[savedProfile.url]);
+  const blockedBatch=await core.enqueue(pool,['https://www.linkedin.com/in/blocked-fixture/']);
   await pool.query('UPDATE compel_worker_jobs SET checkpoint=$2::jsonb WHERE id=$1',[blockedBatch.jobs[0],JSON.stringify(partial)]);
   const blockedParent=await core.claim(pool,'legacy-0','recovery');
   await core.complete(pool,blockedParent.job.jobId,'recovery',{...partial,prospectQualification:{research:{...continuationResearch,crawl:{...continuationResearch.crawl,version:2,retryable:false}}}});
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM compel_worker_jobs WHERE status='pending'")).rows[0].count,0,'terminal site failures cannot create a continuation');
+  // Legacy Inbox copies, active jobs and previously assessed copies are all
+  // excluded before a region's next batch is limited.
+  await pool.query('ALTER TABLE leads ADD COLUMN fit_score INTEGER');
+  await pool.query(`INSERT INTO leads(id,linkedin_url,location,fit_score,pipeline_status) VALUES
+   ('candidate-low','https://www.linkedin.com/in/new-candidate/','Canada',10,'INBOX'),
+   ('candidate-high','https://ca.linkedin.com/in/NEW-CANDIDATE/?trk=duplicate','Canada',90,'INBOX'),
+   ('qualified-copy','https://www.linkedin.com/in/ava/','Canada',100,'QUALIFIED'),
+   ('inbox-copy','https://www.linkedin.com/in/ava/','Canada',100,'INBOX'),
+   ('completed-copy',$1,'Canada',100,'INBOX'),
+   ('active-copy','https://www.linkedin.com/in/active-candidate/','Canada',100,'INBOX')`,[recovered.job.linkedinUrl]);
+  await core.enqueue(pool,['https://www.linkedin.com/in/active-candidate/']);
+  const candidates=await core.queueCandidates(pool);
+  assert.deepEqual(candidates.map(c=>c.id),['candidate-high']);
+  const obsolete='job_obsolete_duplicate';
+  await pool.query(`INSERT INTO compel_worker_jobs(id,profile_key,payload) VALUES($1,$2,$3::jsonb)`,[obsolete,recovered.job.linkedinUrl,JSON.stringify({jobId:obsolete,linkedinUrl:recovered.job.linkedinUrl})]);
+  assert.equal(await core.skipCompletedDuplicates(pool),1);
+  assert.equal((await core.jobStatus(pool,obsolete)).status,'cancelled');
+  const newStatus=await core.queueStatus(pool);
+  assert.equal(newStatus.workerStatus.status,'paused');
+  assert.equal(newStatus.workerStatus.pauseReason,'DAILY_LIMIT');
+  assert.equal(newStatus.workerStatus.dailyRemaining,0);
+  assert.ok(Date.parse(newStatus.workerStatus.nextDailyResetAt)>Date.now());
  }finally{
   await raw.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);await raw.end();
  }

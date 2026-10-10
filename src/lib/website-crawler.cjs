@@ -34,7 +34,7 @@ function failureKind(error) {
 }
 
 async function crawlWebsiteRoutes(input, options) {
-    const { publicUrl, fetchPage, parsePage, ownedPage } = options;
+    const { publicUrl, fetchPage, parsePage, ownedPage, contactMatchedPage } = options;
     const previous = options.previousResearch?.crawl;
     const resume = [1, 2].includes(previous?.version) && !previous.complete;
     const migrate = resume && previous.version === 1;
@@ -45,6 +45,7 @@ async function crawlWebsiteRoutes(input, options) {
     const failed = new Map();
     const roots = new Set(resume ? previous.roots.filter(validRoute) : []);
     const matchedHosts = new Set(resume ? previous.matchedHosts : []);
+    const contactMatchedHosts = new Set(resume ? previous.contactMatchedHosts || [] : []);
     const candidates = resume ? [...previous.candidates.filter(contact => validRoute(contact.url))] : [];
     const queue = new Map();
     const discovered = new Set(visited.keys());
@@ -86,7 +87,7 @@ async function crawlWebsiteRoutes(input, options) {
             failed.set(routeKey(url), url);
             if (record?.retryable !== false && (record?.attempts || 0) < 3) enqueue(url, record?.label, rootKey(url), true);
         }
-    } else for (const url of [...new Set([...(input.websites || []), input.website].filter(Boolean))].slice(0, 8)) enqueue(url, 'Linked website', true);
+    } else for (const url of websiteInputs(input)) enqueue(url, 'Linked website', true);
     const sameSite = url => [...roots].some(root => hostOf(root) === hostOf(url));
     const savePage = (record, originalUrl = record.url) => {
         const index = pages.findIndex(page => routeKey(page.url) === routeKey(record.url) || routeKey(page.url) === routeKey(originalUrl));
@@ -137,6 +138,7 @@ async function crawlWebsiteRoutes(input, options) {
             visited.set(key, page.url); discovered.add(key); queue.delete(key);
             const practiceRoot = [...roots].some(root => hostOf(root) === hostOf(page.url) && !/\/(?:team|staff|employees|our-coaches|people|members)(?:\/|$)/i.test(new URL(root).pathname));
             if (practiceRoot && ownedPage(page, input)) matchedHosts.add(hostOf(page.url));
+            if (practiceRoot && contactMatchedPage?.(page,input)) contactMatchedHosts.add(hostOf(page.url));
             parsed.push(page);
             const contactPage = routePriority({ url: page.url, label: page.title }) === 0;
             if (page.description?.length >= 50) {
@@ -165,9 +167,13 @@ async function crawlWebsiteRoutes(input, options) {
     const inspected = pages.filter(page => page.status === 'inspected');
     return { pages, parsed, sources, description,
         crawl: { version: 2, complete: !queue.size && !failed.size && !storageLimited, retryable, maxRoutes, storageLimited, attempted: [...attempted.values()],
-            visited: [...visited.values()], pending: [...queue.values()].map(item => item.url), failed: [...failed.values()], roots: [...roots], matchedHosts: [...matchedHosts],
+            visited: [...visited.values()], pending: [...queue.values()].map(item => item.url), failed: [...failed.values()], roots: [...roots], matchedHosts: [...matchedHosts],contactMatchedHosts:[...contactMatchedHosts],
             discovered: discovered.size, inspected: inspected.length, contactPages: inspected.filter(page => page.contactPage || routePriority(page) === 0).length,
             descriptionPages: inspected.filter(page => page.hasDescription).length, stoppedReason, candidates: contacts },
     };
 }
-module.exports = { crawlWebsiteRoutes, routeUrl, routeKey, publicRoute, routePriority, failureKind };
+function websiteInputs(input) {
+    return [...new Set([...(input.websites || []),input.website].filter(value=>typeof value==='string'&&value.trim())
+        .flatMap(value=>value.split(/[,;]\s*(?=(?:https?:\/\/|www\.))/i).map(url=>url.trim())))].slice(0,8);
+}
+module.exports = { crawlWebsiteRoutes, websiteInputs, routeUrl, routeKey, publicRoute, routePriority, failureKind };

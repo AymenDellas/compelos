@@ -1,9 +1,11 @@
 import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
-import { getAllLeads, insertOrUpdateLead, updateLeadEmailVerification, LeadRecord } from '@/lib/db';
+import { insertOrUpdateLead, updateLeadEmailVerification, LeadRecord } from '@/lib/db';
 import { verifyEmail } from '@/app/actions/email-verifier-actions';
 import { toPersistedVerification } from '@/lib/verification-persist';
 import { isUnsafeContact } from '@/lib/prospect-qualification.cjs';
+import { queueCandidates } from '@/lib/linkedin-workers.cjs';
+import { pool } from '@/lib/pg_setup';
 
 export async function GET(
     request: Request,
@@ -13,7 +15,7 @@ export async function GET(
     try {
         const resolvedParams = await params;
         const locationParam = resolvedParams.location.toLowerCase();
-        const leads = await getAllLeads();
+        const leads = await queueCandidates(pool);
         
         const resolveCountry = (loc: string | undefined): string => {
             if (!loc) return 'OTHER';
@@ -32,7 +34,6 @@ export async function GET(
 
         // Filter leads by INBOX and by the resolved country
         const filteredLeads = leads.filter(l =>
-            l.pipeline_status === 'INBOX' &&
             resolveCountry(l.location).toLowerCase() === locationParam
         );
 

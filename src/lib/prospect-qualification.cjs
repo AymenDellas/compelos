@@ -119,6 +119,7 @@ function validateResearch(value) {
         const urls = values => [...new Set((Array.isArray(values) ? values : []).filter(validHttpUrl).map(url => url.slice(0, 1000)))].slice(0, 2000);
         const c = value.crawl;
         research.crawl = { version: c.version, complete: c.complete === true, visited: urls(c.visited), pending: urls(c.pending), failed: urls(c.failed), roots: urls(c.roots), matchedHosts: (c.matchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
+            contactMatchedHosts: (c.contactMatchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
             ...(c.version === 2 ? { retryable: c.retryable === true, attempted: urls(c.attempted), maxRoutes: Math.max(1, Math.min(600, Number(c.maxRoutes) || 600)), storageLimited: c.storageLimited === true } : {}),
             discovered: Math.max(0, Number(c.discovered) || 0), inspected: Math.max(0, Number(c.inspected) || 0), contactPages: Math.max(0, Number(c.contactPages) || 0), descriptionPages: Math.max(0, Number(c.descriptionPages) || 0), stoppedReason: normalText(c.stoppedReason).slice(0, 500),
             candidates: (Array.isArray(c.candidates) ? c.candidates : []).slice(0, 150).filter(contact => contact && !isUnsafeContact(contact.address) && validHttpUrl(contact.url)).map(contact => ({ address: normalText(contact.address).toLowerCase(), url: contact.url.slice(0, 1000), explicit: contact.explicit === true, contactPage: contact.contactPage === true, businessContact: contact.businessContact === true })),

@@ -539,7 +539,8 @@ export default function Dashboard() {
             addToast('Could not check worker status — proceeding anyway.', 'info');
         }
 
-        const urlsToProcess = targetUrls;
+        const urlsToProcess = targetUrls.slice(Math.max(0,resumeFrom));
+        if (!urlsToProcess.length) { addToast('This saved list is already complete.', 'info'); return; }
 
         setLogs(prev => [...prev, {
             msg: `Engine Ignition: Sending ${urlsToProcess.length} leads to background queue (Region: ${targetRegion})...`,
@@ -556,9 +557,12 @@ export default function Dashboard() {
             if (!res.ok) throw new Error("Failed to queue batch");
 
             const data = await res.json();
-            addToast(`Successfully queued ${data.queuedCount} jobs`, 'success');
-            setBatchInfo(`Processing ${data.queuedCount} leads via Worker`);
-            setIsProcessing(true);
+            const skipped = data.skipped?.length || 0;
+            const summary = `Queued ${data.queuedCount} profiles${skipped ? `; skipped ${skipped} already queued, completed today, or invalid` : ''}.`;
+            addToast(summary, data.queuedCount ? 'success' : 'info');
+            setLogs(prev => [...prev,{msg:summary,time:new Date().toLocaleTimeString(),type:'info'}]);
+            setBatchInfo(summary);
+            if (data.queuedCount > 0) setIsProcessing(true);
         } catch (error: any) {
             addToast(`Error queueing jobs: ${error.message}`, 'error');
             setLogs(prev => [...prev, { msg: `Error: ${error.message}`, time: new Date().toLocaleTimeString(), type: 'error' }]);
@@ -1231,7 +1235,7 @@ export default function Dashboard() {
                                         <span className="text-[var(--text-faint)] text-[17px] font-medium"> / {dailyLimit.toLocaleString()}</span>
                                     )}
                                 </div>
-                                <p className="label-micro mt-2">Scraped today</p>
+                                <p className="label-micro mt-2">LinkedIn visits today</p>
                                 {/* The budget bar belongs against the number it qualifies,
                                     not in a panel two columns away. */}
                                 {dailyLimit > 0 && (
@@ -1251,7 +1255,7 @@ export default function Dashboard() {
                                 <p className="fig-sub">
                                     {passRate === null
                                         ? 'Nothing judged yet today'
-                                        : `${passRate}% of the ${judgedToday.toLocaleString()} judged so far`}
+                                        : `${passRate}% of ${judgedToday.toLocaleString()} distinct leads judged`}
                                 </p>
                             </div>
                         </div>
@@ -1437,6 +1441,9 @@ export default function Dashboard() {
                                     )}
                                 </div>
 
+                                {workerState === 'paused' && workerStatus?.pauseReason === 'DAILY_LIMIT' && <p role="status" className="panel-note">
+                                    LinkedIn daily limit reached. {queueSize.toLocaleString()} queued profiles are saved. New LinkedIn visits resume {workerStatus.nextDailyResetAt ? `after ${new Date(workerStatus.nextDailyResetAt).toLocaleString()}` : 'when the daily allowance resets'} while the worker is running. Saved research can still finish without another LinkedIn visit.
+                                </p>}
                                 {workerStatus?.waitingCount > 0 && <p role="status" className="panel-note">
                                     {workerStatus.waitingCount} profiles retained for automatic retry. {workerStatus.nextRetryAt ? `Next retry after ${new Date(workerStatus.nextRetryAt).toLocaleTimeString()}.` : ''} Saved scrapes do not use another LinkedIn daily slot.
                                 </p>}
