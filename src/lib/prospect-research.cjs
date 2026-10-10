@@ -27,6 +27,17 @@ function publicUrl(value) {
     return url;
 }
 
+function decodeBody(body, headers) {
+    const zlib=require('node:zlib'), encoding=String(headers['content-encoding']||'').toLowerCase();
+    const decoder=encoding==='gzip'?zlib.gunzipSync:encoding==='deflate'?zlib.inflateSync:encoding==='br'?zlib.brotliDecompressSync:null;
+    try { return decoder?decoder(body,{maxOutputLength:MAX_BYTES}):body; }
+    catch { throw Object.assign(new Error('Website response could not be decoded within the research size limit.'),{code:'UNREADABLE_RESPONSE'}); }
+}
+function pageResponse(url,status,headers,body,options) {
+    body=decodeBody(body,headers);
+    const clean={...headers};delete clean['content-encoding'];delete clean['content-length'];delete clean['set-cookie'];
+    return options.resource?{url:url.href,status,headers:clean,body}:{url:url.href,html:body.toString('utf8')};
+}
 // Validate every redirect and pin the validated DNS address to the request.
 async function fetchPublicPage(value, options = {}, redirects = 0) {
     if (redirects > 4) throw new Error('Too many website redirects.');
@@ -57,22 +68,27 @@ async function fetchPublicPage(value, options = {}, redirects = 0) {
         const request = transport.get(url, {
             signal, agent: false, family: selected.family,
             lookup: (_host, _options, callback) => callback(null, selected.address, selected.family),
-            headers: { 'User-Agent': 'Compel/1.0 (public business research)', Accept: 'text/html,application/xhtml+xml', 'Accept-Encoding': 'identity' },
+            headers: { 'User-Agent': options.userAgent || 'Compel/1.0 (public business research)', Accept: options.resource ? '*/*' : 'text/html,application/xhtml+xml', 'Accept-Encoding': 'gzip, deflate, br' },
         }, response => {
             if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
+                if(options.resource && options.followRedirects===false){resolve({url:url.href,status:response.statusCode,headers:response.headers,body:Buffer.alloc(0)});response.destroy();return;}
                 const redirect = response.headers.location;
                 if (redirect) resolve({ redirect }); else reject(new Error('Invalid website redirect.'));
                 response.destroy(); return;
             }
             if (response.statusCode >= 400) { reject(Object.assign(new Error(`Website returned HTTP ${response.statusCode}.`), { httpStatus: response.statusCode })); response.destroy(); return; }
-            if (!/text\/html|application\/xhtml\+xml/i.test(response.headers['content-type'] || '')) { reject(Object.assign(new Error('The website did not return HTML.'), { code: 'NON_HTML' })); response.destroy(); return; }
+            if (!options.resource && !/text\/html|application\/xhtml\+xml/i.test(response.headers['content-type'] || '')) { reject(Object.assign(new Error('The website did not return HTML.'), { code: 'NON_HTML' })); response.destroy(); return; }
             const chunks = []; let bytes = 0;
             response.on('data', chunk => {
                 bytes += chunk.length;
                 if (bytes > MAX_BYTES) { reject(Object.assign(new Error('Website exceeded the 4 MB research size limit.'), { code: 'PAGE_TOO_LARGE' })); response.destroy(); }
                 else chunks.push(chunk);
             });
-            response.on('end', () => resolve({ url: url.href, html: Buffer.concat(chunks).toString('utf8') }));
+            response.on('end', () => {
+                try {
+                    resolve(pageResponse(url,response.statusCode,response.headers,Buffer.concat(chunks),options));
+                } catch(error){reject(Object.assign(new Error('Website response could not be decoded within the research size limit.'),{code:'UNREADABLE_RESPONSE'}));}
+            });
             response.on('error', reject);
             response.on('aborted', () => reject(new Error('The website closed the connection.')));
         });
@@ -123,12 +139,20 @@ function parsePage(html, url) {
         } catch { /* unsupported link */ }
     });
     const contacts = [];
+    const contactBody=$('body').clone();
+    contactBody.find('blockquote,[class*="testimonial"],[class*="review"],[class*="credit"],[class*="vendor"],[id*="testimonial"],[id*="review"]').remove();
+    const contactText=normalText(contactBody.text()).replace(/\s*(?:\[at\]|\(at\))\s*/gi, '@').replace(/\s*(?:\[dot\]|\(dot\))\s*/gi, '.');
     const addContact = (value, explicit, businessContact = false) => {
+        if(/[a-z][A-Z]/.test(value.split('@')[1]?.split('.').at(-1)||''))return;
         const address = value.trim().toLowerCase().replace(/[.,;:]$/, '');
         if (isUnsafeContact(address)) return;
+        const index=contactText.toLowerCase().indexOf(address);
+        if(index<0&&!explicit)return;
+        const nearby=index>=0?contactText.slice(Math.max(0,index-100),index+address.length+35):'';
+        const contactInvitation=/\b(?:e-?mail|contact\s*(?:us|me)?|reach\s*(?:out|me)|get\s+in\s+touch)\b/i.test(nearby);
         const existing = contacts.find(contact => contact.address === address);
-        if (existing) { existing.explicit ||= explicit; existing.businessContact ||= businessContact; }
-        else contacts.push({ address, explicit, businessContact });
+        if (existing) { existing.explicit ||= explicit; existing.businessContact ||= businessContact; existing.contactInvitation ||= contactInvitation; }
+        else contacts.push({ address, explicit, businessContact,contactInvitation });
     };
     $('a[href]').each((_i, node) => {
         const href = $(node).attr('href') || '';
@@ -140,12 +164,29 @@ function parsePage(html, url) {
         try { if (!excluded) decodeURIComponent(href.replace(/^mailto:/i, '').split('?')[0]).split(/[,;]/).forEach(address => addContact(address, true, businessContact)); } catch { /* malformed URI */ }
     });
     structuredContacts.forEach(contact => addContact(contact.address, true, contact.businessContact));
-    const readable = body.replace(/\s*(?:\[at\]|\(at\))\s*/gi, '@').replace(/\s*(?:\[dot\]|\(dot\))\s*/gi, '.');
+    const readable = contactText.replace(/\s*(?:\[at\]|\(at\))\s*/gi, '@').replace(/\s*(?:\[dot\]|\(dot\))\s*/gi, '.');
     for (const address of readable.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []) addContact(address, false);
+    contactBody.find('footer,address,[class*="contact"],[id*="contact"]').each((_i,node)=>{
+        for(const address of ($(node).text().match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g)||[]))addContact(address,false,true);
+    });
     const identityBody = $('body').clone();
     identityBody.find('blockquote,[class*="testimonial"],[class*="review"],[class*="credit"],[id*="testimonial"],[id*="review"]').remove();
     const identityText = [title, h1, metaDescription, normalText(identityBody.text())].filter(Boolean).join('\n');
-    return { url, canonical, title, h1, description, identityText, text: [title, h1, metaDescription, body.slice(0, 20000)].filter(Boolean).join('\n'), links, contacts: contacts.slice(0, 30), readable: body.length >= 100 || description.length >= 50 || contacts.length > 0 };
+    const invalidText=(body.match(/\uFFFD/g)||[]).length>Math.max(3,body.length/100);
+    const challenge=/^(?:just a moment|access denied|connection denied|checking.*(?:connection|security)|attention required)/i.test(title)
+        || /checking the site connection security|verify you are human|enable javascript and cookies to continue/i.test(body);
+    const meaningful=!invalidText&&!challenge&&(/<(?:html|body|main|p|h[1-6]|a)\b/i.test(html));
+    return { url, canonical, title, h1, description, identityText, text: [title, h1, metaDescription, body.slice(0, 20000)].filter(Boolean).join('\n'), links, contacts: meaningful?contacts.slice(0, 30):[], readable: meaningful&&(body.length >= 100 || description.length >= 50 || contacts.length > 0) };
+}
+
+function attributableCandidate(c,input){
+    const domain=c.address.split('@')[1],sameDomain=onDomain(domain,hostOf(c.url));
+    const local=c.address.split('@')[0].replace(/[^a-z]/g,'');
+    const first=normalText(input.firstName).split(/[\s(]/)[0].toLowerCase().replace(/[^a-z]/g,'');
+    const last=normalText(input.lastName).split(/[,|]/)[0].replace(/\s+-.*$/,'').toLowerCase().replace(/[^a-z]/g,'');
+    const personal=(first.length>=3&&local.includes(first))||(last.length>=4&&local.includes(last));
+    return sameDomain || c.explicit&&(FREE_MAIL.has(domain)||c.contactPage||c.businessContact||personal&&onDomain(hostOf(c.url),domain))
+        || personal&&(c.contactPage||c.businessContact||c.contactInvitation);
 }
 
 function excerpt(text, pattern) {
@@ -161,7 +202,7 @@ function escape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 function nameOnPage(page, input) {
     const normalize = value => normalText(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().toLowerCase();
     const first = normalize(String(input.firstName || '').replace(/^(?:dr\.?|prof\.?)\s+/i, ''));
-    const last = normalize(String(input.lastName || '').split(/[,|]/)[0].replace(/\([^)]*\)/g, '').replace(/\b(?:icf|pcc|acc|mcc|phd|mba|cpcc|esq|ma|ms|msc|cec|sbc)\b/ig, ''));
+    const last = normalize(String(input.lastName || '').split(/[,|]|\s+-\s+|\s*[☕🎯💡✨]/)[0].replace(/\([^)]*\)/g, '').replace(/\b(?:icf|pcc|acc|mcc|phd|mba|cpcc|esq|ma|ms|msc|cec|sbc)\b/ig, ''));
     if (first.length < 2 || last.length < 2) return false;
     return (` ${normalize(page.identityText || page.text)} `).includes(` ${first} ${last} `);
 }
@@ -381,6 +422,8 @@ function interpretationFailure(error) {
 }
 
 async function researchProspect(input, options = {}) {
+    const {publishedProfileEmails,publishedProfileWebsites}=require('./profile-public-contacts.cjs');
+    input={...input,websites:[...new Set([...(input.websites||[]),...publishedProfileWebsites(input),input.knownWebsite].filter(Boolean))]};
     const researchedAt = options.now || new Date().toISOString();
     const research = emptyResearch(input, researchedAt);
     const profileText = normalText([input.headline, input.profileLocation ? `Profile location: ${input.profileLocation}` : '', input.about].filter(Boolean).join('\n'));
@@ -390,10 +433,19 @@ async function researchProspect(input, options = {}) {
     else if (input.latestPostText) research.limitations.push('Undated or older profile activity was retained as context, but cannot establish current demand.');
     const { crawlWebsiteRoutes, websiteInputs } = require('./website-crawler.cjs');
     const candidates = websiteInputs(input);
+    const profileContacts=[...publishedProfileEmails(input),...(input.profileIdentityConfirmed&&input.emailSource==='linkedin'?(input.emails||[]).filter(e=>!isUnsafeContact(e)).map(address=>({address:address.toLowerCase(),source:'linkedin',url:input.linkedinUrl||input.url,ownership:'PUBLISHED'})):[])];
+    if(options.qualificationFirst&&!options.previousResearch&&profileContacts.length&&activityAge>=0&&activityAge<=30){
+        research.contacts=profileContacts;
+        const roots=candidates.filter(u=>!isPlatformWebsite(u)).flatMap(u=>{try{return [publicUrl(u).href];}catch{return [];}});
+        research.website=roots[0]||'';research.websiteStatus=roots.length?'UNCONFIRMED':'NONE';
+        research.crawl={version:2,attributionVersion:2,complete:!roots.length,retryable:!!roots.length,maxRoutes:600,storageLimited:false,attempted:[],visited:[],pending:roots,failed:[],roots,matchedHosts:[],contactMatchedHosts:[],discovered:roots.length,inspected:0,contactPages:0,descriptionPages:0,stoppedReason:roots.length?'Published profile email found; website research can continue separately.':'',candidates:[]};
+        deriveRules(input,research,sources,[]);return validateResearch(research);
+    }
     const crawled = await crawlWebsiteRoutes(input, {
         publicUrl, parsePage, ownedPage, contactMatchedPage, fetchPage: options.fetchPage || fetchPublicPage, now: researchedAt,
         maxPages: options.maxPages || MAX_PAGES, maxTimeMs: options.maxTimeMs || MAX_TOTAL_MS, maxRoutes: options.maxRoutes,
         previousResearch: options.previousResearch,
+        renderPage:options.renderPage,
     });
     const pages = crawled.parsed;
     sources.push(...crawled.sources);
@@ -415,12 +467,13 @@ async function researchProspect(input, options = {}) {
         const sameDomain = onDomain(domain, hostOf(c.url));
         // A practice's real contact page can publish a different brand's inbox.
         // Unrelated foreign addresses in testimonials or vendor links stay out.
-        if (sameDomain || c.explicit && (FREE_MAIL.has(domain) || c.contactPage || c.businessContact)) research.contacts.push({ address: c.address, source: 'website', url: c.url, ownership: sameDomain ? 'DOMAIN_MATCH' : 'PUBLISHED' });
+        if (attributableCandidate(c,input)) research.contacts.push({ address: c.address, source: 'website', url: c.url, ownership: sameDomain ? 'DOMAIN_MATCH' : 'PUBLISHED' });
     }
     if (options.previousResearch) research.contacts.push(...options.previousResearch.contacts.filter(contact => !research.contacts.some(current => current.address === contact.address)));
     for (const address of input.emailSource === 'linkedin' ? (input.emails || []) : []) {
         if (!isUnsafeContact(address)) research.contacts.unshift({ address: address.toLowerCase(), source: 'linkedin', url: sources[0].url, ownership: input.profileIdentityConfirmed ? 'PUBLISHED' : 'UNCONFIRMED' });
     }
+    research.contacts.unshift(...publishedProfileEmails(input));
     // Retain a plausible existing address as unconfirmed, without claiming a mailbox check.
     if (input.email && !research.contacts.some(c => c.address === input.email.toLowerCase()) && !isUnsafeContact(input.email)) research.contacts.push({ address: input.email.toLowerCase(), source: input.emailSource === 'pattern_guess' ? 'pattern_guess' : 'website', url: research.website, ownership: input.emailSource === 'pattern_guess' && ownedHost && onDomain(input.email.split('@')[1], ownedHost) ? 'GUESSED' : 'UNCONFIRMED' });
     try {
@@ -456,4 +509,4 @@ async function researchProspect(input, options = {}) {
     return validateResearch(research);
 }
 
-module.exports = { MAX_PAGES, DEFAULT_RESEARCH_MODEL, publicAddress, publicUrl, fetchPublicPage, parsePage, ownedPage, researchProspect, RESEARCH_PROMPT };
+module.exports = { MAX_PAGES, DEFAULT_RESEARCH_MODEL, publicAddress, publicUrl, fetchPublicPage, parsePage, ownedPage, researchProspect, attributableCandidate, RESEARCH_PROMPT };

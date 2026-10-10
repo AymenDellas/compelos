@@ -15,6 +15,8 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { researchProspect } = require('./src/lib/prospect-research.cjs');
+const {extractActivity}=require('./src/lib/linkedin-activity.cjs');
+const {publishedProfileWebsites}=require('./src/lib/profile-public-contacts.cjs');
 const { identityFromMe } = require('./src/lib/linkedin-session-identity.cjs');
 const {failureOf}=require('./src/lib/worker-failure.cjs');
 const { VERSION: QUALIFICATION_VERSION, assessProspect, pipelineForAssessment, extractMatchingProfile, extractProfileLocation, extractProfileContactInfo, isPlatformWebsite, isUnsafeContact, hostOf } = require('./src/lib/prospect-qualification.cjs');
@@ -600,23 +602,9 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
         if (result.websites.length === 0) {
             result.logs.push('No website in contact info — trying fallback chain...');
 
-            // Layer 2: Parse About/Summary section for URLs
-            if (profileRes.status === 200) {
-                for (const summary of [result.about]) {
-                    if (summary) {
-                        const urlRegex = /https?:\/\/[^\s"'<>)\]]+/gi;
-                        const aboutUrls = (summary.match(urlRegex) || [])
-                            .filter(u => !u.includes('linkedin.com') && !u.includes('licdn.com'))
-                            .map(u => u.replace(/[.,;:!?)]+$/, ''));
-                        if (aboutUrls.length > 0) {
-                            result.websites.push(...aboutUrls);
-                            result.website = aboutUrls[0];
-                            result.websiteSource = 'about_section';
-                            result.logs.push(`Fallback L2: Found ${aboutUrls.length} URL(s) in About section`);
-                        }
-                    }
-                }
-            }
+            const aboutUrls=publishedProfileWebsites(result);
+            result.websites.push(...aboutUrls);
+            if(aboutUrls.length){result.website=aboutUrls[0];result.websiteSource='about_section';result.logs.push('Published About websites: '+aboutUrls.length);}
 
             // Layer 3: Featured section links
             if (result.websites.length === 0) {
@@ -652,102 +640,11 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
                 `/voyager/api/identity/profileUpdatesV2?count=10&includeLongTermHistory=true&moduleKey=creator_profile_all_content_view%3Adesktop&numComments=0&numLikes=0&profileUrn=${encodeURIComponent(profileUrn)}&q=memberShareFeed`
             );
             if (actRes.status === 200) {
-                const str = JSON.stringify(actRes.data);
-
-                // Method 1: Extract activity URN snowflake IDs (most reliable)
-                const activityUrns = str.match(/urn:li:activity:(\d+)/g) || [];
-                const urnDates = [];
-                for (const urn of activityUrns) {
-                    try {
-                        const id = BigInt(urn.match(/\d+/)[0]);
-                        const tsMs = Number(id >> BigInt(22));
-                        const d = new Date(tsMs);
-                        if (d.getFullYear() > 2015 && d.getFullYear() < 2100) urnDates.push(d);
-                    } catch {}
-                }
-
-                // Method 2: Extract timestamp fields
-                const timestamps = [];
-                let m;
-                const regex = /"(?:createdAt|postedAt|publishedAt|lastModifiedAt)"\s*:\s*(\d{13})/g;
-                while ((m = regex.exec(str)) !== null) timestamps.push(parseInt(m[1]));
-
-                // Method 3: Check paging metadata (if elements exist, there's activity)
-                const hasElements = str.includes('"elements"') && !str.includes('"elements":[]');
-
-                log(`  [Activity] URN dates: ${urnDates.length}, Timestamp fields: ${timestamps.length}, Has elements: ${hasElements}, Response size: ${str.length}`);
-
-                if (urnDates.length > 0) {
-                    urnDates.sort((a, b) => b - a);
-                    const days = Math.floor((Date.now() - urnDates[0].getTime()) / 86400000);
-                    result.activityStatus = days <= ACTIVITY_DAYS_THRESHOLD ? 'Active' : 'Inactive';
-                    result.lastActivityAt = urnDates[0].toISOString();
-                    result.logs.push(`Latest post (URN): ${urnDates[0].toISOString().slice(0,10)} (${days} days ago) → ${result.activityStatus}`);
-                } else if (timestamps.length > 0) {
-                    timestamps.sort((a, b) => b - a);
-                    const days = Math.floor((Date.now() - timestamps[0]) / 86400000);
-                    result.activityStatus = days <= ACTIVITY_DAYS_THRESHOLD ? 'Active' : 'Inactive';
-                    result.lastActivityAt = new Date(timestamps[0]).toISOString();
-                    result.logs.push(`Latest post (timestamp): ${days} days ago → ${result.activityStatus}`);
-                } else if (hasElements) {
-                    result.activityStatus = 'Unknown';
-                    result.logs.push('Activity elements found without a reliable date; freshness remains unknown');
-                } else {
-                    result.activityStatus = 'Inactive';
-                    result.logs.push('No posts found → Inactive');
-                }
-
-                // ── Extract latest post text for hook generation ──
-                try {
-                    const postTexts = [];
-
-                    // Helper to deeply extract text from a commentary object
-                    function extractTextFrom(val) {
-                        if (typeof val === 'string') return val;
-                        if (val && typeof val === 'object') {
-                            if (val.text && typeof val.text.text === 'string') return val.text.text;
-                            if (typeof val.text === 'string') return val.text;
-                        }
-                        return null;
-                    }
-
-                    // Recursively search the entire activity response for post commentary
-                    function searchForCommentary(obj) {
-                        if (!obj || typeof obj !== 'object') return;
-                        if (Array.isArray(obj)) {
-                            for (const item of obj) searchForCommentary(item);
-                            return;
-                        }
-
-                        // Skip actor/profile objects to avoid grabbing headlines
-                        const type = (obj.$type || obj['$type'] || '').toLowerCase();
-                        if (type.includes('profile') || type.includes('actor') || type.includes('member')) return;
-
-                        for (const [key, value] of Object.entries(obj)) {
-                            if (key === 'commentary' || key === 'shareCommentary') {
-                                const txt = extractTextFrom(value);
-                                if (txt && txt.length > 50) postTexts.push(txt);
-                            } else {
-                                searchForCommentary(value);
-                            }
-                        }
-                    }
-
-                    if (actRes.data) {
-                        searchForCommentary(actRes.data);
-                    }
-
-                    if (postTexts.length > 0) {
-                        // Take the longest post (usually the most substantive)
-                        postTexts.sort((a, b) => b.length - a.length);
-                        result.latestPostText = postTexts[0].substring(0, 2000);
-                        result.logs.push(`Captured latest post text (${result.latestPostText.length} chars)`);
-                    } else {
-                        result.logs.push('No post text found in activity feed');
-                    }
-                } catch (postExtractErr) {
-                    result.logs.push(`Post text extraction failed: ${postExtractErr.message}`);
-                }
+                const activity=extractActivity(actRes.data,{profileUrn,profileUrl:result.url});
+                Object.assign(result,activity);
+                const e=activity.activityEvidence;
+                result.logs.push('Activity: '+activity.activityStatus+' — '+e.reason+' ('+e.feedElements+' feed records, '+e.unresolved+' undated/unmatched)');
+                if(e.selected)result.logs.push('Dated activity: '+e.selected.at+'; source '+e.selected.method+'; '+e.selected.association);
             } else {
                 result.activityStatus = 'Unknown';
                 result.logs.push(`Activity check failed: ${actRes.status}`);
@@ -779,9 +676,14 @@ async function enrichAndFinalize(result, browserInstance, retryCount = 0) {
         delete result.failure;
         const previousResearch = result.prospectQualification?.baseResearch || result.prospectQualification?.research;
         result.logs.push('Finding a published email and checking LinkedIn activity within 30 days. Crawling actual website links...');
+        let knownWebsite='';
+        if(dbWorker&&result.profileIdentityConfirmed){
+            try{const slug=result.url.match(/\/in\/([^/?#]+)/i)?.[1]?.toLowerCase();knownWebsite=(await dbWorker.pool.query("SELECT website FROM leads WHERE lower(substring(linkedin_url from '/in/([^/?#]+)'))=$1 AND NULLIF(website,'') IS NOT NULL ORDER BY created_at LIMIT 1",[slug])).rows[0]?.website||'';}catch{result.logs.push('Saved website lookup unavailable; published profile links are retained.');}
+        }
+        const renderPage=typeof browserInstance?.createBrowserContext==='function'?require('./src/lib/public-page-browser.cjs').createPageRenderer(browserInstance):undefined;
         const research = await researchProspect({
-            ...result, linkedinUrl: result.url, email: result.primaryEmail || result.emails[0] || '',
-        }, { ai: false, previousResearch });
+            ...result, linkedinUrl: result.url, knownWebsite, email: result.primaryEmail || result.emails[0] || '',
+        }, { ai: false, previousResearch,renderPage,qualificationFirst:true });
         if (retryCount >= 3 && research.crawl && !research.crawl.complete && research.crawl.retryable !== false) {
             research.crawl.retryable = false;
             research.crawl.stoppedReason = 'Automatic website retries exhausted; saved routes remain for manual review. ' + research.crawl.stoppedReason;

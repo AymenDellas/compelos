@@ -20,6 +20,7 @@ const TIER_LABELS = { A: 'Contact now', B: 'Investigate', C: 'Nurture', OUTSIDE_
 const PLATFORM_DOMAINS = new Set([
     'linkedin.com', 'instagram.com', 'facebook.com', 'youtube.com', 'youtu.be', 'twitter.com', 'x.com',
     'slideshare.net', 'topmate.io', 'linktr.ee', 'linktree.com', 'calendly.com', 'cal.com',
+    'scheduler.zoom.us','as.me','prezi.com','podcasts.apple.com','open.spotify.com','creators.spotify.com','anchor.fm',
     'tidycal.com', 'acuityscheduling.com', 'live.vcita.com', 'bit.ly', 'tinyurl.com',
     'voyagela.com', 'voyagedenver.com', 'canvasrebel.com', 'boldjourney.com', 'shoutoutla.com',
     'coachingfederation.org', 'noomii.com', 'bark.com', 'thumbtack.com', 'meetup.com', 'eventbrite.com',
@@ -73,7 +74,8 @@ function emptyResearch(input = {}, now = new Date().toISOString()) {
         headline: normalText(input.headline).slice(0, 1000), about: normalText(input.about).slice(0, 5000),
         profileLocation: normalText(input.profileLocation).slice(0, 500),
         latestPostText: normalText(input.latestPostText).slice(0, 2500), lastActivityAt: input.lastActivityAt || null,
-        activityStatus: ['Active', 'Inactive', 'Unknown'].includes(input.activityStatus) ? input.activityStatus : 'Unknown',
+        activityStatus: input.activityStatus==='Inactive'&&!input.lastActivityAt?'Unknown':['Active', 'Inactive', 'Unknown'].includes(input.activityStatus) ? input.activityStatus : 'Unknown',
+        activityEvidence:input.activityEvidence||null,
         linkedinUrl: input.linkedinUrl || input.url || '', website: '', websiteStatus: 'NONE',
         segments: segmentsFromText(input.headline), segment: segmentsFromText(input.headline)[0] || 'UNKNOWN',
         facts: Object.fromEntries(FACT_KEYS.map(key => [key, emptyFact()])),
@@ -101,6 +103,12 @@ function validateResearch(value) {
     const research = emptyResearch(value, value.researchedAt);
     research.linkedinUrl = typeof research.linkedinUrl === 'string' && validHttpUrl(research.linkedinUrl) ? research.linkedinUrl.slice(0, 2000) : '';
     research.lastActivityAt = validDate(value.lastActivityAt) ? value.lastActivityAt : null;
+    if(!research.lastActivityAt)research.activityStatus='Unknown';
+    if(value.activityEvidence?.version===1){
+        const e=value.activityEvidence;
+        const record=v=>v&&validDate(v.at)?{postUrn:normalText(v.postUrn).slice(0,200),authorUrn:normalText(v.authorUrn).slice(0,200),at:v.at,method:normalText(v.method).slice(0,40),association:normalText(v.association).slice(0,50),text:normalText(v.text).slice(0,2500)}:null;
+        research.activityEvidence={version:1,endpoint:normalText(e.endpoint).slice(0,100),profileUrn:normalText(e.profileUrn).slice(0,200),profileUrl:validHttpUrl(e.profileUrl)?e.profileUrl:'',checkedAt:validDate(e.checkedAt)?e.checkedAt:research.researchedAt,feedElements:Math.max(0,Number(e.feedElements)||0),unresolved:Math.max(0,Number(e.unresolved)||0),selected:record(e.selected),records:(Array.isArray(e.records)?e.records:[]).map(record).filter(Boolean).slice(0,10),reason:normalText(e.reason).slice(0,300)};
+    }else research.activityEvidence=null;
     research.engine = ['rules', 'ai', 'manual'].includes(value.engine) ? value.engine : 'rules';
     research.website = typeof value.website === 'string' && validHttpUrl(value.website) ? value.website.slice(0, 2000) : '';
     research.websiteStatus = ['OWNED', 'PROFILE_PLATFORM', 'UNCONFIRMED', 'NONE'].includes(value.websiteStatus) ? value.websiteStatus : 'NONE';
@@ -118,16 +126,16 @@ function validateResearch(value) {
     if (value.crawl && [1, 2].includes(value.crawl.version)) {
         const urls = values => [...new Set((Array.isArray(values) ? values : []).filter(validHttpUrl).map(url => url.slice(0, 1000)))].slice(0, 2000);
         const c = value.crawl;
-        research.crawl = { version: c.version, complete: c.complete === true, visited: urls(c.visited), pending: urls(c.pending), failed: urls(c.failed), roots: urls(c.roots), matchedHosts: (c.matchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
+        research.crawl = { version: c.version, attributionVersion:c.attributionVersion===2?2:0, complete: c.complete === true, visited: urls(c.visited), pending: urls(c.pending), failed: urls(c.failed), roots: urls(c.roots), matchedHosts: (c.matchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
             contactMatchedHosts: (c.contactMatchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
             ...(c.version === 2 ? { retryable: c.retryable === true, attempted: urls(c.attempted), maxRoutes: Math.max(1, Math.min(600, Number(c.maxRoutes) || 600)), storageLimited: c.storageLimited === true } : {}),
             discovered: Math.max(0, Number(c.discovered) || 0), inspected: Math.max(0, Number(c.inspected) || 0), contactPages: Math.max(0, Number(c.contactPages) || 0), descriptionPages: Math.max(0, Number(c.descriptionPages) || 0), stoppedReason: normalText(c.stoppedReason).slice(0, 500),
-            candidates: (Array.isArray(c.candidates) ? c.candidates : []).slice(0, 150).filter(contact => contact && !isUnsafeContact(contact.address) && validHttpUrl(contact.url)).map(contact => ({ address: normalText(contact.address).toLowerCase(), url: contact.url.slice(0, 1000), explicit: contact.explicit === true, contactPage: contact.contactPage === true, businessContact: contact.businessContact === true })),
+            candidates: (Array.isArray(c.candidates) ? c.candidates : []).slice(0, 150).filter(contact => contact && !isUnsafeContact(contact.address) && validHttpUrl(contact.url)).map(contact => ({ address: normalText(contact.address).toLowerCase(), url: contact.url.slice(0, 1000), explicit: contact.explicit === true, contactPage: contact.contactPage === true, businessContact: contact.businessContact === true,contactInvitation:contact.contactInvitation===true })),
         };
         research.crawl.complete = research.crawl.complete && !research.crawl.pending.length && !research.crawl.failed.length && !research.crawl.stoppedReason;
     }
     research.limitations = (Array.isArray(value.limitations) ? value.limitations : []).slice(0, 12).map(s => normalText(s).slice(0, 500));
-    research.contacts = (Array.isArray(value.contacts) ? value.contacts : []).slice(0, 15).filter(c => c && !isUnsafeContact(c.address)).map(c => ({ address: String(c.address).trim().toLowerCase().slice(0, 320), source: ['linkedin', 'website', 'pattern_guess', 'manual'].includes(c.source) ? c.source : 'website', url: validHttpUrl(c.url) ? String(c.url).slice(0, 2000) : '', ownership: validHttpUrl(c.url) && ['PUBLISHED', 'DOMAIN_MATCH', 'GUESSED', 'UNCONFIRMED'].includes(c.ownership) ? c.ownership : 'UNCONFIRMED' }));
+    research.contacts = (Array.isArray(value.contacts) ? value.contacts : []).slice(0, 15).filter(c => c && !isUnsafeContact(c.address)).map(c => ({ address: String(c.address).trim().toLowerCase().slice(0, 320), source: ['linkedin', 'website', 'pattern_guess', 'manual'].includes(c.source) ? c.source : 'website', url: validHttpUrl(c.url) ? String(c.url).slice(0, 2000) : '', ownership: validHttpUrl(c.url) && ['PUBLISHED', 'DOMAIN_MATCH', 'GUESSED', 'UNCONFIRMED'].includes(c.ownership) ? c.ownership : 'UNCONFIRMED',...(c.excerpt?{excerpt:normalText(c.excerpt).slice(0,260)}:{}) }));
     return research;
 }
 
@@ -211,7 +219,7 @@ function assessProspect(researchInput, context = {}) {
     // Business facts rank prospects; they do not gate the email/activity qualifier.
     const activityAge = research.lastActivityAt ? (Date.parse(context.now || new Date().toISOString()) - Date.parse(research.lastActivityAt)) / 86400000 : null;
     const activity = activityAge !== null && activityAge >= 0 && activityAge <= ACTIVITY_MAX_AGE_DAYS ? 'RECENT'
-        : activityAge !== null && activityAge > ACTIVITY_MAX_AGE_DAYS || research.activityStatus === 'Inactive' ? 'INACTIVE' : 'UNKNOWN';
+        : activityAge !== null && activityAge > ACTIVITY_MAX_AGE_DAYS ? 'INACTIVE' : 'UNKNOWN';
     const attributableEmail = Boolean(email && !isUnsafeContact(email) && ownerConfirmed);
     if (!research.profileIdentityConfirmed) blockers.push('LinkedIn profile identity could not be confirmed; retry the scrape.');
     if (activity === 'INACTIVE') blockers.push('No LinkedIn activity within the last 30 days.');

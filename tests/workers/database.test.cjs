@@ -119,6 +119,22 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   assert.equal((await core.queueStatus(pool)).waitingCount,0,'email/activity workers do not wait on an unused AI budget');
   const secondResume=await core.claim(pool,'legacy-0','recovery');assert.equal(secondResume.job.retryCount,1);assert.equal(secondResume.dailyCount,beforeRetry);
   await core.complete(pool,secondResume.job.jobId,'recovery',{...savedProfile,status:'REJECTED'});
+  // An activity failure needs a new LinkedIn check, not the same undated
+  // checkpoint. It respects the account limit and survives same-day dedupe.
+  const activityBatch=await core.enqueue(pool,['https://www.linkedin.com/in/undated-recovery/']);
+  const failed={...savedProfile,url:'https://www.linkedin.com/in/undated-recovery/',status:'ERROR',failure:{stage:'linkedin',code:'ACTIVITY_UNCONFIRMED',reason:'Activity has no date',retryable:false}};
+  await pool.query("UPDATE compel_worker_jobs SET status='done',result=$2::jsonb,checkpoint=$3::jsonb,completed_at=NOW() WHERE id=$1",[activityBatch.jobs[0],JSON.stringify(failed),JSON.stringify(savedProfile)]);
+  await core.importResult(pool,'job_older_undated',{completedAt:new Date().toISOString(),result:failed});
+  // Make the original latest again, leaving an older same-day completed row.
+  await pool.query('UPDATE compel_worker_jobs SET queue_order=queue_order+100000 WHERE id=$1',[activityBatch.jobs[0]]);
+  const fresh=await core.retryFailed(pool);assert.equal(fresh.scrapeCount,1);assert.equal(fresh.researchOnly,0);
+  assert.equal((await core.claim(pool,'legacy-0','recovery')).limited,true);
+  const retryRow=(await pool.query('SELECT * FROM compel_worker_jobs WHERE id=$1',[activityBatch.jobs[0]])).rows[0];
+  assert.equal(retryRow.status,'pending');assert.equal(retryRow.checkpoint,null);assert.equal(retryRow.payload.explicitRetry,true);
+  await pool.query('UPDATE compel_linkedin_accounts SET daily_limit=400 WHERE id=$1',['legacy-0']);
+  const refreshed=await core.claim(pool,'legacy-0','recovery');assert.equal(refreshed.job.resumeResult,undefined);assert.equal(refreshed.dailyCount,beforeRetry+1);
+  await core.complete(pool,refreshed.job.jobId,'recovery',{...failed,status:'REJECTED'});
+  await pool.query('UPDATE compel_linkedin_accounts SET daily_limit=1 WHERE id=$1',['legacy-0']);
   const reservations=await Promise.all([core.reserveResearch(pool,'fixture-model',4000),core.reserveResearch(pool,'fixture-model',4000)]);
   assert.equal(reservations.filter(r=>r.ready).length,1,'all accounts share one provider budget');
   await core.coolResearch(pool,'fixture-model',new Date(Date.now()+3600000).toISOString());
@@ -154,7 +170,7 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   const freshBehindLimit=await core.enqueue(pool,['https://www.linkedin.com/in/fresh-at-cap/']);
   await pool.query('UPDATE compel_worker_jobs SET retry_at=NOW() WHERE id=$1',[continuation.id]);
   const resumed=await core.claim(pool,'legacy-0','recovery');
-  assert.equal(resumed.job.websiteContinuation,true);assert.equal(resumed.dailyCount,beforeRetry);
+  assert.equal(resumed.job.websiteContinuation,true);assert.equal(resumed.dailyCount,beforeRetry+1);
   assert.equal(resumed.job.retryCount,1);
   await core.complete(pool,resumed.job.jobId,'recovery',partial);
   for(const retryCount of [2,3]){

@@ -21,8 +21,8 @@ test('missing, guessed or placeholder emails never qualify an active profile', (
         assert.equal(a.qualification.qualified, false); assert.equal(q.pipelineForAssessment(a), 'NOT_QUALIFIED');
     }
 });
-test('old or explicitly absent activity is rejected; unconfirmed or future activity is retryable', () => {
-    for (const [lastActivityAt, activityStatus, expected] of [[new Date(Date.now()-31*86400000).toISOString(),'Inactive','INACTIVE'],[null,'Inactive','INACTIVE'],[null,'Unknown','UNKNOWN'],[new Date(Date.now()+86400000).toISOString(),'Active','UNKNOWN']]) {
+test('dated old activity is rejected; undated, unconfirmed or future activity is retryable', () => {
+    for (const [lastActivityAt, activityStatus, expected] of [[new Date(Date.now()-31*86400000).toISOString(),'Inactive','INACTIVE'],[null,'Inactive','UNKNOWN'],[null,'Unknown','UNKNOWN'],[new Date(Date.now()+86400000).toISOString(),'Active','UNKNOWN']]) {
         const a = assess({ lastActivityAt, activityStatus });
         assert.equal(a.qualification.activity, expected); assert.equal(a.qualification.needsRetry, expected === 'UNKNOWN');
         assert.equal(q.pipelineForAssessment(a), 'NOT_QUALIFIED');

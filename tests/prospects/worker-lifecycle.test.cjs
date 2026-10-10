@@ -95,6 +95,8 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
         } },
         'puppeteer-extra-plugin-stealth': () => ({}),
         './src/lib/prospect-qualification.cjs': qualification,
+        './src/lib/linkedin-activity.cjs': require('../../src/lib/linkedin-activity.cjs'),
+        './src/lib/profile-public-contacts.cjs': require('../../src/lib/profile-public-contacts.cjs'),
         './src/lib/prospect-research.cjs': { researchProspect: () => assert.fail('No live research') },
         './src/lib/linkedin-session-identity.cjs': require('../../src/lib/linkedin-session-identity.cjs'),
         './src/lib/linkedin-signout.cjs': require('../../src/lib/linkedin-signout.cjs'),

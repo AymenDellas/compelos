@@ -8,13 +8,15 @@ export type ProspectReview = { facts: Partial<Record<FactKey, { state: FactState
 export type ProspectResearch = {
     version: number; researchedAt: string; engine: 'rules' | 'ai' | 'manual'; profileIdentityConfirmed: boolean;
     headline: string; about: string; profileLocation: string; latestPostText: string; lastActivityAt: string | null; activityStatus: 'Active' | 'Inactive' | 'Unknown'; linkedinUrl: string;
+    activityEvidence?: {version:1; endpoint:string; profileUrn:string; profileUrl:string; checkedAt:string; feedElements:number; unresolved:number; selected:ActivityRecord|null; records:ActivityRecord[]; reason:string}|null;
     website: string; websiteStatus: 'OWNED' | 'PROFILE_PLATFORM' | 'UNCONFIRMED' | 'NONE';
     segments: ProspectSegment[]; segment: ProspectSegment; facts: Record<FactKey, ProspectFact>;
     pages: { url: string; label: string; status: 'inspected' | 'blocked' | 'skipped'; note: string; attempts?: number; retryable?: boolean; contactPage?: boolean; hasDescription?: boolean }[]; limitations: string[];
-    contacts: { address: string; source: 'linkedin' | 'website' | 'pattern_guess' | 'manual'; url: string; ownership: 'PUBLISHED' | 'DOMAIN_MATCH' | 'GUESSED' | 'UNCONFIRMED' }[];
+    contacts: { address: string; source: 'linkedin' | 'website' | 'pattern_guess' | 'manual'; url: string; ownership: 'PUBLISHED' | 'DOMAIN_MATCH' | 'GUESSED' | 'UNCONFIRMED'; excerpt?:string }[];
     description: {url: string; text: string} | null;
-    crawl: {version: number; complete: boolean; retryable?: boolean; attempted?: string[]; maxRoutes?: number; storageLimited?: boolean; visited: string[]; pending: string[]; failed: string[]; roots: string[]; matchedHosts: string[]; discovered: number; inspected: number; contactPages: number; descriptionPages: number; stoppedReason: string; candidates: {address: string; url: string; explicit: boolean; contactPage: boolean; businessContact?: boolean}[]} | null;
+    crawl: {version: number; attributionVersion?:number; complete: boolean; retryable?: boolean; attempted?: string[]; maxRoutes?: number; storageLimited?: boolean; visited: string[]; pending: string[]; failed: string[]; roots: string[]; matchedHosts: string[];contactMatchedHosts?:string[]; discovered: number; inspected: number; contactPages: number; descriptionPages: number; stoppedReason: string; candidates: {address: string; url: string; explicit: boolean; contactPage: boolean; businessContact?: boolean;contactInvitation?:boolean}[]} | null;
 };
+export type ActivityRecord={postUrn:string;authorUrn:string;at:string;method:string;association:string;text:string};
 export type ProspectAssessment = {
     version: number; researchedAt: string; tier: ProspectTier; segment: ProspectSegment; segments: ProspectSegment[]; score: number;
     businessFit: 'MATCH' | 'POTENTIAL' | 'OUTSIDE_ICP' | 'UNKNOWN'; readiness: 'READY_TO_APPROACH' | 'EARLY' | 'NEEDS_REVIEW'; engagementReady: boolean;

@@ -8,7 +8,7 @@ const { createRequire } = require('node:module');
 const file = require.resolve('../../src/lib/prospect-research.cjs');
 const localRequire = createRequire(file);
 
-function fetcher({ html = '<p>Readable business page</p>', status = 200, type = 'text/html', redirect } = {}) {
+function fetcher({ html = '<p>Readable business page</p>', status = 200, type = 'text/html', redirect, encoding } = {}) {
     const calls = [];
     const transport = { get(url, options, callback) {
         calls.push({ url: url.href, options });
@@ -16,7 +16,7 @@ function fetcher({ html = '<p>Readable business page</p>', status = 200, type = 
         queueMicrotask(() => {
             const response = new EventEmitter();
             response.statusCode = status;
-            response.headers = { 'content-type': type, ...(redirect ? { location: redirect } : {}) };
+            response.headers = { 'content-type': type, ...(redirect ? { location: redirect } : {}),...(encoding?{'content-encoding':encoding}:{}) };
             // Node emits aborted when a response is deliberately destroyed.
             response.destroy = () => response.emit('aborted');
             callback(response);
@@ -31,6 +31,17 @@ function fetcher({ html = '<p>Readable business page</p>', status = 200, type = 
     return { fetch: context.module.exports.fetchPublicPage, calls };
 }
 const publicLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+
+test('compressed responses decode into real HTML and decompression cannot exceed the research size limit',async()=>{
+ const zlib=require('node:zlib'),html='<html><body>Contact ava@practice.test</body></html>';
+ for(const [encoding,compress]of [['gzip',zlib.gzipSync],['br',zlib.brotliCompressSync],['deflate',zlib.deflateSync]]){
+  const reader=fetcher({html:compress(Buffer.from(html)),encoding});
+  assert.equal((await reader.fetch('https://practice.test/',{lookup:publicLookup})).html,html);
+  assert.match(reader.calls[0].options.headers['Accept-Encoding'],/gzip/);
+ }
+ const bomb=fetcher({html:zlib.gzipSync(Buffer.alloc(4*1024*1024+1,65)),encoding:'gzip'});
+ await assert.rejects(bomb.fetch('https://practice.test/',{lookup:publicLookup}),/size limit/);
+});
 
 test('large HTML above the old 900 KB limit is readable and the real size error survives response destruction', async () => {
     const large = fetcher({ html: '<p>' + 'x'.repeat(1242384) + '</p>' });

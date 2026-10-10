@@ -265,7 +265,7 @@ async function queueCandidates(pool) {
 async function skipCompletedDuplicates(pool) {
  return (await pool.query(`UPDATE compel_worker_jobs j SET status='cancelled',completed_at=NOW(),
   result=jsonb_build_object('status','SKIPPED','url',j.profile_key,'reason','Profile already completed today; previous result retained')
-  WHERE j.status='pending' AND j.checkpoint IS NULL AND j.payload->>'websiteContinuation' IS DISTINCT FROM 'true'
+  WHERE j.status='pending' AND j.checkpoint IS NULL AND j.payload->>'websiteContinuation' IS DISTINCT FROM 'true' AND j.payload->>'explicitRetry' IS DISTINCT FROM 'true'
    AND EXISTS(SELECT 1 FROM compel_worker_jobs d WHERE d.profile_key=j.profile_key AND d.status='done'
     AND d.completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'))`)).rowCount;
 }
@@ -327,12 +327,12 @@ async function retryFailed(pool) {
    ORDER BY j.created_at FOR UPDATE OF j`)).rows;
   for(const job of jobs) {
    if((await client.query(`SELECT id FROM compel_worker_jobs WHERE profile_key=$1 AND status IN ('pending','processing')`,[job.profile_key])).rowCount)continue;
-   const saved=job.result.profileIdentityConfirmed&&failureOf(job.result).stage!=='linkedin'?job.result:job.checkpoint;
+   const saved=failureOf(job.result).stage==='linkedin'?null:job.result.profileIdentityConfirmed?job.result:job.checkpoint;
    const resume=saved?structuredClone(saved):null;
    // An explicit manual retry rechecks observed roots/contact routes while
    // retaining profile/activity evidence and previously published contacts.
    if(resume)for(const research of [resume.prospectQualification?.research,resume.prospectQualification?.baseResearch])if(research?.crawl)research.crawl.version=1;
-   await client.query(`UPDATE compel_worker_jobs SET status='pending',checkpoint=$2::jsonb,retry_at=NULL,retry_count=0,owner=NULL,account_id=NULL,lease_until=NULL WHERE id=$1`,[job.id,resume?json(resume):null]);
+   await client.query(`UPDATE compel_worker_jobs SET status='pending',checkpoint=$2::jsonb,payload=payload || '{"explicitRetry":true}'::jsonb,retry_at=NULL,retry_count=0,owner=NULL,account_id=NULL,lease_until=NULL WHERE id=$1`,[job.id,resume?json(resume):null]);
    count++;if(resume)researchOnly++;
   }
   await client.query('COMMIT');
