@@ -37,6 +37,21 @@ test('the worker qualifies email/activity without AI or business gates, and retr
         if(unknown)assert.equal(result.failure.stage,'linkedin');
     }
 });
+
+test('the final saved-profile pass stops automatic research and explains exhaustion even if routes remain', async () => {
+    for(const emailFound of [false,true]) {
+        const r=research({lastActivityAt:new Date().toISOString(),...(emailFound?{}:{contacts:[]})});
+        r.crawl={version:2,complete:false,retryable:true,maxRoutes:600,attempted:[],visited:[],pending:['https://avamorgan.test/actual-route'],failed:[],roots:['https://avamorgan.test/'],matchedHosts:['avamorgan.test'],candidates:[],stoppedReason:'Pass budget reached',inspected:0};
+        const enrich=load('enrichAndFinalize','function isProcessRunning',{
+            researchProspect:async()=>r,assessProspect:q.assessProspect,prioritizeEmails:emails=>emails,hostOf:q.hostOf,
+        });
+        const result=await enrich({url:r.linkedinUrl,emails:[],logs:[]},null,3);
+        assert.equal(result.status,emailFound?'QUALIFIED':'ERROR');
+        assert.equal(result.prospectQualification.research.crawl.retryable,false);
+        assert.match(result.prospectQualification.research.crawl.stoppedReason,/retries exhausted/);
+        if(!emailFound){assert.equal(result.failure.retryable,false);assert.match(result.failure.reason,/manual review/);}
+    }
+});
 test('the real CRM persistence path sends evidence without generating opening lines or using sales outcomes', async () => {
     let payload, url; let hookCalls = 0;
     const persist = load('nativePostProcess', 'async function main(', {

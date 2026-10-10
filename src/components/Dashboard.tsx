@@ -1541,7 +1541,7 @@ export default function Dashboard() {
                                                         </div>
                                                         {lead.status === 'ERROR' && <p className="mt-1 text-xs text-[var(--text-dim)] max-w-64">{failureOf(lead).reason}</p>}
                                                         {lead.status === 'REJECTED' && lead.prospectQualification?.nextAction && <p className="mt-1 text-xs text-[var(--text-dim)] max-w-64">{lead.prospectQualification.nextAction}</p>}
-                                                        {lead.prospectQualification?.research?.crawl && <p className="mt-1 text-xs text-[var(--text-faint)] max-w-64">{lead.prospectQualification.research.crawl.inspected} pages read · {lead.prospectQualification.research.crawl.complete ? 'Crawl complete' : 'Crawl incomplete'}</p>}
+                                                        {lead.prospectQualification?.research?.crawl && <p className="mt-1 text-xs text-[var(--text-faint)] max-w-64">{lead.prospectQualification.research.crawl.inspected} pages read · {lead.prospectQualification.research.crawl.complete ? 'Crawl complete' : lead.prospectQualification.research.crawl.retryable === false ? 'Website needs attention' : 'Crawl saved for retry'}</p>}
                                                     </td>
                                                     <td className="px-4 py-2.5 align-top">
                                                         {sites.length > 0 ? (

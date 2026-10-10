@@ -266,10 +266,10 @@ async function complete(pool,id,owner,result) {
  ), continuation AS (
   INSERT INTO compel_worker_jobs(id,profile_key,payload,checkpoint,retry_at,retry_count)
   SELECT $4,profile_key,payload || jsonb_build_object('jobId',$4::text,'websiteContinuation',true),$3::jsonb,NOW()+interval '30 seconds',
-   CASE WHEN $5 THEN 0 ELSE retry_count+1 END FROM finished
-  WHERE $6 AND ($5 OR retry_count<3) ON CONFLICT DO NOTHING RETURNING id
+   retry_count+1 FROM finished
+  WHERE $5 AND retry_count<3 ON CONFLICT DO NOTHING RETURNING id
  ) SELECT id,(SELECT id FROM continuation) AS continuation_id FROM finished`,
- [id,owner,json(result),'job_'+randomUUID(),Boolean(crawl?.pending?.length),Boolean(result.status==='QUALIFIED'&&crawl&&!crawl.complete&&!/storage limit/i.test(crawl.stoppedReason))]);
+ [id,owner,json(result),'job_'+randomUUID(),Boolean(result.status==='QUALIFIED'&&crawl&&!crawl.complete&&crawl.retryable!==false&&!/storage limit/i.test(crawl.stoppedReason))]);
  if (!update.rowCount) throw new Error('Job lease lost; result was not overwritten.');
 }
 async function checkpoint(pool,id,owner,result) {
@@ -289,7 +289,11 @@ async function retryFailed(pool) {
   const jobs=(await client.query(`SELECT * FROM compel_worker_jobs WHERE status='done' AND result->>'status'='ERROR' AND created_at>=(SELECT date_trunc('minute',max(created_at)) FROM compel_worker_jobs) FOR UPDATE`)).rows;
   for(const job of jobs) {
    if((await client.query(`SELECT id FROM compel_worker_jobs WHERE profile_key=$1 AND status IN ('pending','processing')`,[job.profile_key])).rowCount)continue;
-   const resume=job.checkpoint||(job.result.profileIdentityConfirmed&&failureOf(job.result).stage!=='linkedin'?job.result:null);
+   const saved=job.result.profileIdentityConfirmed&&failureOf(job.result).stage!=='linkedin'?job.result:job.checkpoint;
+   const resume=saved?structuredClone(saved):null;
+   // An explicit manual retry rechecks observed roots/contact routes while
+   // retaining profile/activity evidence and previously published contacts.
+   if(resume)for(const research of [resume.prospectQualification?.research,resume.prospectQualification?.baseResearch])if(research?.crawl)research.crawl.version=1;
    await client.query(`UPDATE compel_worker_jobs SET status='pending',checkpoint=$2::jsonb,retry_at=NULL,retry_count=0,owner=NULL,account_id=NULL,lease_until=NULL WHERE id=$1`,[job.id,resume?json(resume):null]);
    count++;if(resume)researchOnly++;
   }
@@ -324,6 +328,7 @@ async function clearQueue(pool) {
  return (await pool.query(`UPDATE compel_worker_jobs SET status='cancelled',completed_at=NOW() WHERE status='pending'`)).rowCount;
 }
 function normalizeResult(result) {
+ if (result?.status==='ERROR' && /saved profile and crawl will be resumed/i.test(result.failure?.reason || ''))return {...result,failure:{...result.failure,retryable:false,reason:'Website could not be fully read; the saved profile is retained for manual retry.'}};
  if (!result?.prospectQualification?.research || result.status==='ERROR') return result;
  try {
   const q=require('./prospect-qualification.cjs');

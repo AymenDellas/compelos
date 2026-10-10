@@ -44,6 +44,7 @@ const accountArg = process.argv.indexOf('--account');
 const ACCOUNT_ID = accountArg >= 0 ? process.argv[accountArg + 1] : null;
 if (accountArg >= 0 && !/^(?:legacy-\d+|[a-f0-9-]{36})$/.test(ACCOUNT_ID || '')) throw new Error('Invalid worker account ID.');
 let dbWorker = null;
+let databaseCleanup = null;
 let settleJobs = async () => {};
 let latestStatus = { status: 'starting' };
 let signedInIdentity = null;
@@ -145,11 +146,16 @@ async function startDatabaseAccount() {
     return true;
 }
 async function stopDatabaseAccount() {
+    if (databaseCleanup) return databaseCleanup;
     if (!dbWorker) return;
-    clearInterval(dbWorker.timer);
-    try { await dbWorker.core.releaseSession(dbWorker.pool, ACCOUNT_ID, dbWorker.owner, latestStatus); } catch { /* leases expire after a disconnected host */ }
-    await dbWorker.pool.end();
+    const closing = dbWorker;
     dbWorker = null;
+    clearInterval(closing.timer);
+    databaseCleanup = (async () => {
+        try { await closing.core.releaseSession(closing.pool, ACCOUNT_ID, closing.owner, latestStatus); } catch { /* leases expire after a disconnected host */ }
+        await closing.pool.end();
+    })();
+    return databaseCleanup;
 }
 
 // ── Utilities ──
@@ -768,7 +774,7 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
 
 // ── Stage 2: enrichment (no LinkedIn session required) ──
 // Follow the site’s discovered public routes; no LinkedIn browser is needed.
-async function enrichAndFinalize(result, browserInstance) {
+async function enrichAndFinalize(result, browserInstance, retryCount = 0) {
     try {
         delete result.failure;
         const previousResearch = result.prospectQualification?.baseResearch || result.prospectQualification?.research;
@@ -776,6 +782,10 @@ async function enrichAndFinalize(result, browserInstance) {
         const research = await researchProspect({
             ...result, linkedinUrl: result.url, email: result.primaryEmail || result.emails[0] || '',
         }, { ai: false, previousResearch });
+        if (retryCount >= 3 && research.crawl && !research.crawl.complete && research.crawl.retryable !== false) {
+            research.crawl.retryable = false;
+            research.crawl.stoppedReason = 'Automatic website retries exhausted; saved routes remain for manual review. ' + research.crawl.stoppedReason;
+        }
         for (const limitation of research.limitations.filter(note => /^Automated interpretation/.test(note))) result.logs.push(limitation);
         // Business facts are advisory. A guessed email never qualifies a lead.
         result.website = research.website || result.website;
@@ -786,10 +796,10 @@ async function enrichAndFinalize(result, browserInstance) {
         result.emailSource = chosen?.source === 'website' ? 'website_scraped' : chosen?.source || '';
         result.prospectQualification = assessProspect(research, { email: result.primaryEmail });
         const q = result.prospectQualification.qualification;
-        result.status = pipelineForAssessment(result.prospectQualification) === 'QUALIFIED' ? 'QUALIFIED' : q.needsRetry ? 'ERROR' : 'REJECTED';
+        result.status = pipelineForAssessment(result.prospectQualification) === 'QUALIFIED' ? 'QUALIFIED' : q.needsRetry || q.needsAttention ? 'ERROR' : 'REJECTED';
         if (result.status === 'ERROR') result.failure = q.activity === 'UNKNOWN' || !research.profileIdentityConfirmed
             ? { stage: 'linkedin', code: 'ACTIVITY_UNCONFIRMED', reason: result.prospectQualification.blockers[0], retryable: true }
-            : { stage: 'research', code: 'CRAWL_INCOMPLETE', reason: 'Website routes remain unread; saved profile and crawl will be resumed.', retryable: true };
+            : { stage: 'research', code: 'CRAWL_INCOMPLETE', reason: research.crawl?.stoppedReason || 'Website could not be fully read; the saved profile is retained.', retryable: research.crawl?.retryable !== false };
         if (research.crawl) result.logs.push(`Website crawl: ${research.crawl.inspected} pages read, ${research.crawl.contactPages} contact pages, ${research.crawl.descriptionPages} description pages; ${research.crawl.complete ? 'all discovered routes inspected' : research.crawl.pending.length + ' pending, ' + research.crawl.failed.length + ' blocked'}.`);
         result.logs.push('Qualification: ' + result.status + ' — ' + result.prospectQualification.nextAction);
         if (!result.primaryEmail) result.logs.push('No attributable email found; the LinkedIn profile remains available.');
@@ -1433,7 +1443,7 @@ async function main() {
                 const finishJob = (async () => {
                     if (result.status !== 'ERROR') {
                         try {
-                            result = await enrichAndFinalize(result, browser);
+                            result = await enrichAndFinalize(result, browser, job.retryCount || 0);
                         } catch (e) {
                             log(`⚠️ Enrichment threw for ${jobId}: ${e.message}`);
                             if (result.status === 'PENDING') result.status = 'ERROR';
@@ -1451,13 +1461,18 @@ async function main() {
                     }
                     if(result.status==='ERROR'&&dbWorker) {
                         result.failure=result.failure||failureOf(result);
-                        if(result.failure.retryable&&(job.retryCount<3||result.failure.code==='AI_RATE_LIMIT'||result.failure.code==='CRAWL_INCOMPLETE'&&result.prospectQualification?.research?.crawl?.pending.length>0)) {
+                        if(result.failure.retryable && job.retryCount < 3) {
                             const retryAt=result.failure.retryAt||new Date(Date.now()+(result.failure.stage==='linkedin'?15000:60000)).toISOString();
                             result.failure.retryAt=retryAt;
                             if (result.failure.stage !== 'linkedin') await dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,result);
                             await dbWorker.core.defer(dbWorker.pool,jobId,dbWorker.owner,result,retryAt);
                             log(`Recovery scheduled for ${jobId}: ${result.failure.reason}`);
                             return;
+                        }
+                        if (result.failure.retryable) {
+                            result.failure.retryable = false;
+                            delete result.failure.retryAt;
+                            result.failure.reason = 'Automatic retries exhausted; the saved profile is retained for manual retry. ' + result.failure.reason;
                         }
                     }
                     if (result.status === 'QUALIFIED') dailyQualified++;

@@ -149,8 +149,21 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   await pool.query('UPDATE compel_worker_jobs SET retry_at=NOW() WHERE id=$1',[continuation.id]);
   const resumed=await core.claim(pool,'legacy-0','recovery');
   assert.equal(resumed.job.websiteContinuation,true);assert.equal(resumed.dailyCount,beforeRetry);
-  await core.complete(pool,resumed.job.jobId,'recovery',{...partial,prospectQualification:{research:{...r,crawl:{version:1,complete:true,pending:[],failed:[]}}}});
+  assert.equal(resumed.job.retryCount,1);
+  await core.complete(pool,resumed.job.jobId,'recovery',partial);
+  for(const retryCount of [2,3]){
+   const next=(await pool.query("SELECT id FROM compel_worker_jobs WHERE status='pending'")).rows[0];
+   assert.ok(next);await pool.query('UPDATE compel_worker_jobs SET retry_at=NOW() WHERE id=$1',[next.id]);
+   const claimed=await core.claim(pool,'legacy-0','recovery');
+   assert.equal(claimed.job.retryCount,retryCount,'pending routes cannot reset the continuation counter');
+   await core.complete(pool,claimed.job.jobId,'recovery',partial);
+  }
   assert.equal((await pool.query("SELECT count(*)::int AS count FROM compel_worker_jobs WHERE status='pending'")).rows[0].count,0);
+  const blockedBatch=await core.enqueue(pool,[savedProfile.url]);
+  await pool.query('UPDATE compel_worker_jobs SET checkpoint=$2::jsonb WHERE id=$1',[blockedBatch.jobs[0],JSON.stringify(partial)]);
+  const blockedParent=await core.claim(pool,'legacy-0','recovery');
+  await core.complete(pool,blockedParent.job.jobId,'recovery',{...partial,prospectQualification:{research:{...continuationResearch,crawl:{...continuationResearch.crawl,version:2,retryable:false}}}});
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM compel_worker_jobs WHERE status='pending'")).rows[0].count,0,'terminal site failures cannot create a continuation');
  }finally{
   await raw.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);await raw.end();
  }

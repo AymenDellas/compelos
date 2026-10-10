@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict'), { test } = require('node:test');
 const { researchProspect, parsePage } = require('../../src/lib/prospect-research.cjs');
+const { assessProspect, validateResearch } = require('../../src/lib/prospect-qualification.cjs');
 const input = { firstName: 'Lori', lastName: 'Brewer Collins, PCC', headline: 'Founder and CEO | Leadership Coach', profileIdentityConfirmed: true, lastActivityAt: new Date().toISOString(), websites: ['https://practice.test/'], linkedinUrl: 'https://www.linkedin.com/in/lori/' };
 const intro = '<title>Brewer Collins Leadership</title><p>Lori Brewer Collins helps leaders through leadership coaching, workshops and consulting.</p>';
 const graph = {
@@ -55,4 +56,68 @@ test('actual canonical aliases do not expand endlessly duplicated pagination rou
 test('professional credentials and Unicode accents do not conceal an otherwise matching practice identity',async()=>{
     const r=await researchProspect({...input,firstName:'Dané',lastName:'Johnson (ICF PCC)'},{ai:false,fetchPage:async url=>({url,html:'<title>Dane Johnson Coaching</title><p>Dane Johnson helps leaders through practical leadership coaching and communication workshops.</p><a href="mailto:hello@practice.test">Contact</a>'})});
     assert.equal(r.websiteStatus,'OWNED');assert.equal(r.contacts[0].address,'hello@practice.test');
+});
+
+test('calendar navigation and exports do not expand the crawl, but actual event and contact pages are read', async () => {
+    const calls=[];
+    const r=await researchProspect(input,{ai:false,fetchPage:async url=>{
+        calls.push(url);
+        return {url,html:intro+'<a href="/events/2026-10-10">Tomorrow</a><a href="/events/month/2026-11">Month</a><a href="/?ical=1">Export</a><a href="/event/workshop/?outlook-ical=1">Outlook</a><a href="/guide.docx">Guide</a><a href="/event/workshop">Workshop</a><a href="/connect-with-us">Contact</a>'};
+    }});
+    assert.deepEqual(calls.sort(),['https://practice.test/','https://practice.test/connect-with-us','https://practice.test/event/workshop']);
+    assert.equal(r.crawl.complete,true);
+});
+
+test('dead links and non-HTML downloads are skipped; a real access block remains needs-attention', async () => {
+    const fetchPage=async url=>{
+        if(url.endsWith('/gone'))throw new Error('Website returned HTTP 404.');
+        if(url.endsWith('/download'))throw new Error('The website did not return HTML.');
+        return {url,html:intro+'<a href="/gone">Old page</a><a href="/download">Download</a>'};
+    };
+    const r=await researchProspect(input,{ai:false,fetchPage});
+    assert.equal(r.crawl.complete,true);assert.equal(r.crawl.failed.length,0);
+    assert.equal(r.pages.filter(page=>page.status==='skipped').length,2);
+    const blocked=await researchProspect(input,{ai:false,fetchPage:async()=>{throw new Error('Website returned HTTP 403.');}});
+    assert.equal(blocked.crawl.retryable,false);assert.equal(blocked.crawl.complete,false);
+    const q=assessProspect(blocked).qualification;
+    assert.equal(q.qualified,false);assert.equal(q.needsRetry,false);assert.equal(q.needsAttention,true);
+    assert.match(blocked.crawl.stoppedReason,/HTTP 403/);
+});
+
+test('temporary failures have three attempts across saved resumes, never infinite retries or inflated page counts', async () => {
+    let calls=0;
+    const fetchPage=async()=>{calls++;throw new Error('HTTP 503');};
+    let r;
+    for(let n=0;n<6;n++)r=validateResearch(await researchProspect(input,{ai:false,fetchPage,previousResearch:r}));
+    assert.equal(calls,3);assert.equal(r.pages[0].attempts,3);assert.equal(r.crawl.retryable,false);
+    assert.equal(r.crawl.inspected,0);assert.match(r.crawl.stoppedReason,/automatic retries stopped/);
+});
+
+test('the total route budget persists across pass boundaries and stops an infinite real-link graph', async () => {
+    const calls=[];
+    const fetchPage=async url=>{
+        calls.push(url);
+        const number=Number(new URL(url).pathname.split('/').pop())||0;
+        return {url,html:intro+`<a href="/post/${number+1}">Next</a>`};
+    };
+    let r;
+    for(let n=0;n<8;n++)r=await researchProspect(input,{ai:false,maxRoutes:5,maxPages:2,fetchPage,previousResearch:r});
+    assert.equal(calls.length,5);assert.equal(new Set(calls).size,5);
+    assert.equal(r.crawl.inspected,5);assert.equal(r.crawl.retryable,false);assert.match(r.crawl.stoppedReason,/5-route crawl limit/);
+});
+
+test('a published footer contact can use a second business domain while vendor credits and testimonials are excluded', async () => {
+    const r=await researchProspect(input,{ai:false,fetchPage:async url=>({url,html:intro+'<footer><address><a href="mailto:hello@secondbrand.test">Email our practice</a></address><div class="site-credit"><a href="mailto:hello@designer.test">Designed by someone</a></div><div class="testimonials"><a href="mailto:person@client.test">Client</a></div></footer>'})});
+    assert.deepEqual(r.contacts.map(c=>c.address),['hello@secondbrand.test']);
+    assert.equal(r.contacts[0].ownership,'PUBLISHED');assert.equal(assessProspect(r,{email:r.contacts[0].address}).qualification.qualified,true);
+    const stored=validateResearch(r);assert.equal(stored.crawl.candidates.find(c=>c.address==='hello@secondbrand.test').businessContact,true);
+});
+
+test('legacy checkpoints retain saved evidence while roots and contact pages get one fresh inspection', async () => {
+    let r=await researchProspect(input,{ai:false,maxPages:2,fetchPage:async url=>({url,html:graph[new URL(url).pathname]})});
+    r.crawl.version=1;r.crawl.inspected=5000;
+    const calls=[];
+    r=await researchProspect(input,{ai:false,previousResearch:r,fetchPage:async url=>{calls.push(url);return {url,html:graph[new URL(url).pathname]};}});
+    assert.equal(r.crawl.version,2);assert.equal(r.crawl.complete,true);assert.equal(r.crawl.inspected,8);
+    assert.ok(calls.includes('https://practice.test/'));assert.equal(r.contacts[0].address,'hello@secondbrand.test');
 });

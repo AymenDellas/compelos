@@ -112,14 +112,16 @@ function validateResearch(value) {
         const evidence = (Array.isArray(fact.evidence) ? fact.evidence : []).slice(0, 4).filter(e => e && typeof e.excerpt === 'string' && e.excerpt.length >= 8 && typeof e.url === 'string' && validHttpUrl(e.url) && ['WEBSITE', 'PROFILE', 'MANUAL'].includes(e.source)).map(e => ({ url: e.url.slice(0, 2000), excerpt: e.excerpt.slice(0, 700), source: e.source, observedAt: validDate(e.observedAt) ? e.observedAt : research.researchedAt }));
         research.facts[key] = fact.state !== 'UNKNOWN' && !evidence.length ? emptyFact('Evidence is required for this finding.') : makeFact(fact.state, fact.value, fact.reason, evidence);
     }
-    research.pages = (Array.isArray(value.pages) ? value.pages : []).slice(0, 1000).filter(p => p && typeof p.url === 'string' && validHttpUrl(p.url)).map(p => ({ url: p.url.slice(0, 1000), label: normalText(p.label).slice(0, 150), status: p.status === 'inspected' ? 'inspected' : 'blocked', note: normalText(p.note).slice(0, 400) }));
+    research.pages = (Array.isArray(value.pages) ? value.pages : []).slice(0, 1000).filter(p => p && typeof p.url === 'string' && validHttpUrl(p.url)).map(p => ({ url: p.url.slice(0, 1000), label: normalText(p.label).slice(0, 150), status: ['inspected', 'skipped'].includes(p.status) ? p.status : 'blocked', note: normalText(p.note).slice(0, 400),
+        ...(value.crawl?.version === 2 ? { attempts: Math.max(0, Math.min(3, Number(p.attempts) || 0)), retryable: p.retryable === true, contactPage: p.contactPage === true, hasDescription: p.hasDescription === true } : {}) }));
     if (value.description && validHttpUrl(value.description.url)) research.description = { url: value.description.url.slice(0, 1000), text: normalText(value.description.text).slice(0, 2000) };
-    if (value.crawl && value.crawl.version === 1) {
+    if (value.crawl && [1, 2].includes(value.crawl.version)) {
         const urls = values => [...new Set((Array.isArray(values) ? values : []).filter(validHttpUrl).map(url => url.slice(0, 1000)))].slice(0, 2000);
         const c = value.crawl;
-        research.crawl = { version: 1, complete: c.complete === true, visited: urls(c.visited), pending: urls(c.pending), failed: urls(c.failed), roots: urls(c.roots), matchedHosts: (c.matchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
-            discovered: Math.max(0, Number(c.discovered) || 0), inspected: Math.max(0, Number(c.inspected) || 0), contactPages: Math.max(0, Number(c.contactPages) || 0), descriptionPages: Math.max(0, Number(c.descriptionPages) || 0), stoppedReason: normalText(c.stoppedReason).slice(0, 200),
-            candidates: (Array.isArray(c.candidates) ? c.candidates : []).slice(0, 150).filter(contact => contact && !isUnsafeContact(contact.address) && validHttpUrl(contact.url)).map(contact => ({ address: normalText(contact.address).toLowerCase(), url: contact.url.slice(0, 1000), explicit: contact.explicit === true, contactPage: contact.contactPage === true })),
+        research.crawl = { version: c.version, complete: c.complete === true, visited: urls(c.visited), pending: urls(c.pending), failed: urls(c.failed), roots: urls(c.roots), matchedHosts: (c.matchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
+            ...(c.version === 2 ? { retryable: c.retryable === true, attempted: urls(c.attempted), maxRoutes: Math.max(1, Math.min(600, Number(c.maxRoutes) || 600)), storageLimited: c.storageLimited === true } : {}),
+            discovered: Math.max(0, Number(c.discovered) || 0), inspected: Math.max(0, Number(c.inspected) || 0), contactPages: Math.max(0, Number(c.contactPages) || 0), descriptionPages: Math.max(0, Number(c.descriptionPages) || 0), stoppedReason: normalText(c.stoppedReason).slice(0, 500),
+            candidates: (Array.isArray(c.candidates) ? c.candidates : []).slice(0, 150).filter(contact => contact && !isUnsafeContact(contact.address) && validHttpUrl(contact.url)).map(contact => ({ address: normalText(contact.address).toLowerCase(), url: contact.url.slice(0, 1000), explicit: contact.explicit === true, contactPage: contact.contactPage === true, businessContact: contact.businessContact === true })),
         };
         research.crawl.complete = research.crawl.complete && !research.crawl.pending.length && !research.crawl.failed.length && !research.crawl.stoppedReason;
     }
@@ -215,9 +217,12 @@ function assessProspect(researchInput, context = {}) {
     else if (activity === 'UNKNOWN') blockers.push('LinkedIn activity could not be confirmed; retry the activity check.');
     if (!attributableEmail) blockers.push(!email ? 'No attributable email found.' : 'Email ownership needs confirmation.');
     const qualified = research.profileIdentityConfirmed && activity === 'RECENT' && attributableEmail;
-    const needsRetry = !research.profileIdentityConfirmed || activity === 'UNKNOWN' || (activity !== 'INACTIVE' && !attributableEmail && research.crawl?.complete === false);
-    const qualification = { policy: 'EMAIL_ACTIVITY_V1', qualified, activity, activityAgeDays: activityAge === null ? null : Math.floor(activityAge), attributableEmail, needsRetry };
+    const incompleteEmail = activity !== 'INACTIVE' && !attributableEmail && research.crawl?.complete === false;
+    const needsAttention = incompleteEmail && research.crawl.retryable === false;
+    const needsRetry = !research.profileIdentityConfirmed || activity === 'UNKNOWN' || (incompleteEmail && !needsAttention);
+    const qualification = { policy: 'EMAIL_ACTIVITY_V1', qualified, activity, activityAgeDays: activityAge === null ? null : Math.floor(activityAge), attributableEmail, needsRetry, needsAttention };
     const nextAction = qualified ? (context.emailProven ? 'Qualified: email found and recent activity confirmed.' : 'Qualified: email found and recent activity confirmed. Verify the email before sending.')
+        : needsAttention ? `Website needs attention: ${research.crawl.stoppedReason || 'Website could not be read; automatic retries stopped.'}`
         : needsRetry ? `Research incomplete: ${blockers[0] || 'continue crawling the remaining website routes.'}` : `Not qualified: ${blockers.join(' ')}`;
     return { version: VERSION, researchedAt: research.researchedAt, tier, segment: research.segment, segments: research.segments,
         score, businessFit: fit, qualification, readiness: qualified ? 'READY_TO_APPROACH' : activity === 'INACTIVE' ? 'EARLY' : 'NEEDS_REVIEW',

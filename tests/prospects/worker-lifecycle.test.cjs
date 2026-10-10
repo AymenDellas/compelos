@@ -24,7 +24,7 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
         }));
     }
     const logs = [], errors = [], exits = [], launches = [], signals = new Map(), signalTasks = [], killed = [], closedTabs = [], browserEvents = [];
-    let newPages = 0;
+    let newPages = 0, poolEnds = 0;
     let cookies=[{name:'li_at',domain:'.linkedin.com'}],logoutSaved=false;
     let alive = false, stopRequested = false;
     const requestStop = () => {
@@ -100,7 +100,7 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
         './src/lib/linkedin-signout.cjs': require('../../src/lib/linkedin-signout.cjs'),
         './src/lib/worker-failure.cjs': require('../../src/lib/worker-failure.cjs'),
         http: {}, https: {},
-        pg: { Pool: class { async query() { return {rows:[{id:accountId,email:`${accountId}@example.invalid`,secret:'encrypted',profile_key:`profile-${accountId}`,logout_request_token:signOut?'logout-token':null} ]}; } async end() {} } },
+        pg: { Pool: class { async query() { return {rows:[{id:accountId,email:`${accountId}@example.invalid`,secret:'encrypted',profile_key:`profile-${accountId}`,logout_request_token:signOut?'logout-token':null} ]}; } async end() { assert.equal(++poolEnds,1,'shutdown and main finally must share one database cleanup'); } } },
         'node:crypto': require('node:crypto'),
         './src/lib/linkedin-workers.cjs': { ensure:async()=>{},acquireSession:async()=>true,decrypt:()=>{assert.equal(signOut,false,'sign-out must not read or use saved passwords');return 'fixture';},releaseSession:async()=>{},consumeLoginRequest:async()=>true,
             finishLogout:async()=>{logoutSaved=true;return true;},
@@ -132,6 +132,7 @@ async function runWorker({ signal = 'SIGINT', stopBeforeLaunch = false, duplicat
     await completion;
     await Promise.all(signalTasks);
     assert.deepEqual(errors, []);
+    if(accountId)assert.equal(poolEnds,1);
     const statusPath = path.join(root, 'queue-results', accountId ? `worker-status-${accountId}.json` : 'worker-status.json');
     const status = files.has(statusPath) ? JSON.parse(files.get(statusPath)) : null;
     if(signOut) {

@@ -11,7 +11,7 @@ const {
 } = require('./prospect-qualification.cjs');
 
 const MAX_PAGES = 200;
-const MAX_BYTES = 900000;
+const MAX_BYTES = 4 * 1024 * 1024;
 const MAX_TOTAL_MS = 90000;
 const DEFAULT_RESEARCH_MODEL = 'openai/gpt-oss-120b';
 const MAX_AI_INPUT_CHARS = 8000;
@@ -34,12 +34,24 @@ async function fetchPublicPage(value, options = {}, redirects = 0) {
     const timeout = Math.min(options.timeoutMs || 10000, 12000);
     const signal = options.signal || AbortSignal.timeout(timeout);
     signal.throwIfAborted();
-    const addresses = await Promise.race([
-        (options.lookup || dns.lookup)(url.hostname.replace(/^\[|\]$/g, ''), { all: true }),
-        new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('Website lookup timed out.')), { once: true })),
-    ]);
+    let addresses;
+    let abortLookup;
+    try {
+        addresses = await Promise.race([
+            (options.lookup || dns.lookup)(url.hostname.replace(/^\[|\]$/g, ''), { all: true }),
+            new Promise((_, reject) => { abortLookup = () => reject(new Error('Website lookup timed out.')); signal.addEventListener('abort', abortLookup, { once: true }); }),
+        ]);
+    } catch (error) {
+        // Some sites publish a www URL without creating that DNS record. Keep
+        // the observed path and validate/pin the apex address afresh.
+        if (error.code === 'ENOTFOUND' && url.hostname.startsWith('www.')) {
+            url.hostname = url.hostname.slice(4);
+            return fetchPublicPage(url.href, { ...options, signal }, redirects + 1);
+        }
+        throw error;
+    } finally { if (abortLookup) signal.removeEventListener('abort', abortLookup); }
     if (!addresses.length || addresses.some(a => !publicAddress(a.address))) throw new Error('The website resolved to a private or unsupported address.');
-    const selected = addresses[0];
+    const selected = addresses.find(address => address.family === 4) || addresses[0];
     const result = await new Promise((resolve, reject) => {
         const transport = url.protocol === 'https:' ? https : http;
         const request = transport.get(url, {
@@ -49,15 +61,15 @@ async function fetchPublicPage(value, options = {}, redirects = 0) {
         }, response => {
             if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
                 const redirect = response.headers.location;
-                response.destroy();
-                return redirect ? resolve({ redirect }) : reject(new Error('Invalid website redirect.'));
+                if (redirect) resolve({ redirect }); else reject(new Error('Invalid website redirect.'));
+                response.destroy(); return;
             }
-            if (response.statusCode >= 400) { response.destroy(); return reject(new Error(`Website returned HTTP ${response.statusCode}.`)); }
-            if (!/text\/html|application\/xhtml\+xml/i.test(response.headers['content-type'] || '')) { response.destroy(); return reject(new Error('The website did not return HTML.')); }
+            if (response.statusCode >= 400) { reject(Object.assign(new Error(`Website returned HTTP ${response.statusCode}.`), { httpStatus: response.statusCode })); response.destroy(); return; }
+            if (!/text\/html|application\/xhtml\+xml/i.test(response.headers['content-type'] || '')) { reject(Object.assign(new Error('The website did not return HTML.'), { code: 'NON_HTML' })); response.destroy(); return; }
             const chunks = []; let bytes = 0;
             response.on('data', chunk => {
                 bytes += chunk.length;
-                if (bytes > MAX_BYTES) { response.destroy(); reject(new Error('Website exceeded the research size limit.')); }
+                if (bytes > MAX_BYTES) { reject(Object.assign(new Error('Website exceeded the 4 MB research size limit.'), { code: 'PAGE_TOO_LARGE' })); response.destroy(); }
                 else chunks.push(chunk);
             });
             response.on('end', () => resolve({ url: url.href, html: Buffer.concat(chunks).toString('utf8') }));
@@ -72,11 +84,12 @@ async function fetchPublicPage(value, options = {}, redirects = 0) {
 function parsePage(html, url) {
     const $ = cheerio.load(html);
     const structuredContacts = [];
-    const collectStructured = value => {
+    const collectStructured = (value, business = false) => {
         if (!value || typeof value !== 'object') return;
+        business ||= /Organization|LocalBusiness|ProfessionalService|ContactPoint/.test(String(value['@type'] || ''));
         for (const [key, item] of Object.entries(value)) {
-            if (key === 'email' && typeof item === 'string') structuredContacts.push(item.replace(/^mailto:/i, ''));
-            else if (typeof item === 'object') collectStructured(item);
+            if (key === 'email' && typeof item === 'string') structuredContacts.push({ address: item.replace(/^mailto:/i, ''), businessContact: business });
+            else if (typeof item === 'object' && !['review', 'author'].includes(key)) collectStructured(item, business);
         }
     };
     $('script[type="application/ld+json"]').each((_i, node) => { try { collectStructured(JSON.parse($(node).text())); } catch { /* malformed structured data */ } });
@@ -110,19 +123,23 @@ function parsePage(html, url) {
         } catch { /* unsupported link */ }
     });
     const contacts = [];
-    const addContact = (value, explicit) => {
+    const addContact = (value, explicit, businessContact = false) => {
         const address = value.trim().toLowerCase().replace(/[.,;:]$/, '');
         if (isUnsafeContact(address)) return;
         const existing = contacts.find(contact => contact.address === address);
-        if (existing) existing.explicit ||= explicit;
-        else contacts.push({ address, explicit });
+        if (existing) { existing.explicit ||= explicit; existing.businessContact ||= businessContact; }
+        else contacts.push({ address, explicit, businessContact });
     };
     $('a[href]').each((_i, node) => {
         const href = $(node).attr('href') || '';
         if (!/^mailto:/i.test(href)) return;
-        try { decodeURIComponent(href.replace(/^mailto:/i, '').split('?')[0]).split(/[,;]/).forEach(address => addContact(address, true)); } catch { /* malformed URI */ }
+        const context = $(node).parents().addBack().toArray();
+        const excluded = context.some(element => /testimonial|review|credit|powered.by|designed.by|built.by|vendor/i.test(`${$(element).attr('class') || ''} ${$(element).attr('id') || ''}`))
+            || /powered by|designed by|built by|website by/i.test(normalText($(node).parent().text()));
+        const businessContact = !excluded && context.some(element => ['footer', 'address'].includes(element.tagName) || /(?:^|[\s_-])contact(?:$|[\s_-])/i.test(`${$(element).attr('class') || ''} ${$(element).attr('id') || ''}`));
+        try { if (!excluded) decodeURIComponent(href.replace(/^mailto:/i, '').split('?')[0]).split(/[,;]/).forEach(address => addContact(address, true, businessContact)); } catch { /* malformed URI */ }
     });
-    structuredContacts.forEach(address => addContact(address, true));
+    structuredContacts.forEach(contact => addContact(contact.address, true, contact.businessContact));
     const readable = body.replace(/\s*(?:\[at\]|\(at\))\s*/gi, '@').replace(/\s*(?:\[dot\]|\(dot\))\s*/gi, '.');
     for (const address of readable.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []) addContact(address, false);
     return { url, canonical, title, h1, description, text: [title, h1, metaDescription, body.slice(0, 20000)].filter(Boolean).join('\n'), links, contacts: contacts.slice(0, 30), readable: body.length >= 100 || description.length >= 50 || contacts.length > 0 };
@@ -363,7 +380,7 @@ async function researchProspect(input, options = {}) {
     const { crawlWebsiteRoutes } = require('./website-crawler.cjs');
     const crawled = await crawlWebsiteRoutes(input, {
         publicUrl, parsePage, ownedPage, fetchPage: options.fetchPage || fetchPublicPage, now: researchedAt,
-        maxPages: options.maxPages || MAX_PAGES, maxTimeMs: options.maxTimeMs || MAX_TOTAL_MS,
+        maxPages: options.maxPages || MAX_PAGES, maxTimeMs: options.maxTimeMs || MAX_TOTAL_MS, maxRoutes: options.maxRoutes,
         previousResearch: options.previousResearch,
     });
     const pages = crawled.parsed;
@@ -386,7 +403,7 @@ async function researchProspect(input, options = {}) {
         const sameDomain = onDomain(domain, hostOf(c.url));
         // A practice's real contact page can publish a different brand's inbox.
         // Unrelated foreign addresses in testimonials or vendor links stay out.
-        if (sameDomain || c.explicit && (FREE_MAIL.has(domain) || c.contactPage)) research.contacts.push({ address: c.address, source: 'website', url: c.url, ownership: sameDomain ? 'DOMAIN_MATCH' : 'PUBLISHED' });
+        if (sameDomain || c.explicit && (FREE_MAIL.has(domain) || c.contactPage || c.businessContact)) research.contacts.push({ address: c.address, source: 'website', url: c.url, ownership: sameDomain ? 'DOMAIN_MATCH' : 'PUBLISHED' });
     }
     if (options.previousResearch) research.contacts.push(...options.previousResearch.contacts.filter(contact => !research.contacts.some(current => current.address === contact.address)));
     for (const address of input.emailSource === 'linkedin' ? (input.emails || []) : []) {
