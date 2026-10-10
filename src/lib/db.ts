@@ -1,6 +1,7 @@
 import { pool } from './pg_setup';
 import { syncHunterContacted } from './hunter-contact-sync';
 import type { ScoreReason } from './discovery-score';
+import { extractDiscoveryName } from './discovery-name';
 
 /**
  * Evidence behind a `contacted` flag. PLATFORM = a sending platform's own campaign
@@ -403,7 +404,7 @@ export type DiscoveryProvenance = {
  * becomes meaningless. A re-find increments `discovery_seen_count` instead, which
  * is a signal in its own right (feeds weight A8).
  *
- * Two deliberate exceptions to "write once", both strictly additive:
+ * Additive exceptions to "write once":
  *
  *  - `fit_score`/`fit_reasons` are backfilled when the existing row has none. That
  *    is how the pre-existing backlog acquires scores at all: those rows were
@@ -412,6 +413,8 @@ export type DiscoveryProvenance = {
  *  - A *higher* score from a later sighting wins. The score is a property of the
  *    profile, not of the query, so the best evidence seen should stand — while the
  *    provenance columns still credit the template that found it first.
+ *  - Missing names are filled from the displayed search title. Existing names
+ *    from scraping or manual edits are preserved.
  *
  * Uses the codebase's existing read-then-write shape rather than ON CONFLICT: the
  * partial unique index on `linkedin_url` is created best-effort in `createSchema`
@@ -419,6 +422,7 @@ export type DiscoveryProvenance = {
  * conflict target.
  */
 export async function insertDiscoveryProvenance(p: DiscoveryProvenance): Promise<{ inserted: boolean }> {
+    const name = extractDiscoveryName(p.title);
     const client = await pool.connect();
     try {
         const existing = await client.query(
@@ -434,9 +438,14 @@ export async function insertDiscoveryProvenance(p: DiscoveryProvenance): Promise
                 SET discovery_seen_count = COALESCE(discovery_seen_count, 1) + 1,
                     fit_score   = CASE WHEN $2::boolean THEN $3::smallint ELSE fit_score END,
                     fit_reasons = CASE WHEN $2::boolean THEN $4::jsonb    ELSE fit_reasons END,
-                    scored_at   = CASE WHEN $2::boolean THEN CURRENT_TIMESTAMP ELSE scored_at END
+                    scored_at   = CASE WHEN $2::boolean THEN CURRENT_TIMESTAMP ELSE scored_at END,
+                    first_name = CASE WHEN LOWER(BTRIM(COALESCE(first_name, ''))) IN ('', 'unknown')
+                        AND $5::text <> '' THEN $5 ELSE first_name END,
+                    last_name = CASE WHEN LOWER(BTRIM(COALESCE(first_name, ''))) IN ('', 'unknown')
+                        AND LOWER(BTRIM(COALESCE(last_name, ''))) IN ('', 'unknown')
+                        AND $5::text <> '' THEN $6 ELSE last_name END
                 WHERE id = $1
-            `, [row.id, better, p.fitScore, JSON.stringify(p.fitReasons)]);
+            `, [row.id, better, p.fitScore, JSON.stringify(p.fitReasons), name.firstName, name.lastName]);
             return { inserted: false };
         }
 
@@ -450,7 +459,7 @@ export async function insertDiscoveryProvenance(p: DiscoveryProvenance): Promise
                 fit_score, fit_reasons, scored_at
             ) VALUES (
                 $1, $2, $3, 'INBOX', 'UNVERIFIED',
-                '', '', '', '', '', '', '', '',
+                $15, $16, '', '', '', '', '', '',
                 $4, $5, $6, $7,
                 $8, $9, $10, $11,
                 $12, CURRENT_TIMESTAMP, 1,
@@ -460,7 +469,7 @@ export async function insertDiscoveryProvenance(p: DiscoveryProvenance): Promise
             generateId(), p.linkedin_url, p.location,
             p.query, p.templateId, p.niche, p.discoveryLocation,
             p.page, p.rank, p.title, p.snippet,
-            p.runId, p.fitScore, JSON.stringify(p.fitReasons),
+            p.runId, p.fitScore, JSON.stringify(p.fitReasons), name.firstName, name.lastName,
         ]);
         return { inserted: true };
     } finally {
