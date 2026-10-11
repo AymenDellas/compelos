@@ -10,7 +10,7 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
  const raw=new Pool({connectionString:process.env.DATABASE_URL,max:6,connectionTimeoutMillis:10000,ssl:{rejectUnauthorized:false}});
  const schema='compel_worker_test_'+randomUUID().replaceAll('-','');
  assert.match(schema,/^compel_worker_test_[a-f0-9]{32}$/);
- const qualify=sql=>sql.replace(/\b(compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|leads)\b/g,`"${schema}".$1`);
+ const qualify=sql=>sql.replace(/\b(compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|leads)\b/g,`"${schema}".$1`);
  const pool={query:(sql,values)=>raw.query(qualify(sql),values),connect:async()=>{
   const client=await raw.connect();return{query:(sql,values)=>client.query(qualify(sql),values),release:()=>client.release()};
  }};
@@ -43,6 +43,7 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   await assert.rejects(core.heartbeat(pool,'legacy-0','impostor',{}));
   await pool.query(`UPDATE compel_worker_jobs SET lease_until=NOW()-interval '1 minute' WHERE id=$1`,[first.job.jobId]);
   const recovered=await core.claim(pool,'legacy-1','two');assert.equal(recovered.job.jobId,first.job.jobId);
+  assert.equal(recovered.dailyCount,second.dailyCount,'expired leases and account changes do not charge the profile twice');
   await assert.rejects(core.complete(pool,first.job.jobId,'one',{status:'QUALIFIED'}));
   await core.complete(pool,recovered.job.jobId,'two',{status:'REJECTED',primaryEmail:''});
   assert.equal((await core.jobStatus(pool,recovered.job.jobId)).status,'done');
@@ -210,6 +211,42 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
   assert.equal(newStatus.workerStatus.pauseReason,'DAILY_LIMIT');
   assert.equal(newStatus.workerStatus.dailyRemaining,0);
   assert.ok(Date.parse(newStatus.workerStatus.nextDailyResetAt)>Date.now());
+  // The allowance counts profiles globally, across automatic/manual retries,
+  // account changes and restarts. Fresh profiles still obey each account cap.
+  await core.clearQueue(pool);
+  const usageBefore=(await core.settings(pool)).accounts.find(a=>a.id==='legacy-0').dailyCount;
+  await pool.query('UPDATE compel_linkedin_accounts SET daily_limit=$1 WHERE id=$2',[usageBefore+1,'legacy-0']);
+  const unique=await core.enqueue(pool,['https://ca.linkedin.com/in/UNIQUE-QUOTA/?trk=fixture']);
+  let attempt=await core.claim(pool,'legacy-0','recovery');assert.equal(attempt.job.jobId,unique.jobs[0]);
+  assert.equal(attempt.dailyCount,usageBefore+1);
+  await core.enqueue(pool,['https://www.linkedin.com/in/new-profile-at-limit/']);
+  const temporary={status:'ERROR',failure:{stage:'linkedin',code:'BROWSER_TIMEOUT',reason:'Temporary failure',retryable:true}};
+  for(let retry=1;retry<=3;retry++){
+   await core.defer(pool,attempt.job.jobId,'recovery',temporary,new Date().toISOString());
+   attempt=await core.claim(pool,'legacy-0','recovery');
+   assert.equal(attempt.job.retryCount,retry);assert.equal(attempt.dailyCount,usageBefore+1,'a retry at the cap uses no extra slot');
+  }
+  const otherUsage=(await core.settings(pool)).accounts.find(a=>a.id==='legacy-1').dailyCount;
+  await pool.query('UPDATE compel_linkedin_accounts SET daily_limit=$1 WHERE id=$2',[otherUsage,'legacy-1']);
+  await core.releaseSession(pool,'legacy-1','two',{status:'offline'});await core.acquireSession(pool,'legacy-1','restarted');
+  await pool.query("UPDATE compel_worker_jobs SET lease_until=NOW()-interval '1 minute' WHERE id=$1",[attempt.job.jobId]);
+  const switched=await core.claim(pool,'legacy-1','restarted');
+  assert.equal(switched.job.jobId,attempt.job.jobId);assert.equal(switched.dailyCount,otherUsage,'another account at its cap can finish the same profile');
+  await core.complete(pool,switched.job.jobId,'restarted',temporary);
+  await core.retryFailed(pool);
+  const manual=await core.claim(pool,'legacy-0','recovery');assert.equal(manual.job.jobId,unique.jobs[0]);assert.equal(manual.dailyCount,usageBefore+1);
+  await core.complete(pool,manual.job.jobId,'recovery',{status:'REJECTED'});
+  assert.equal((await core.claim(pool,'legacy-0','recovery')).limited,true);
+  const ledger=(await pool.query("SELECT * FROM compel_worker_profile_usage WHERE profile_key='https://www.linkedin.com/in/unique-quota/'")).rows;
+  assert.equal(ledger.length,1);assert.equal(ledger[0].account_id,'legacy-0');assert.equal(ledger[0].attempts,6);
+  await pool.query(`INSERT INTO compel_worker_profile_usage(day,profile_key,account_id,job_id)
+   VALUES((NOW() AT TIME ZONE 'UTC')::date-1,'https://www.linkedin.com/in/new-profile-at-limit/','legacy-0','previous-day')`);
+  await pool.query('UPDATE compel_linkedin_accounts SET daily_limit=$1 WHERE id=$2',[usageBefore+2,'legacy-0']);
+  const nextDay=await core.claim(pool,'legacy-0','recovery');assert.equal(nextDay.dailyCount,usageBefore+2,'a previous-day visit does not waive today\'s first reservation');
+  await core.complete(pool,nextDay.job.jobId,'recovery',{status:'ERROR'});
+  const totals=await core.queueStatus(pool);
+  assert.ok(totals.workerStatus.dailyErrors>0);
+  assert.equal(totals.workerStatus.dailyCompleted,totals.workerStatus.dailyQualified+totals.workerStatus.dailyRejected+totals.workerStatus.dailyErrors);
  }finally{
   await raw.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);await raw.end();
  }

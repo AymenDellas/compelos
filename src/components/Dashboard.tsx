@@ -749,7 +749,8 @@ export default function Dashboard() {
     const dailyLimit = workerStatus?.dailyLimit || dailyStats.limit || 0;
     const qualifiedToday = workerStatus?.dailyQualified ?? 0;
     const rejectedToday = workerStatus?.dailyRejected ?? 0;
-    const judgedToday = qualifiedToday + rejectedToday;
+    const failedToday = workerStatus?.dailyErrors ?? 0;
+    const judgedToday = workerStatus?.dailyCompleted ?? qualifiedToday + rejectedToday + failedToday;
     const passRate = judgedToday > 0 ? Math.round((qualifiedToday / judgedToday) * 100) : null;
     const budgetPct = dailyLimit > 0 ? Math.min(100, Math.round(((workerStatus?.dailyBudgetCount ?? doneToday) / dailyLimit) * 100)) : 0;
     const perHour = workerStatus?.ratePerHour ?? (workerStatus?.avgJobDurationMs
@@ -1235,7 +1236,7 @@ export default function Dashboard() {
                                         <span className="text-[var(--text-faint)] text-[17px] font-medium"> / {dailyLimit.toLocaleString()}</span>
                                     )}
                                 </div>
-                                <p className="label-micro mt-2">LinkedIn visits today</p>
+                                <p className="label-micro mt-2">Distinct profiles today</p>
                                 {/* The budget bar belongs against the number it qualifies,
                                     not in a panel two columns away. */}
                                 {dailyLimit > 0 && (
@@ -1248,15 +1249,17 @@ export default function Dashboard() {
                                         ? `${(workerStatus?.dailyRemaining ?? Math.max(0, dailyLimit - doneToday)).toLocaleString()} left in today's budget`
                                         : 'No daily cap configured'}
                                 </p>
+                                <p className="fig-sub">Retries use no extra slots</p>
                             </div>
                             <div className="fig">
                                 <div className="fig-value fig-value-signal">{qualifiedToday.toLocaleString()}</div>
                                 <p className="label-micro mt-2">Qualified today</p>
                                 <p className="fig-sub">
                                     {passRate === null
-                                        ? 'Nothing judged yet today'
-                                        : `${passRate}% of ${judgedToday.toLocaleString()} distinct leads judged`}
+                                        ? 'No completed profiles yet today'
+                                        : `${passRate}% of ${judgedToday.toLocaleString()} distinct profiles completed`}
                                 </p>
+                                {failedToday > 0 && <p className="fig-sub">{failedToday.toLocaleString()} need attention</p>}
                             </div>
                         </div>
 
@@ -1442,7 +1445,7 @@ export default function Dashboard() {
                                 </div>
 
                                 {workerState === 'paused' && workerStatus?.pauseReason === 'DAILY_LIMIT' && <p role="status" className="panel-note">
-                                    LinkedIn daily limit reached. {queueSize.toLocaleString()} queued profiles are saved. New LinkedIn visits resume {workerStatus.nextDailyResetAt ? `after ${new Date(workerStatus.nextDailyResetAt).toLocaleString()}` : 'when the daily allowance resets'} while the worker is running. Saved research can still finish without another LinkedIn visit.
+                                    Daily profile limit reached. {queueSize.toLocaleString()} queued profiles are saved. New profiles resume {workerStatus.nextDailyResetAt ? `after ${new Date(workerStatus.nextDailyResetAt).toLocaleString()}` : 'when the daily allowance resets'} while the worker is running. Retries and saved website research can continue without another daily slot.
                                 </p>}
                                 {workerStatus?.waitingCount > 0 && <p role="status" className="panel-note">
                                     {workerStatus.waitingCount} profiles retained for automatic retry. {workerStatus.nextRetryAt ? `Next retry after ${new Date(workerStatus.nextRetryAt).toLocaleTimeString()}.` : ''} Saved scrapes do not use another LinkedIn daily slot.

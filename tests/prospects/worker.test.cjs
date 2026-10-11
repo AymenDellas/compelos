@@ -25,7 +25,7 @@ test('the real enrichment function retains business fit but rejects qualificatio
     assert.equal(actualInput.url, r.linkedinUrl); assert.equal(result.prospectQualification.contact.channel, 'LINKEDIN_ONLY');
 });
 
-test('the worker qualifies email/activity without AI or business gates, and retries an unknown activity check', async () => {
+test('the worker qualifies email/activity without AI or business gates, and retains undated activity for review', async () => {
     for (const unknown of [false, true]) {
         const r=research({facts:Object.fromEntries(q.FACT_KEYS.map(key=>[key,q.emptyFact()])),segments:[],lastActivityAt:unknown?null:new Date().toISOString(),activityStatus:unknown?'Unknown':'Active'});
         let options;
@@ -34,7 +34,18 @@ test('the worker qualifies email/activity without AI or business gates, and retr
         });
         const result=await enrich({url:r.linkedinUrl,emails:[],logs:[]},null);
         assert.equal(options.ai,false);assert.equal(result.status,unknown?'ERROR':'QUALIFIED');
-        if(unknown)assert.equal(result.failure.stage,'linkedin');
+        if(unknown){assert.equal(result.failure.stage,'linkedin');assert.equal(result.failure.retryable,false);assert.match(result.failure.reason,/manual review/);}
+    }
+});
+
+test('only a transient activity request gets one automatic retry; empty successful feeds do not', async () => {
+    const r=research({lastActivityAt:null,activityStatus:'Unknown'});
+    const enrich=load('enrichAndFinalize','function isProcessRunning',{
+        researchProspect:async()=>r,assessProspect:q.assessProspect,prioritizeEmails:emails=>emails,hostOf:q.hostOf,
+    });
+    for(const [httpStatus,retryable,retryCount,expected] of [[200,false,0,false],[0,true,0,true],[503,true,0,true],[503,true,1,false]]){
+        const result=await enrich({url:r.linkedinUrl,emails:[],logs:[],activityCheck:{httpStatus,retryable}},null,retryCount);
+        assert.equal(result.status,'ERROR');assert.equal(result.failure.retryable,expected);
     }
 });
 

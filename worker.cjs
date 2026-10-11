@@ -639,6 +639,7 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
             const actRes = await voyagerFetch(page,
                 `/voyager/api/identity/profileUpdatesV2?count=10&includeLongTermHistory=true&moduleKey=creator_profile_all_content_view%3Adesktop&numComments=0&numLikes=0&profileUrn=${encodeURIComponent(profileUrn)}&q=memberShareFeed`
             );
+            result.activityCheck={httpStatus:actRes.status,retryable:actRes.status===0||actRes.status>=500};
             if (actRes.status === 200) {
                 const activity=extractActivity(actRes.data,{profileUrn,profileUrl:result.url});
                 Object.assign(result,activity);
@@ -699,9 +700,17 @@ async function enrichAndFinalize(result, browserInstance, retryCount = 0) {
         result.prospectQualification = assessProspect(research, { email: result.primaryEmail });
         const q = result.prospectQualification.qualification;
         result.status = pipelineForAssessment(result.prospectQualification) === 'QUALIFIED' ? 'QUALIFIED' : q.needsRetry || q.needsAttention ? 'ERROR' : 'REJECTED';
-        if (result.status === 'ERROR') result.failure = q.activity === 'UNKNOWN' || !research.profileIdentityConfirmed
-            ? { stage: 'linkedin', code: 'ACTIVITY_UNCONFIRMED', reason: result.prospectQualification.blockers[0], retryable: true }
-            : { stage: 'research', code: 'CRAWL_INCOMPLETE', reason: research.crawl?.stoppedReason || 'Website could not be fully read; the saved profile is retained.', retryable: research.crawl?.retryable !== false };
+        if (result.status === 'ERROR') {
+            if(q.activity==='UNKNOWN'||!research.profileIdentityConfirmed) {
+                // An empty/undated successful feed is unresolved evidence, not
+                // a transport failure. Repeating the full profile three times
+                // cannot supply a missing date. Retain it for explicit review.
+                const transient=result.activityCheck?.retryable===true;
+                const retryable=transient&&retryCount<1;
+                result.failure={stage:'linkedin',code:research.profileIdentityConfirmed?'ACTIVITY_UNCONFIRMED':'PROFILE_IDENTITY',
+                    reason:result.prospectQualification.blockers[0]+(retryable?'':' The saved profile is retained for manual review.'),retryable};
+            } else result.failure={stage:'research',code:'CRAWL_INCOMPLETE',reason:research.crawl?.stoppedReason||'Website could not be fully read; the saved profile is retained.',retryable:research.crawl?.retryable!==false};
+        }
         if (research.crawl) result.logs.push(`Website crawl: ${research.crawl.inspected} pages read, ${research.crawl.contactPages} contact pages, ${research.crawl.descriptionPages} description pages; ${research.crawl.complete ? 'all discovered routes inspected' : research.crawl.pending.length + ' pending, ' + research.crawl.failed.length + ' blocked'}.`);
         result.logs.push('Qualification: ' + result.status + ' — ' + result.prospectQualification.nextAction);
         if (!result.primaryEmail) result.logs.push('No attributable email found; the LinkedIn profile remains available.');
@@ -1258,15 +1267,20 @@ async function main() {
                         limitData = { date: today, count: 0 };
                     }
 
-                    if (limitData.count >= dailyLimit) {
+                    const budgetProfile=job.linkedinUrl?.match(/\/in\/([^/?#]+)/i)?.[1]?.toLowerCase();
+                    const seen=Array.isArray(limitData.profiles)?limitData.profiles:[];
+                    const alreadyCounted=budgetProfile&&seen.includes(budgetProfile);
+                    if (!job.resumeResult&&!alreadyCounted&&limitData.count >= dailyLimit) {
                         writeStatus('paused', { reason: `Daily limit of ${dailyLimit} reached`, nextReset: 'midnight' });
                         log(`⏳ Daily limit of ${dailyLimit} reached. Sleeping for 15 minutes before checking again...`);
                         await sleep(15 * 60 * 1000);
                         continue;
                     }
 
-                    // Pre-increment to reserve the slot
-                    limitData.count++;
+                    // Preserve legacy usage; reserve each newly seen profile
+                    // once per UTC day, including after a local worker restart.
+                    if(!job.resumeResult&&!alreadyCounted){limitData.count++;if(budgetProfile)seen.push(budgetProfile);}
+                    limitData.profiles=seen;
                     try { fs.writeFileSync(LIMITS_FILE, JSON.stringify(limitData)); } catch {}
                 }
                 }
