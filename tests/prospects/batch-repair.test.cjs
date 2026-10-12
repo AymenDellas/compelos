@@ -38,6 +38,16 @@ test('a custom practice inbox explicitly offered to contact the business is reta
  assert.ok(r.contacts.some(c=>c.address==='powerup@eosworldwide.com'&&c.ownership==='DOMAIN_MATCH'));
  assert.equal(r.crawl.candidates.find(c=>c.address==='powerup@eosworldwide.com').sharedContact,true);
 });
+test('old saved contact invitations recheck their actual source once, even on a team page',async()=>{
+ const team='https://www.eosworldwide.com/team',page=html.replace('asonksen@eosworldwide.com','powerup@eosworldwide.com').replace('Email our speakers team','powerup@eosworldwide.com').replace('<a href="mailto:powerup','Contact us at <a href="mailto:powerup');
+ const rootPage='<h1>Brian White Coaching</h1><p>Brian White helps leaders develop communication and leadership through business coaching.</p><a href="/team">Meet the team</a>';
+ let previous=await researchProspect({...input,about:''},{now,ai:false,fetchPage:async url=>({url,html:url===team?page:rootPage})});
+ previous.crawl.complete=false;previous.crawl.candidates.forEach(c=>{delete c.contactEvidenceVersion;c.sharedContact=false;});previous.contacts=[];
+ const calls=[];const fetchPage=async url=>{calls.push(url);return {url,html:page};};
+ const next=await researchProspect({...input,about:''},{now,ai:false,previousResearch:previous,fetchPage});
+ assert.ok(next.contacts.some(c=>c.address==='powerup@eosworldwide.com'));assert.deepEqual(calls,[team]);
+ next.crawl.complete=false;await researchProspect({...input,about:''},{now,ai:false,previousResearch:next,fetchPage});assert.equal(calls.length,1);
+});
 const card=(author,label,quote='')=>`<div><h2>Feed post</h2><div><a href="${author}">Author</a><p>${label}</p></div>${quote}<p>Actual post text</p></div>`;
 const activityOptions={profileUrl:person,pageUrl:person+'recent-activity/all/',now};
 test('visible activity requires the requested author; quoted posts and ambiguous rounded dates never qualify',()=>{

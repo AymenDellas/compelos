@@ -87,6 +87,13 @@ async function crawlWebsiteRoutes(input, options) {
             failed.set(routeKey(url), url);
             if (record?.retryable !== false && (record?.attempts || 0) < 3) enqueue(url, record?.label, rootKey(url), true);
         }
+        // Older saved candidates did not retain whether the site explicitly
+        // offered an address as its business inbox. Re-read that observed
+        // source once, including a team page outside contact/about routes.
+        for(const contact of candidates)if(contact.contactEvidenceVersion!==1&&contact.explicit&&contact.contactInvitation){
+            contact.contactEvidenceVersion=1;
+            enqueue(contact.url,'Published contact evidence',rootKey(contact.url),true);
+        }
     }
     for (const url of websiteInputs(input)) enqueue(url, 'Linked website', true);
     const sameSite = url => [...roots].some(root => hostOf(root) === hostOf(url));

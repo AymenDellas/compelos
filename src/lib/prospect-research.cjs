@@ -153,7 +153,7 @@ function parsePage(html, url) {
         const sharedContact=index>=0&&/\bcontact\s+us\s+(?:at|via|by\s+email(?:\s+at)?)\s*[:=-]?\s*$/i.test(contactText.slice(Math.max(0,index-100),index));
         const existing = contacts.find(contact => contact.address === address);
         if (existing) { existing.explicit ||= explicit; existing.businessContact ||= businessContact; existing.contactInvitation ||= contactInvitation; existing.sharedContact ||= sharedContact; }
-        else contacts.push({ address, explicit, businessContact,contactInvitation,sharedContact });
+        else contacts.push({ address, explicit, businessContact,contactInvitation,sharedContact,contactEvidenceVersion:1 });
     };
     $('a[href]').each((_i, node) => {
         const href = $(node).attr('href') || '';
