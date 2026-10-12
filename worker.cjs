@@ -659,7 +659,7 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
             try{
                 const visible=await require('./src/lib/linkedin-activity-page.cjs').checkActivityPage(browserInstance,result.url,{profileUrn:profileUrn||''});
                 if(visible){
-                    if(visible.activityStatus!=='Unknown'||!result.activityEvidence)Object.assign(result,visible);
+                    Object.assign(result,visible);
                     result.logs.push('Visible activity fallback: '+visible.activityStatus+' — '+visible.activityEvidence.reason);
                 }else result.logs.push('Visible activity fallback: no observed activity route available.');
             }catch(error){result.logs.push('Visible activity fallback could not finish: '+error.message);}
@@ -720,8 +720,9 @@ async function enrichAndFinalize(result, browserInstance, retryCount = 0) {
                 // cannot supply a missing date. Retain it for explicit review.
                 const transient=result.activityCheck?.retryable===true;
                 const retryable=transient&&retryCount<1;
+                const detail=research.activityEvidence?.endpoint==='profile_activity_page'?research.activityEvidence.reason:result.prospectQualification.blockers[0];
                 result.failure={stage:'linkedin',code:research.profileIdentityConfirmed?'ACTIVITY_UNCONFIRMED':'PROFILE_IDENTITY',
-                    reason:result.prospectQualification.blockers[0]+(retryable?'':' The saved profile is retained for manual review.'),retryable};
+                    reason:detail+(retryable?'':' The saved profile is retained for manual review.'),retryable};
             } else result.failure={stage:'research',code:'CRAWL_INCOMPLETE',reason:research.crawl?.stoppedReason||'Website could not be fully read; the saved profile is retained.',retryable:research.crawl?.retryable!==false};
         }
         if (research.crawl) result.logs.push(`Website crawl: ${research.crawl.inspected} pages read, ${research.crawl.contactPages} contact pages, ${research.crawl.descriptionPages} description pages; ${research.crawl.complete ? 'all discovered routes inspected' : research.crawl.pending.length + ' pending, ' + research.crawl.failed.length + ' blocked'}.`);
@@ -1354,8 +1355,9 @@ async function main() {
                     if(result.failure?.code==='AI_SIZE')result.compactAI=true;
                     if(job.activityOnly&&result.activityStatus==='Unknown'&&result.profileIdentityConfirmed){
                         try{
-                            const visible=await require('./src/lib/linkedin-activity-page.cjs').checkActivityPage(browser,result.url,{profileUrn:result.activityEvidence?.profileUrn||''});
-                            if(visible){Object.assign(result,visible);result.activityCheck={httpStatus:200,retryable:false};result.logs.push('Saved profile activity recovery: '+visible.activityStatus+' — '+visible.activityEvidence.reason);if(dbWorker)await dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,result);}
+                            const activity=await require('./src/lib/linkedin-activity-page.cjs').checkSavedActivity(browser,result.url,{profileUrn:result.activityEvidence?.profileUrn||'',fetchActivity:endpoint=>voyagerFetch(page,endpoint)});
+                            if(activity){Object.assign(result,activity);result.logs.push('Saved profile activity recovery: '+activity.activityStatus+' — '+activity.activityEvidence.reason);if(dbWorker)await dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,result);}
+                            else result.logs.push('Saved profile activity recovery: no confirmed feed or observed activity route.');
                         }catch(error){result.logs.push('Saved profile activity recovery could not finish: '+error.message);}
                     }
                 } else if (pageAlive) {

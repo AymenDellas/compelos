@@ -3,7 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const {publishedProfileEmails,publishedProfileWebsites}=require('../../src/lib/profile-public-contacts.cjs');
 const {researchProspect,attributableCandidate}=require('../../src/lib/prospect-research.cjs');
 const {createPageRenderer}=require('../../src/lib/public-page-browser.cjs');
-const {extractActivityPage,relativeDate,activityRoute,checkActivityPage}=require('../../src/lib/linkedin-activity-page.cjs');
+const {extractActivityPage,relativeDate,activityRoute,checkActivityPage,checkSavedActivity}=require('../../src/lib/linkedin-activity-page.cjs');
 const {extractActivity}=require('../../src/lib/linkedin-activity.cjs');
 const now='2026-10-12T12:00:00.000Z',person='https://www.linkedin.com/in/brian-white-cco/';
 const input={firstName:'Brian',lastName:'White',profileIdentityConfirmed:true,linkedinUrl:person,lastActivityAt:'2026-10-11T12:00:00Z',websites:['https://www.eosworldwide.com/brian-white'],about:'Call me at 717.502.2084\nBrian.White@EOSworldwide.com'};
@@ -55,8 +55,18 @@ test('activity fallback follows only observed routes and closes its tab on error
  let closed=0,navigations=[];
  const page={setViewport:async()=>{},goto:async u=>navigations.push(u),waitForFunction:async()=>{},evaluate:async()=>['https://www.linkedin.com/in/other/recent-activity/all/'],close:async()=>closed++};
  assert.equal(await checkActivityPage({newPage:async()=>page},person),null);assert.deepEqual(navigations,[person]);assert.equal(closed,1);
- page.evaluate=async()=>[person+'recent-activity/all/'];page.content=async()=>{throw Error('Page crashed');};page.url=()=>person+'recent-activity/all/';
+ page.evaluate=async fn=>{if(fn.toString().includes('clone.outerHTML'))throw Error('Page crashed');return [person+'recent-activity/all/'];};page.url=()=>person+'recent-activity/all/';
  await assert.rejects(checkActivityPage({newPage:async()=>page},person),/crashed/);assert.equal(closed,2);
+});
+test('saved activity rechecks use the API first and retain dated, matched evidence without requiring a visible route',async()=>{
+ let calls=0;
+ const browser={newPage:()=>assert.fail('A confirmed API feed needs no activity-page navigation')};
+ const profileUrn='urn:li:fsd_profile:brian';
+ for(const date of ['2026-10-11T12:00:00Z','2026-08-01T12:00:00Z']){
+  const result=await checkSavedActivity(browser,person,{profileUrn,now,fetchActivity:async endpoint=>{calls++;assert.ok(endpoint.includes(encodeURIComponent(profileUrn)));return {status:200,data:{data:{elements:[{createdAt:Date.parse(date),actor:{profileUrn}}]}}};}});
+  assert.equal(result.lastActivityAt,date.replace('Z','.000Z'));assert.equal(result.activityEvidence.endpoint,'profileUpdatesV2');assert.equal(result.activityEvidence.selected.association,'matching_author');
+ }
+ assert.equal(calls,2);
 });
 test('API actor references match the author; company posts and unrelated member links are not substituted',()=>{
  const opts={now,profileUrn:'urn:li:fsd_profile:brian',profileUrl:person};

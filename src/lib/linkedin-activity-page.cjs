@@ -1,6 +1,7 @@
 'use strict';
 const cheerio=require('cheerio');
 const {profileUrl}=require('./linkedin-workers.cjs');
+const {extractActivity}=require('./linkedin-activity.cjs');
 function activityRoute(value,person){
  try{const u=new URL(value),prefix=u.pathname.match(/^\/in\/[^/]+\//)?.[0];return u.origin==='https://www.linkedin.com'&&prefix&&profileUrl(u.origin+prefix)===profileUrl(person)&&/^\/in\/[^/]+\/recent-activity\/(?:all|posts)\/?$/.test(u.pathname)?u.href:null;}catch{return null;}
 }
@@ -63,7 +64,27 @@ async function checkActivityPage(browser,person,options={}){
   if(!route)return null;
   await page.goto(route,{waitUntil:'domcontentloaded',timeout:Math.max(1,deadline-Date.now())});
   try{await page.waitForFunction(()=>[...document.querySelectorAll('h2')].some(n=>n.textContent.trim()==='Feed post')||document.querySelector('[data-urn*="urn:li:activity"]')||/nothing to see for now/i.test(document.body.innerText),{timeout:Math.max(1,Math.min(5000,deadline-Date.now()))});}catch{}
-  return extractActivityPage(await page.content(),{...options,profileUrl:person,pageUrl:page.url()});
+  // Keep just visible feed evidence. LinkedIn's full page embeds large scripts,
+  // SVGs and application state that are irrelevant to activity qualification.
+  const html=await page.evaluate(()=>{
+   const modern=[...document.querySelectorAll('h2')].filter(n=>n.textContent.trim()==='Feed post').map(n=>n.parentElement);
+   const cards=modern.length?modern:[...document.querySelectorAll('[data-urn*="urn:li:activity"],.feed-shared-update-v2')].filter(n=>!n.parentElement.closest('[data-urn*="urn:li:activity"],.feed-shared-update-v2'));
+   const content=cards.slice(0,20).map(n=>{const clone=n.cloneNode(true);clone.querySelectorAll('script,style,svg,noscript,template').forEach(v=>v.remove());return clone.outerHTML;}).join('');
+   return '<html><body>'+content+(!cards.length&&/nothing to see for now/i.test(document.body.innerText)?'<p>Nothing to see for now</p>':'')+'</body></html>';
+  });
+  if(Buffer.byteLength(html)>1024*1024)throw new Error('Visible activity evidence exceeded the size limit.');
+  return extractActivityPage(html,{...options,profileUrl:person,pageUrl:page.url()});
  }finally{if(page)await page.close().catch(()=>{});}
 }
-module.exports={activityRoute,relativeDate,extractActivityPage,checkActivityPage};
+async function checkSavedActivity(browser,person,{profileUrn='',fetchActivity,now=new Date().toISOString()}={}){
+ let api=null,check={httpStatus:0,retryable:false};
+ if(profileUrn&&fetchActivity){
+  const response=await fetchActivity('/voyager/api/identity/profileUpdatesV2?count=10&includeLongTermHistory=true&moduleKey=creator_profile_all_content_view%3Adesktop&numComments=0&numLikes=0&profileUrn='+encodeURIComponent(profileUrn)+'&q=memberShareFeed');
+  check={httpStatus:response.status,retryable:response.status===0||response.status>=500};
+  if(response.status===200){api=extractActivity(response.data,{profileUrn,profileUrl:person,now});if(api.activityStatus!=='Unknown')return {...api,activityCheck:check};}
+ }
+ const visible=await checkActivityPage(browser,person,{profileUrn,now});
+ if(visible)return {...visible,activityCheck:{...check,retryable:false}};
+ return api?{...api,activityCheck:check}:null;
+}
+module.exports={activityRoute,relativeDate,extractActivityPage,checkActivityPage,checkSavedActivity};
