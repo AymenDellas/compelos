@@ -7,12 +7,12 @@ function createPageRenderer(browser,{maxPages=3,fetchResource=fetchPublicPage}={
  return function render(value,options={}){
   const key=publicUrl(value).href;if(cache.has(key))return cache.get(key);
   if(used++>=maxPages)return Promise.reject(new Error('Public browser fallback budget reached.'));
-  const url=publicUrl(value).href,deadline=Date.now()+Math.min(10000,options.timeoutMs||10000);
+  const url=publicUrl(value).href;
   const run=tail.then(async()=>{
-   if(deadline-Date.now()<1000)throw new Error('Public browser fallback budget expired.');
+   const deadline=Date.now()+Math.min(10000,options.timeoutMs||10000);
    const context=await browser.createBrowserContext(),controller=new AbortController();let timer;
    try{
-    const page=await context.newPage();let requests=0,bytes=0;
+    const page=await context.newPage();let requests=0,bytes=0,documentFailure=null;
     const userAgent=await browser.userAgent();
     timer=setTimeout(()=>{controller.abort();context.close().catch(()=>{});},Math.max(1,deadline-Date.now()));
     await page.setRequestInterception(true);
@@ -24,9 +24,16 @@ function createPageRenderer(browser,{maxPages=3,fetchResource=fetchPublicPage}={
       bytes+=response.body.length;if(bytes>12*1024*1024)throw new Error('Public render response budget reached.');
       const headers={};for(const k of ['content-type','location','access-control-allow-origin'])if(response.headers[k])headers[k]=response.headers[k];
       await request.respond({status:response.status,headers,body:response.body});
-     }catch{try{await request.abort('blockedbyclient');}catch{/* closed or already handled */}}
+     }catch(error){
+      if(request.resourceType()==='document'&&(!request.isNavigationRequest||request.isNavigationRequest())&&(!request.frame||request.frame()===page.mainFrame()))documentFailure=error;
+      try{await request.abort('blockedbyclient');}catch{/* closed or already handled */}
+     }
     });
-    await page.goto(url,{waitUntil:'domcontentloaded',timeout:Math.max(1,deadline-Date.now())});
+    let navigation;
+    try{navigation=await page.goto(url,{waitUntil:'domcontentloaded',timeout:Math.max(1,deadline-Date.now())});}
+    catch(error){throw documentFailure||error;}
+    if(documentFailure)throw documentFailure;
+    if(navigation?.status()>=400)throw Object.assign(new Error('Website returned HTTP '+navigation.status()+'.'),{httpStatus:navigation.status()});
     try{await page.waitForNetworkIdle({idleTime:250,timeout:Math.max(1,Math.min(2500,deadline-Date.now()))});}catch{/* DOM evidence still inspected */}
     // This is a known local popup control, not an arbitrary form submission.
     const openedContact=await page.evaluate(()=>{

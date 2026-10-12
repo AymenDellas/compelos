@@ -82,7 +82,7 @@ test('an old incomplete checkpoint rechecks attribution once, then resumes witho
  let r=await researchProspect(input,{now,ai:false,maxPages:1,fetchPage});r.crawl.attributionVersion=0;
  const calls=[];
  r=await researchProspect(input,{now,ai:false,maxPages:1,previousResearch:r,fetchPage:async url=>{calls.push(url);return fetchPage(url);}});
- assert.equal(r.crawl.attributionVersion,2);
+ assert.equal(r.crawl.attributionVersion,3);
  r=await researchProspect(input,{now,ai:false,previousResearch:r,fetchPage:async url=>{calls.push(url);return fetchPage(url);}});
  assert.equal(calls.filter(url=>url===input.websites[0]).length,1);assert.equal(r.crawl.complete,true);
 });

@@ -584,7 +584,7 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
                 result.headline = item.headline || item.occupation || '';
                 result.about = item.summary || item.about || '';
                 result.profileLocation = extractProfileLocation(profileRes.data, slug);
-                const urnMatch = JSON.stringify(item).match(/urn:li:(?:fsd_profile|fs_profile|fs_miniProfile):(ACoA[a-zA-Z0-9_-]+)/);
+                const urnMatch = [item.entityUrn,item.urn,item.objectUrn,item.dashEntityUrn].map(v=>String(v||'').match(/urn:li:(?:fsd_profile|fs_profile|fs_miniProfile):(ACoA[a-zA-Z0-9_-]+)/)).find(Boolean);
                 if (urnMatch) profileUrn = `urn:li:fsd_profile:${urnMatch[1]}`;
                 result.logs.push(`Name: ${result.firstName} ${result.lastName} (profile identity matched)`);
                 result.logs.push(result.profileLocation ? `Profile location: ${result.profileLocation}` : 'Profile location was not returned; target market remains unconfirmed.');
@@ -655,6 +655,16 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
             result.logs.push('No URN — cannot check activity');
         }
 
+        if(result.activityStatus==='Unknown'&&browserInstance){
+            try{
+                const visible=await require('./src/lib/linkedin-activity-page.cjs').checkActivityPage(browserInstance,result.url,{profileUrn:profileUrn||''});
+                if(visible){
+                    if(visible.activityStatus!=='Unknown'||!result.activityEvidence)Object.assign(result,visible);
+                    result.logs.push('Visible activity fallback: '+visible.activityStatus+' — '+visible.activityEvidence.reason);
+                }else result.logs.push('Visible activity fallback: no observed activity route available.');
+            }catch(error){result.logs.push('Visible activity fallback could not finish: '+error.message);}
+        }
+
         // Website crawling, email guessing and final scoring happen in
         // enrichAndFinalize() instead of here. Those steps need no LinkedIn
         // session, so running them inline would hold the (rate-limited, ban-prone)
@@ -691,9 +701,12 @@ async function enrichAndFinalize(result, browserInstance, retryCount = 0) {
         }
         for (const limitation of research.limitations.filter(note => /^Automated interpretation/.test(note))) result.logs.push(limitation);
         // Business facts are advisory. A guessed email never qualifies a lead.
-        result.website = research.website || result.website;
+        result.website = research.website || '';
         result.emails = research.contacts.filter(c => ['PUBLISHED', 'DOMAIN_MATCH'].includes(c.ownership)).map(c => c.address);
         result.emails = prioritizeEmails([...new Set(result.emails)], result.firstName, hostOf(research.website));
+        // An address published by this person's LinkedIn profile is the first
+        // choice, ahead of a shared practice inbox found on a website.
+        result.emails.sort((a,b)=>Number(research.contacts.find(c=>c.address===b)?.source==='linkedin')-Number(research.contacts.find(c=>c.address===a)?.source==='linkedin'));
         result.primaryEmail = result.emails[0] || '';
         const chosen = research.contacts.find(c => c.address === result.primaryEmail);
         result.emailSource = chosen?.source === 'website' ? 'website_scraped' : chosen?.source || '';
@@ -971,7 +984,17 @@ function getMemoryMB() {
 
 // ── Extracted post-processing function (runs in background while next profile scrapes) ──
 async function nativePostProcess(job, result, log) {
-    if (result.status === 'ERROR' || !result.prospectQualification?.research) return;
+    if (!result.prospectQualification?.research) return;
+    const unresolved=result.status==='ERROR';
+    if(unresolved){
+        // A failed first attempt stays in the research queue. A recheck with
+        // confirmed identity must withdraw a stale CRM qualification if its
+        // email/activity evidence can no longer support it.
+        if(!dbWorker||!result.prospectQualification.research.profileIdentityConfirmed)return;
+        const slug=result.url.match(/\/in\/([^/?#]+)/i)?.[1]?.toLowerCase();
+        const existing=await dbWorker.pool.query("SELECT id FROM leads WHERE lower(substring(linkedin_url from '/in/([^/?#]+)'))=$1 AND pipeline_status='QUALIFIED' LIMIT 1",[slug]);
+        if(!existing.rowCount)return;
+    }
     const appUrl = process.env.APP_URL || 'http://localhost:3000';
     const endpoint = appUrl + '/api/prospects/research-result';
     const payload = {
@@ -987,7 +1010,7 @@ async function nativePostProcess(job, result, log) {
             result.prospectQualification = saved.assessment;
             result.primaryEmail = saved.assessment.contact.email;
             if (result.primaryEmail && !result.emails.includes(result.primaryEmail)) result.emails.unshift(result.primaryEmail);
-            result.status = saved.pipelineStatus === 'QUALIFIED' ? 'QUALIFIED' : 'REJECTED';
+            result.status = unresolved ? 'ERROR' : saved.pipelineStatus === 'QUALIFIED' ? 'QUALIFIED' : 'REJECTED';
             return;
         } catch(error) {
             result.crmSaved = false; result.status = 'ERROR';
@@ -1329,6 +1352,12 @@ async function main() {
                     result=structuredClone(job.resumeResult);result.status='PENDING';
                     result.logs=['Resuming saved LinkedIn profile; no new LinkedIn scrape or daily slot used.'];
                     if(result.failure?.code==='AI_SIZE')result.compactAI=true;
+                    if(job.activityOnly&&result.activityStatus==='Unknown'&&result.profileIdentityConfirmed){
+                        try{
+                            const visible=await require('./src/lib/linkedin-activity-page.cjs').checkActivityPage(browser,result.url,{profileUrn:result.activityEvidence?.profileUrn||''});
+                            if(visible){Object.assign(result,visible);result.activityCheck={httpStatus:200,retryable:false};result.logs.push('Saved profile activity recovery: '+visible.activityStatus+' — '+visible.activityEvidence.reason);if(dbWorker)await dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,result);}
+                        }catch(error){result.logs.push('Saved profile activity recovery could not finish: '+error.message);}
+                    }
                 } else if (pageAlive) {
                     try {
                         result = await scrapeProfile(page, profileUrl, browser);

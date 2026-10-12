@@ -85,3 +85,20 @@ test('failed CRM saves retain complete business research for recovery instead of
     await persist({ jobId: 'test' }, result, () => {});
     assert.equal(attempts, 3); assert.equal(result.crmSaved, false); assert.equal(recovery.research.version, 1);
 });
+
+test('a published LinkedIn address takes priority over a shared website inbox',async()=>{
+ const r=research({lastActivityAt:new Date().toISOString(),contacts:[{address:'hello@practice.test',url:'https://practice.test/',source:'website',ownership:'DOMAIN_MATCH'},{address:'ava@direct.test',url:research().linkedinUrl,source:'linkedin',ownership:'PUBLISHED'}]});
+ const enrich=load('enrichAndFinalize','function isProcessRunning',{researchProspect:async()=>r,assessProspect:q.assessProspect,prioritizeEmails:e=>e,hostOf:q.hostOf});
+ const result=await enrich({url:r.linkedinUrl,emails:[],logs:[]},null);
+ assert.equal(result.primaryEmail,'ava@direct.test');assert.equal(result.emailSource,'linkedin');assert.equal(result.status,'QUALIFIED');
+});
+
+test('an unresolved recheck withdraws stale CRM qualification while retaining the error and saved evidence',async()=>{
+ const assessment=q.assessProspect(research({lastActivityAt:null,activityStatus:'Unknown'}));let saves=0;
+ const pool={query:async()=>({rowCount:1})};
+ const persist=load('nativePostProcess','async function main(',{dbWorker:{pool,owner:'fixture'},require:name=>{assert.equal(name,'./src/lib/worker-research-store.cjs');return {saveWorkerResearch:async(_pool,input)=>{saves++;assert.equal(input.jobId,'fixture');return{id:'lead',pipelineStatus:'NOT_QUALIFIED',assessment};}};}});
+ const failure={code:'ACTIVITY_UNCONFIRMED',retryable:false};
+ const result={url:assessment.research.linkedinUrl,status:'ERROR',failure,emails:[],logs:[],prospectQualification:assessment};
+ await persist({jobId:'fixture'},result,()=>{});assert.equal(saves,1);assert.equal(result.status,'ERROR');assert.equal(result.failure,failure);assert.equal(result.crmSaved,true);
+ pool.query=async()=>({rowCount:0});await persist({jobId:'fixture'},result,()=>{});assert.equal(saves,1);
+});

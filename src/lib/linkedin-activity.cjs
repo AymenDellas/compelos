@@ -26,9 +26,16 @@ function extractActivity(response,{profileUrn,profileUrl,now=new Date().toISOStr
   if(!item||typeof item!=='object'){unresolved++;continue;}
   const actor=resolve(item.actor||item['*actor']);
   const mini=resolve(actor?.miniProfile||actor?.['*miniProfile']||actor?.profile||actor?.['*profile']);
-  const actorUrn=[actor?.urn,actor?.entityUrn,actor?.profileUrn,actor?.['*miniProfile'],mini?.entityUrn,item.actorUrn].find(v=>idPart(v))||'';
+  const actorReferences=[...(actor?.image?.attributes||[]),...(actor?.name?.attributes||[])].map(v=>v?.['*miniProfile']||v?.['*profile']);
+  const actorUrn=[actor?.urn,actor?.entityUrn,actor?.profileUrn,actor?.['*miniProfile'],mini?.entityUrn,item.actorUrn,...actorReferences].find(v=>idPart(v))||'';
   const actorId=idPart(actorUrn);
   if(requested&&actorId&&actorId!==requested){unresolved++;continue;}
+  const actorUrl=actor?.navigationContext?.actionTarget;
+  if(/^urn:li:company:/.test(actor?.urn||'')||actorUrl&&/linkedin\.com\/company\//.test(actorUrl)){unresolved++;continue;}
+  if(actorUrl&&profileUrl&&/linkedin\.com\/in\//.test(actorUrl)){
+   const canonical=v=>String(v).match(/linkedin\.com\/in\/([^/?#]+)/i)?.[1]?.toLowerCase();
+   if(canonical(actorUrl)!==canonical(profileUrl)){unresolved++;continue;}
+  }
   const meta=item.updateMetadata||item.metadata||{};
   const urn=[item.urn,item.entityUrn,item.activityUrn,item.updateUrn,meta.urn,meta.updateUrn].find(v=>typeof v==='string'&&/urn:li:activity:\d+/.test(v));
   let at=null,method='';

@@ -37,32 +37,32 @@ async function crawlWebsiteRoutes(input, options) {
     const { publicUrl, fetchPage, parsePage, ownedPage, contactMatchedPage } = options;
     const previous = options.previousResearch?.crawl;
     const resume = [1, 2].includes(previous?.version) && !previous.complete;
-    const migrate = resume && (previous.version === 1 || previous.attributionVersion !== 2);
-    const validRoute = value => { try { return publicRoute(routeUrl(value, publicUrl)); } catch { return false; } };
+    const migrate = resume && (previous.version === 1 || previous.attributionVersion !== 3);
+    const validRoute = value => { try { return !(options.rejectedHosts||[]).includes(hostOf(value))&&publicRoute(routeUrl(value, publicUrl)); } catch { return false; } };
     const pages = resume ? [...new Map((options.previousResearch.pages || []).filter(page => validRoute(page.url)).map(page => [routeKey(page.url), { ...page }])).values()] : [];
     const parsed = [], sources = [];
     const visited = new Map((resume ? previous.visited.filter(validRoute) : []).map(url => [routeKey(url), url]));
     const failed = new Map();
     const roots = new Set(resume ? previous.roots.filter(validRoute) : []);
-    const matchedHosts = new Set(resume ? previous.matchedHosts : []);
-    const contactMatchedHosts = new Set(resume ? previous.contactMatchedHosts || [] : []);
+    const matchedHosts = new Set(resume ? previous.matchedHosts.filter(h=>!(options.rejectedHosts||[]).includes(h)) : []);
+    const contactMatchedHosts = new Set(resume ? (previous.contactMatchedHosts || []).filter(h=>!(options.rejectedHosts||[]).includes(h)) : []);
     const candidates = resume ? [...previous.candidates.filter(contact => validRoute(contact.url))] : [];
     const queue = new Map();
     const discovered = new Set(visited.keys());
     // The pass budget allows useful progress; the persistent budget bounds all
     // resumes, including jobs continuing research after qualification.
-    const attempted = new Map((resume && previous.version===2 ? previous.attempted || [] : []).map(url => [routeKey(url), url]));
+    const attempted = new Map((resume && previous.version===2 ? (previous.attempted || []).filter(validRoute) : []).map(url => [routeKey(url), url]));
     const maxRoutes = Math.max(1, Math.min(600, previous?.version === 2 ? previous.maxRoutes || 600 : options.maxRoutes || 600));
     const maxPages = Math.max(1, Math.min(200, options.maxPages || 200));
     const deadline = Date.now() + Math.max(100, Math.min(90000, options.maxTimeMs || 90000));
-    let description = resume ? options.previousResearch.description : null;
+    let description = resume && options.previousResearch.description && validRoute(options.previousResearch.description.url) ? options.previousResearch.description : null;
     const descriptionScore = value => !value ? -1 : (/about|biography|our.story|meet|who.we/i.test(new URL(value.url).pathname) ? 4 : 0) + (/coach(?:ing)?|leadership|career|practice/i.test(value.text) ? 2 : 0);
     let attempts = 0, storageLimited = resume && !migrate && previous.storageLimited === true;
     const rootKey = url => [...roots].some(root => routeKey(root) === routeKey(url));
     const enqueue = (value, label = '', root = false, retry = false) => {
         try {
             const url = routeUrl(value, publicUrl), key = routeKey(url);
-            if (!publicRoute(url) || isPlatformWebsite(url)) return;
+            if (!validRoute(url) || isPlatformWebsite(url)) return;
             if (url.length > 1000 || discovered.size >= 2000 && !discovered.has(key)) { storageLimited = true; return; }
             discovered.add(key);
             if ((!visited.has(key) || retry) && !queue.has(key)) queue.set(key, { url, label, root });
@@ -72,12 +72,12 @@ async function crawlWebsiteRoutes(input, options) {
     if (resume) {
         if (migrate) {
             // Recheck actual roots/contact/about links once under the repaired
-            // parser. Retain previously read content and every saved contact.
+            // parser. Retain previously read content and revalidate contacts.
             for (const page of pages) {
                 page.attempts = 0;
                 if (page.status === 'blocked') Object.assign(page, failureKind(new Error(page.note)));
             }
-            for (const url of previous.roots) { visited.delete(routeKey(url)); enqueue(url, 'Linked website', true, true); }
+            for (const url of previous.roots.filter(validRoute)) { visited.delete(routeKey(url)); enqueue(url, 'Linked website', true, true); }
             for (const page of pages) if (routePriority(page) <= 1) { visited.delete(routeKey(page.url)); enqueue(page.url, page.label, rootKey(page.url), true); }
         }
         for (const url of previous.pending) enqueue(url, '', rootKey(url));
@@ -87,7 +87,8 @@ async function crawlWebsiteRoutes(input, options) {
             failed.set(routeKey(url), url);
             if (record?.retryable !== false && (record?.attempts || 0) < 3) enqueue(url, record?.label, rootKey(url), true);
         }
-    } else for (const url of websiteInputs(input)) enqueue(url, 'Linked website', true);
+    }
+    for (const url of websiteInputs(input)) enqueue(url, 'Linked website', true);
     const sameSite = url => [...roots].some(root => hostOf(root) === hostOf(url));
     const savePage = (record, originalUrl = record.url) => {
         const index = pages.findIndex(page => routeKey(page.url) === routeKey(record.url) || routeKey(page.url) === routeKey(originalUrl));
@@ -111,7 +112,8 @@ async function crawlWebsiteRoutes(input, options) {
                 page=parsePage(fetched.html,routeUrl(fetched.url||item.url,publicUrl));
             }catch(error){
                 if(!options.renderPage||!item.root&&routePriority(item)>1||[404,410].includes(error.httpStatus)||/private|unsupported|CERT_|certificate|size limit|NON_HTML/i.test(error.code+' '+error.message))throw error;
-                fetched=await options.renderPage(item.url,{timeoutMs:Math.max(1,Math.min(10000,deadline-Date.now()))});
+                try{fetched=await options.renderPage(item.url,{timeoutMs:Math.max(1,Math.min(10000,deadline-Date.now()))});}
+                catch(renderError){error.message+=' Browser fallback: '+renderError.message;throw error;}
                 page=parsePage(fetched.html,routeUrl(fetched.url||item.url,publicUrl));
             }
             if(options.renderPage&&(!page.readable||!page.contacts.length&&(item.root||routePriority(item)===0))&&deadline-Date.now()>1000){
@@ -178,7 +180,7 @@ async function crawlWebsiteRoutes(input, options) {
         : blocked.length ? blocked.length + ' website route(s) could not be read' + (retryable ? '; a bounded retry is available' : '; automatic retries stopped') + '. ' + blocked[0].url + ': ' + blocked[0].note : '';
     const inspected = pages.filter(page => page.status === 'inspected');
     return { pages, parsed, sources, description,
-        crawl: { version: 2, attributionVersion:2, complete: !queue.size && !failed.size && !storageLimited, retryable, maxRoutes, storageLimited, attempted: [...attempted.values()],
+        crawl: { version: 2, attributionVersion:3, complete: !queue.size && !failed.size && !storageLimited, retryable, maxRoutes, storageLimited, attempted: [...attempted.values()],
             visited: [...visited.values()], pending: [...queue.values()].map(item => item.url), failed: [...failed.values()], roots: [...roots], matchedHosts: [...matchedHosts],contactMatchedHosts:[...contactMatchedHosts],
             discovered: discovered.size, inspected: inspected.length, contactPages: inspected.filter(page => page.contactPage || routePriority(page) === 0).length,
             descriptionPages: inspected.filter(page => page.hasDescription).length, stoppedReason, candidates: contacts },

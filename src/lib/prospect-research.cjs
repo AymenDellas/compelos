@@ -76,7 +76,7 @@ async function fetchPublicPage(value, options = {}, redirects = 0) {
                 if (redirect) resolve({ redirect }); else reject(new Error('Invalid website redirect.'));
                 response.destroy(); return;
             }
-            if (response.statusCode >= 400) { reject(Object.assign(new Error(`Website returned HTTP ${response.statusCode}.`), { httpStatus: response.statusCode })); response.destroy(); return; }
+            if (response.statusCode >= 400 && !options.resource) { reject(Object.assign(new Error(`Website returned HTTP ${response.statusCode}.`), { httpStatus: response.statusCode })); response.destroy(); return; }
             if (!options.resource && !/text\/html|application\/xhtml\+xml/i.test(response.headers['content-type'] || '')) { reject(Object.assign(new Error('The website did not return HTML.'), { code: 'NON_HTML' })); response.destroy(); return; }
             const chunks = []; let bytes = 0;
             response.on('data', chunk => {
@@ -180,13 +180,15 @@ function parsePage(html, url) {
 }
 
 function attributableCandidate(c,input){
-    const domain=c.address.split('@')[1],sameDomain=onDomain(domain,hostOf(c.url));
-    const local=c.address.split('@')[0].replace(/[^a-z]/g,'');
-    const first=normalText(input.firstName).split(/[\s(]/)[0].toLowerCase().replace(/[^a-z]/g,'');
-    const last=normalText(input.lastName).split(/[,|]/)[0].replace(/\s+-.*$/,'').toLowerCase().replace(/[^a-z]/g,'');
-    const personal=(first.length>=3&&local.includes(first))||(last.length>=4&&local.includes(last));
-    return sameDomain || c.explicit&&(FREE_MAIL.has(domain)||c.contactPage||c.businessContact||personal&&onDomain(hostOf(c.url),domain))
-        || personal&&(c.contactPage||c.businessContact||c.contactInvitation);
+    const {personEmail}=require('./contact-person.cjs');
+    const [local,domain]=c.address.split('@'),sameDomain=onDomain(domain,hostOf(c.url));
+    const contactContext=c.contactPage||c.businessContact||c.contactInvitation;
+    const shared=/^(?:hello|hi|hey|info|contact|contactus|me|office|team|enquiries|inquiries|admin|support|help|sales|clientcare|bookings|coaching)(?:[._-].*)?$/.test(local);
+    const brand=hostOf(c.url).split('.')[0].replace(/[^a-z]/g,''),branded=brand.length>=5&&local.replace(/[^a-z]/g,'')===brand;
+    return personEmail(c.address,input)&&(sameDomain||c.explicit||contactContext)
+        || shared&&(sameDomain||c.explicit&&(c.contactPage||c.businessContact))
+        || branded&&(c.explicit||contactContext)
+        || FREE_MAIL.has(domain)&&c.businessContact;
 }
 
 function excerpt(text, pattern) {
@@ -422,8 +424,14 @@ function interpretationFailure(error) {
 }
 
 async function researchProspect(input, options = {}) {
-    const {publishedProfileEmails,publishedProfileWebsites}=require('./profile-public-contacts.cjs');
-    input={...input,websites:[...new Set([...(input.websites||[]),...publishedProfileWebsites(input),input.knownWebsite].filter(Boolean))]};
+    const {publishedProfileEmails,profileWebsiteEvidence}=require('./profile-public-contacts.cjs');
+    const websiteEvidence=profileWebsiteEvidence(input);
+    // Older checkpoints may contain a sentence fragment mistaken for a domain.
+    // Explicit contact-modal and featured links remain authoritative.
+    const trustedHosts=new Set(['contact_modal','featured_section'].includes(input.websiteSource)?(input.websites||[]).map(hostOf):[]);
+    const rejectedHosts=websiteEvidence.rejectedHosts.filter(h=>!trustedHosts.has(h));
+    const keepWebsite=u=>u&&!rejectedHosts.includes(hostOf(u));
+    input={...input,website:keepWebsite(input.website)?input.website:'',websites:[...new Set([...(input.websites||[]),...websiteEvidence.urls,input.knownWebsite].filter(keepWebsite))]};
     const researchedAt = options.now || new Date().toISOString();
     const research = emptyResearch(input, researchedAt);
     const profileText = normalText([input.headline, input.profileLocation ? `Profile location: ${input.profileLocation}` : '', input.about].filter(Boolean).join('\n'));
@@ -433,12 +441,14 @@ async function researchProspect(input, options = {}) {
     else if (input.latestPostText) research.limitations.push('Undated or older profile activity was retained as context, but cannot establish current demand.');
     const { crawlWebsiteRoutes, websiteInputs } = require('./website-crawler.cjs');
     const candidates = websiteInputs(input);
-    const profileContacts=[...publishedProfileEmails(input),...(input.profileIdentityConfirmed&&input.emailSource==='linkedin'?(input.emails||[]).filter(e=>!isUnsafeContact(e)).map(address=>({address:address.toLowerCase(),source:'linkedin',url:input.linkedinUrl||input.url,ownership:'PUBLISHED'})):[])];
+    const previousContacts=options.previousResearch?.contacts||[];
+    const linkedinEmails=input.profileIdentityConfirmed&&input.emailSource==='linkedin'?(input.emails||[]).filter(e=>!isUnsafeContact(e)&&!previousContacts.some(c=>c.address===e.toLowerCase()&&c.source!=='linkedin')):[];
+    const profileContacts=[...publishedProfileEmails(input),...linkedinEmails.map(address=>({address:address.toLowerCase(),source:'linkedin',url:input.linkedinUrl||input.url,ownership:'PUBLISHED'}))];
     if(options.qualificationFirst&&!options.previousResearch&&profileContacts.length&&activityAge>=0&&activityAge<=30){
         research.contacts=profileContacts;
         const roots=candidates.filter(u=>!isPlatformWebsite(u)).flatMap(u=>{try{return [publicUrl(u).href];}catch{return [];}});
         research.website=roots[0]||'';research.websiteStatus=roots.length?'UNCONFIRMED':'NONE';
-        research.crawl={version:2,attributionVersion:2,complete:!roots.length,retryable:!!roots.length,maxRoutes:600,storageLimited:false,attempted:[],visited:[],pending:roots,failed:[],roots,matchedHosts:[],contactMatchedHosts:[],discovered:roots.length,inspected:0,contactPages:0,descriptionPages:0,stoppedReason:roots.length?'Published profile email found; website research can continue separately.':'',candidates:[]};
+        research.crawl={version:2,attributionVersion:3,complete:!roots.length,retryable:!!roots.length,maxRoutes:600,storageLimited:false,attempted:[],visited:[],pending:roots,failed:[],roots,matchedHosts:[],contactMatchedHosts:[],discovered:roots.length,inspected:0,contactPages:0,descriptionPages:0,stoppedReason:roots.length?'Published profile email found; website research can continue separately.':'',candidates:[]};
         deriveRules(input,research,sources,[]);return validateResearch(research);
     }
     const crawled = await crawlWebsiteRoutes(input, {
@@ -446,6 +456,7 @@ async function researchProspect(input, options = {}) {
         maxPages: options.maxPages || MAX_PAGES, maxTimeMs: options.maxTimeMs || MAX_TOTAL_MS, maxRoutes: options.maxRoutes,
         previousResearch: options.previousResearch,
         renderPage:options.renderPage,
+        rejectedHosts,
     });
     const pages = crawled.parsed;
     sources.push(...crawled.sources);
@@ -469,8 +480,8 @@ async function researchProspect(input, options = {}) {
         // Unrelated foreign addresses in testimonials or vendor links stay out.
         if (attributableCandidate(c,input)) research.contacts.push({ address: c.address, source: 'website', url: c.url, ownership: sameDomain ? 'DOMAIN_MATCH' : 'PUBLISHED' });
     }
-    if (options.previousResearch) research.contacts.push(...options.previousResearch.contacts.filter(contact => !research.contacts.some(current => current.address === contact.address)));
-    for (const address of input.emailSource === 'linkedin' ? (input.emails || []) : []) {
+    if (options.previousResearch) research.contacts.push(...options.previousResearch.contacts.filter(contact => ['manual','linkedin'].includes(contact.source)&&contact.url===sources[0].url&&!research.contacts.some(current => current.address === contact.address)));
+    for (const address of linkedinEmails) {
         if (!isUnsafeContact(address)) research.contacts.unshift({ address: address.toLowerCase(), source: 'linkedin', url: sources[0].url, ownership: input.profileIdentityConfirmed ? 'PUBLISHED' : 'UNCONFIRMED' });
     }
     research.contacts.unshift(...publishedProfileEmails(input));
@@ -505,7 +516,7 @@ async function researchProspect(input, options = {}) {
         research.limitations.push(interpretationFailure(error));
         options.onAIError?.(error);
     }
-    research.contacts = [...new Map(research.contacts.map(c => [c.address, c])).values()];
+    research.contacts = [...new Map([...research.contacts].reverse().map(c => [c.address, c])).values()].reverse();
     return validateResearch(research);
 }
 
