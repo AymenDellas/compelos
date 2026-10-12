@@ -150,9 +150,10 @@ function parsePage(html, url) {
         if(index<0&&!explicit)return;
         const nearby=index>=0?contactText.slice(Math.max(0,index-100),index+address.length+35):'';
         const contactInvitation=/\b(?:e-?mail|contact\s*(?:us|me)?|reach\s*(?:out|me)|get\s+in\s+touch)\b/i.test(nearby);
+        const sharedContact=index>=0&&/\bcontact\s+us\s+(?:at|via|by\s+email(?:\s+at)?)\s*[:=-]?\s*$/i.test(contactText.slice(Math.max(0,index-100),index));
         const existing = contacts.find(contact => contact.address === address);
-        if (existing) { existing.explicit ||= explicit; existing.businessContact ||= businessContact; existing.contactInvitation ||= contactInvitation; }
-        else contacts.push({ address, explicit, businessContact,contactInvitation });
+        if (existing) { existing.explicit ||= explicit; existing.businessContact ||= businessContact; existing.contactInvitation ||= contactInvitation; existing.sharedContact ||= sharedContact; }
+        else contacts.push({ address, explicit, businessContact,contactInvitation,sharedContact });
     };
     $('a[href]').each((_i, node) => {
         const href = $(node).attr('href') || '';
@@ -188,6 +189,7 @@ function attributableCandidate(c,input){
     return personEmail(c.address,input)&&(sameDomain||c.explicit||contactContext)
         || shared&&(sameDomain||c.explicit&&(c.contactPage||c.businessContact))
         || branded&&(c.explicit||contactContext)
+        || sameDomain&&c.explicit&&c.sharedContact
         || FREE_MAIL.has(domain)&&c.businessContact;
 }
 

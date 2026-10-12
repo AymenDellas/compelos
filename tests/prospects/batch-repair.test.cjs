@@ -33,6 +33,11 @@ test('an old accepted staff contact is revalidated instead of blindly restored o
  assert.ok(!next.contacts.some(c=>c.address==='asonksen@eosworldwide.com'&&c.ownership!=='UNCONFIRMED'));
  assert.equal(next.contacts[0].address,'brian.white@eosworldwide.com');
 });
+test('a custom practice inbox explicitly offered to contact the business is retained with its source evidence',async()=>{
+ const r=await researchProspect(input,{now,ai:false,fetchPage:async url=>({url,html:html.replace('asonksen@eosworldwide.com','powerup@eosworldwide.com').replace('Email our speakers team','powerup@eosworldwide.com').replace('<a href="mailto:powerup','Contact us at <a href="mailto:powerup')})});
+ assert.ok(r.contacts.some(c=>c.address==='powerup@eosworldwide.com'&&c.ownership==='DOMAIN_MATCH'));
+ assert.equal(r.crawl.candidates.find(c=>c.address==='powerup@eosworldwide.com').sharedContact,true);
+});
 const card=(author,label,quote='')=>`<div><h2>Feed post</h2><div><a href="${author}">Author</a><p>${label}</p></div>${quote}<p>Actual post text</p></div>`;
 const activityOptions={profileUrl:person,pageUrl:person+'recent-activity/all/',now};
 test('visible activity requires the requested author; quoted posts and ambiguous rounded dates never qualify',()=>{
