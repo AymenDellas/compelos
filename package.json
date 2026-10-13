@@ -14,7 +14,7 @@
     "test:onboarding": "node scripts/check-onboarding-requirements.cjs",
     "test:teleprompter": "node scripts/check-teleprompter-pip.cjs",
     "test:crm-verification": "node scripts/check-crm-email-verification.cjs",
-    "test:qev": "node scripts/check-quickemailverification.cjs && node --test tests/email-verification/*.test.cjs",
+    "test:qev": "node --test scripts/check-quickemailverification.cjs tests/email-verification/*.test.cjs",
     "test:auth": "node scripts/check-dashboard-auth.cjs",
     "test:workers": "node --test tests/workers/*.test.cjs",
     "worker": "node scripts/linkedin-worker-supervisor.cjs",
