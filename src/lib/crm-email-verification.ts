@@ -114,7 +114,8 @@ export function addVerificationBatch(run: VerificationRun, report: VerificationB
     const next = { ...run, causes: { ...run.causes } };
     if (report.verificationProvider) {
         next.verificationProvider = report.verificationProvider;
-        next.remainingCredits = report.remainingCredits;
+        // A timed-out response has no balance header; retain the latest known balance.
+        if (report.remainingCredits != null || next.remainingCredits == null) next.remainingCredits = report.remainingCredits;
     }
     next.processed += report.updated.length + report.skipped.length + report.failed.length;
     next.noEmail += report.skipped.filter(row => row.reason === 'NO_EMAIL').length;

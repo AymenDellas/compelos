@@ -70,13 +70,13 @@ const map = overrides => qev.mapQevResult(' Person@Fixture.Test ', fixture(overr
     assert.equal(batch[1].source, 'crm');
     assert.equal(batch[2].source, 'automation');
 
-    for (const status of [401, 402, 403, 429, 500]) {
+    for (const status of [400, 401, 402, 403, 404]) {
         calls = 0;
         global.fetch = async () => { calls++; return new Response('Secret or unsafe error body', {
             status, headers: { 'x-qev-remaining-credits': '0' },
         }); };
         const results = await qev.verifyQevBatch(Array.from({ length: 8 }, (_, i) => `lead${i}@fixture.test`));
-        assert.ok(calls <= 2, 'A quota/configuration/outage failure stops requests');
+        assert.ok(calls <= 2, 'A quota/configuration failure stops requests without retries');
         assert.ok(results.every(row => row.status === 'UNKNOWN' && row.error && row.stopRun));
         assert.ok(results.every(row => !row.reason.includes('Secret') && !row.reason.includes('fixture-secret')));
         let writes = 0;
@@ -93,7 +93,9 @@ const map = overrides => qev.mapQevResult(' Person@Fixture.Test ', fixture(overr
         assert.equal(run.verificationProvider, 'QuickEmailVerification');
     }
     global.fetch = async () => { throw new Error('fetch URL contains fixture-secret-do-not-echo'); };
-    assert.ok(!(await qev.verifyQevBatch(['person@fixture.test']))[0].reason.includes('fixture-secret'));
+    const unavailable = (await qev.verifyQevBatch(['person@fixture.test'], { sleep: async () => {} }))[0];
+    assert.ok(!unavailable.reason.includes('fixture-secret'));
+    assert.equal(unavailable.stopRun, false, 'An isolated request failure does not stop the list');
     global.fetch = realFetch;
     console.log('QuickEmailVerification checks passed: string/boolean flags, safe exports, risky/invalid/unknown results, credits, deduplication, and failures preserving CRM verdicts. No live credits used.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

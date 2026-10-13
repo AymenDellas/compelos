@@ -63,6 +63,18 @@ function fixtures(rows, failIds = []) {
     assert.equal(partialRun.failed, 1);
     assert.equal(partialRun.unknown, 2);
 
+    const creditedRun = addVerificationBatch(startVerificationRun(3), {
+        updated: [], skipped: [], failed: [], verificationProvider: 'QuickEmailVerification', remainingCredits: 77,
+    });
+    const afterTimeout = addVerificationBatch(creditedRun, {
+        updated: [], skipped: [], failed: [{ id: '30', reason: 'Request timed out' }],
+        verificationProvider: 'QuickEmailVerification', remainingCredits: null,
+    });
+    assert.equal(afterTimeout.remainingCredits, 77, 'A failed response without a credit header retains the last known balance');
+    assert.equal(addVerificationBatch(afterTimeout, {
+        updated: [], skipped: [], failed: [], verificationProvider: 'QuickEmailVerification', remainingCredits: 0,
+    }).remainingCredits, 0, 'An explicit zero balance must still be shown');
+
     const mismatched = fixtures(rows.slice(29, 31));
     mismatched.dependencies.verify = async () => [{ email: 'someone-else@fixture.test', status: 'VALID' }];
     const mismatchReport = await verifyCrmEmailBatch(['29', '30'], mismatched.dependencies);

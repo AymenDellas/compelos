@@ -480,7 +480,8 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
     };
 
     // Small batches expose saved results and the latest provider credit balance quickly.
-    const VERIFY_CHUNK = 5;
+    // Two concurrent provider checks, each with one retry, fit within the hosted action budget.
+    const VERIFY_CHUNK = 4;
 
     const handleVerifySelected = async () => {
         if (selectedIds.size === 0 || verifyActiveRef.current) return;
@@ -505,7 +506,7 @@ export default function CrmDatabase({ onPushToEngine, onOpenCaseStudy }: { onPus
                 }
                 setVerifyRun(prev => prev && addVerificationBatch(prev, report));
                 if (report.failed.length) {
-                    setVerifyError(report.failed[0].reason + ' Failed rows remain selected.');
+                    setVerifyError(report.failed[0].reason + ' Unfinished rows remain selected for retry.');
                 }
                 // Only saved results and explicit skips are cleared. Failures remain retryable.
                 const settledIds = new Set([...report.updated, ...report.skipped].map(row => row.id));
