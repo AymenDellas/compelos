@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { notFound } from 'next/navigation';
 import { ArrowUpRight, Check, FileText, KeyRound, LayoutList, UserRound } from 'lucide-react';
 import { CompelLogo } from '@/components/business/CompelLogo';
+import { ClientScopeSummary } from '@/components/business/ClientScopeSummary';
 import '@/components/business/compel-onboarding.css';
 import {
     confirmClientScopeAction,
@@ -19,6 +20,11 @@ import {
     DEPLOYMENT_TOOL_HINT,
     FUNNEL_OFFER_HINT,
     FUNNEL_OFFER_QUESTION,
+    DIFFERENTIATION_QUESTION,
+    UNSUITABLE_CLIENTS_QUESTION,
+    CLIENT_AGREEMENT_LABELS,
+    CLIENT_PAYMENT_LABELS,
+    clientFormStatus,
     normalizeOnboarding,
     onboardingAccessComplete,
     onboardingBlockers,
@@ -50,7 +56,7 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
         result.rows[0].opportunity as OpportunityData,
         result.rows[0].profile as OfferProfile,
     );
-    const blockers = onboardingBlockers(data);
+    const blockers = onboardingBlockers(data, 'client');
     const progress = onboardingProgress(data);
     const clientSigned = Boolean(data.agreement.clientSignature);
     const agreementReady = Boolean(data.agreement.scope.trim() && data.agreement.deliverables.trim()) &&
@@ -63,9 +69,9 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
     const requiredAccess = data.access.filter((item) => item.required && !item.nonBlocking);
     const tasks = [
         {
-            label: 'Agreement',
+            label: 'Scope and agreement',
             href: '#agreement',
-            detail: data.agreement.status === 'FULLY_SIGNED' ? 'Fully signed' : clientSigned ? 'Your signature received' : 'Signature required',
+            detail: data.overrides.includes('agreement') ? 'Complete' : CLIENT_AGREEMENT_LABELS[data.agreement.status],
             done: data.agreement.status === 'FULLY_SIGNED' || data.overrides.includes('agreement'),
             icon: FileText,
         },
@@ -74,7 +80,7 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
                   {
                       label: 'Payment',
                       href: '#payment',
-                      detail: data.payment.status.replaceAll('_', ' ').toLowerCase(),
+                      detail: data.overrides.includes('payment') ? 'Complete' : CLIENT_PAYMENT_LABELS[data.payment.status],
                       done:
                           data.payment.status === 'FULLY_PAID' ||
                           (data.payment.structure !== 'FULL' && data.payment.status === 'DEPOSIT_PAID') ||
@@ -86,9 +92,7 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
         {
             label: 'Onboarding form',
             href: '#onboarding-form',
-            detail: data.form.status === 'COMPLETE' && !onboardingFormComplete(data)
-                ? 'Needs required details'
-                : data.form.status.replaceAll('_', ' ').toLowerCase(),
+            detail: data.overrides.includes('form') ? 'Complete' : clientFormStatus(data),
             done: onboardingFormComplete(data) || data.overrides.includes('form'),
             icon: LayoutList,
         },
@@ -140,12 +144,14 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
                 <div className="compel-portal-layout">
                     <div className="compel-portal-content">
                         <section id="agreement" className="panel">
-                            <div className="panel-head compel-portal-section-head"><span>01</span><h2>Your agreement</h2></div>
+                            <div className="panel-head compel-portal-section-head"><span>01</span><h2>Your scope and agreement</h2></div>
                             <div className="panel-body space-y-5">
-                                <div className="flex flex-wrap items-center gap-3">
+                                <p className="text-sm text-[var(--text-dim)]">Review the deliverables and exclusions before opening and signing your agreement.</p>
+                                <ClientScopeSummary data={data} />
+                                <div className="flex flex-wrap items-center gap-3 border-t border-[var(--line)] pt-5">
                                     <div className="flex-1 min-w-48">
                                         <p className="text-sm">{data.projectType === 'CASE_STUDY' ? 'Free case-study agreement' : 'Paid-client agreement'}</p>
-                                        <p className="text-xs text-[var(--text-faint)] mt-1">{data.agreement.status === 'FULLY_SIGNED' ? 'Fully signed' : clientSigned ? 'You signed · Compel signature pending' : 'Please review and sign below'}</p>
+                                        <p className="text-xs text-[var(--text-faint)] mt-1">{data.overrides.includes('agreement') ? 'Complete' : CLIENT_AGREEMENT_LABELS[data.agreement.status]}</p>
                                     </div>
                                     <a className="btn btn-outline" href={`/portal/${token}/agreement`} target="_blank" rel="noreferrer">Open PDF in new tab</a>
                                 </div>
@@ -168,7 +174,7 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
                                 <div className="panel-body flex flex-wrap items-center gap-3">
                                     <div className="flex-1 min-w-48">
                                         <p className="text-sm">{data.payment.currency} {data.payment.price ?? 'Price to be confirmed'} · {data.payment.structure.replaceAll('_', ' ').toLowerCase()}</p>
-                                        <p className="text-xs text-[var(--text-faint)] mt-1">Status: {data.payment.status.replaceAll('_', ' ').toLowerCase()}</p>
+                                        <p className="text-xs text-[var(--text-faint)] mt-1">{CLIENT_PAYMENT_LABELS[data.payment.status]}</p>
                                     </div>
                                     {data.payment.link && <a className="btn btn-primary" href={data.payment.link} target="_blank" rel="noreferrer">Open secure payment link</a>}
                                 </div>
@@ -184,6 +190,8 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
                                     <PortalField name="trafficSources" label="Current traffic sources" value={data.form.trafficSources} />
                                     <PortalField name="customerProblem" label="Main customer problem" value={data.form.customerProblem} multiline required />
                                     <PortalField name="desiredOutcome" label="Desired outcome" value={data.form.desiredOutcome} multiline required />
+                                    <PortalField name="differentiation" label={DIFFERENTIATION_QUESTION} value={data.form.differentiation} multiline />
+                                    <PortalField name="unsuitableClients" label={UNSUITABLE_CLIENTS_QUESTION} value={data.form.unsuitableClients} multiline />
                                 </PortalGroup>
                                 <PortalGroup number="02" title="Current funnel">
                                     <PortalField name="landingPageUrl" label="Landing page URL" value={data.form.landingPageUrl} />
@@ -247,16 +255,12 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
                         <section id="scope-confirmation" className="panel">
                             <div className="panel-head compel-portal-section-head"><span>{data.projectType === 'PAID' ? '04' : '03'}</span><h2>Confirm the scope</h2></div>
                             <div className="panel-body space-y-4">
-                                <div className="grid sm:grid-cols-2 gap-4">
-                                    <div><p className="field-label">Included</p><p className="text-sm text-[var(--text-dim)] whitespace-pre-wrap">{data.scope.included || 'To be confirmed'}</p></div>
-                                    <div><p className="field-label">Not included</p><p className="text-sm text-[var(--text-dim)] whitespace-pre-wrap">{data.scope.excluded || 'Nothing recorded'}</p></div>
-                                </div>
+                                <ClientScopeSummary data={data} />
                                 <div className="grid sm:grid-cols-2 gap-4">
                                     <div><p className="field-label">Target launch</p><p className="text-sm">{data.scope.targetLaunchDate || 'Not set'}</p></div>
                                     <div><p className="field-label">Approval owner</p><p className="text-sm">{data.scope.approvalOwner || 'Not set'}</p></div>
                                 </div>
                                 <div><p className="field-label">Revision process</p><p className="text-sm text-[var(--text-dim)]">{data.scope.revisionProcess}</p></div>
-                                <div><p className="field-label">Dependencies</p><p className="text-sm text-[var(--text-dim)]">{data.scope.dependencies}</p></div>
                                 {data.scope.confirmed ? <p className="mark mark-ok">Scope confirmed</p> : <form action={confirmClientScopeAction}><input type="hidden" name="token" value={token} /><button className="btn btn-primary" type="submit">Confirm this scope</button></form>}
                             </div>
                         </section>
@@ -291,7 +295,7 @@ function PortalField({ name, label, value, hint, multiline = false, required = f
     const id = `portal-${name}`;
     const hintId = hint ? `${id}-hint` : undefined;
     return (
-        <div className={`space-y-2 min-w-0 ${['offer', 'assets', 'importantContext'].includes(name) ? 'sm:col-span-2' : ''}`}>
+        <div className={`space-y-2 min-w-0 ${['offer', 'differentiation', 'unsuitableClients', 'assets', 'importantContext'].includes(name) ? 'sm:col-span-2' : ''}`}>
             <label htmlFor={id} className="flex items-baseline justify-between gap-2 text-sm text-[var(--text-dim)]">
                 <span>{label}{required ? ' *' : ''}</span>
                 {!required && <span className="text-xs text-[var(--text-faint)]">Optional</span>}

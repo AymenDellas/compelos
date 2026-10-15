@@ -38,6 +38,11 @@ async function main() {
     projectName: 'Sample funnel',
     projectType: 'PAID',
     payment: { price: 1200, currency: 'USD', structure: 'FULL', deposit: null, balance: null, dueDate: '', notes: '' },
+    scope: {
+      included: agreement.deliverables,
+      excluded: 'Advertising and third-party subscriptions unless agreed separately.',
+      dependencies: 'Signed agreement, agreed initial payment, completed form, and verified access.',
+    },
     agreement,
   };
   const original = Buffer.from(await mod.exports.agreementPdf(data).arrayBuffer());
@@ -45,6 +50,8 @@ async function main() {
   assert.deepEqual(original, repeated);
   assert.equal(original.subarray(0, 4).toString(), '%PDF');
   assert.equal(original.includes(Buffer.from('Signed electronically by')), false);
+  assert.ok(original.includes(Buffer.from('NOT INCLUDED')));
+  assert.ok(original.includes(Buffer.from('BEFORE WORK STARTS')));
   const hash = createHash('sha256').update(original).digest('hex');
   const signed = Buffer.from(await mod.exports.agreementPdf({
     ...data,

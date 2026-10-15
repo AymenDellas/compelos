@@ -109,7 +109,9 @@ export function agreementPdf(data: OnboardingData): Blob {
     let number = 1;
     section(number++, 'Agreement', a.intro);
     section(number++, 'Project scope', a.scope);
-    section(number++, 'Deliverables', a.deliverables);
+    section(number++, 'Deliverables', data.scope.included || a.deliverables);
+    if (data.scope.excluded.trim()) section(number++, 'Not included', data.scope.excluded);
+    section(number++, 'Before work starts', data.scope.dependencies);
     section(number++, 'Timeline', a.timeline);
     if (data.projectType === 'PAID') {
         section(number++, 'Payment terms', [

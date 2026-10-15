@@ -162,6 +162,8 @@ export function validateProject(d: ProjectData) {
         choice(o.payment?.status, PAYMENT_STATUSES, 'payment status');
         choice(o.payment?.structure, ['FULL', 'DEPOSIT', 'CUSTOM'], 'payment structure');
         choice(o.form?.status, ['NOT_SENT', 'SENT', 'IN_PROGRESS', 'COMPLETE'], 'onboarding form status');
+        text(o.form.differentiation ?? '', 'Approach differentiation', 20_000);
+        text(o.form.unsuitableClients ?? '', 'Unsuitable clients', 20_000);
         if (o.form.caseStudyConsent !== undefined && typeof o.form.caseStudyConsent !== 'boolean')
             throw new Error('Case-study permission must be accepted or declined.');
         for (const key of ['testimonialCommitment', 'deploymentAccessConsent'] as const)

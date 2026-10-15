@@ -119,7 +119,7 @@ export async function saveClientProjectAction(id: string, data: ProjectData, exp
 }
 
 const PORTAL_FORM_FIELDS = [
-    'offer', 'audience', 'customerProblem', 'desiredOutcome', 'trafficSources',
+    'offer', 'audience', 'customerProblem', 'desiredOutcome', 'differentiation', 'unsuitableClients', 'trafficSources',
     'landingPageUrl', 'bookingUrl', 'qualification', 'nurture', 'traffic', 'bookings', 'showRate',
     'closeRate', 'bookingPlatform', 'crm', 'emailPlatform', 'analyticsPlatform', 'hostingPlatform',
     'domainProvider', 'websitePlatform', 'repositoryProvider', 'assets', 'mustStay', 'avoid',
@@ -149,7 +149,10 @@ export async function saveClientPortalFormAction(formData: FormData) {
         const project = result.rows[0].data as ProjectData;
         const onboarding = normalizeOnboarding(project, result.rows[0].opportunity, result.rows[0].profile);
         const nextForm = { ...onboarding.form };
-        for (const key of PORTAL_FORM_FIELDS) nextForm[key] = portalValue(formData, key);
+        for (const key of PORTAL_FORM_FIELDS) {
+            if ((key === 'differentiation' || key === 'unsuitableClients') && !formData.has(key)) continue;
+            nextForm[key] = portalValue(formData, key);
+        }
         nextForm.caseStudyConsent = onboarding.projectType === 'CASE_STUDY' && formData.get('caseStudyConsent') === 'accepted';
         nextForm.status = portalValue(formData, 'intent') === 'complete' ? 'COMPLETE' : 'IN_PROGRESS';
         const generated = nextForm.status === 'COMPLETE' ? generateAccessChecklist(nextForm) : [];
@@ -173,17 +176,21 @@ export async function confirmClientScopeAction(formData: FormData) {
     if (!/^[0-9a-f-]{36}$/i.test(token)) throw new Error('This portal link is invalid.');
     await businessTransaction(async (client) => {
         const result = await client.query(
-            `SELECT * FROM business_projects WHERE data->'onboarding'->>'portalToken'=$1 FOR UPDATE`,
+            `SELECT p.*,o.data AS opportunity,v.profile FROM business_projects p
+             JOIN business_opportunities o ON o.id=p.opportunity_id
+             JOIN business_offer_versions v ON v.version=p.offer_version
+             WHERE p.data->'onboarding'->>'portalToken'=$1 FOR UPDATE OF p`,
             [token],
         );
         if (!result.rows[0]) throw new Error('This portal link is no longer available.');
         const project = result.rows[0].data as ProjectData;
         if (!project.onboarding) throw new Error('Onboarding has not been prepared.');
+        const onboarding = normalizeOnboarding(project, result.rows[0].opportunity, result.rows[0].profile);
         const next = {
             ...project,
             onboarding: {
-                ...project.onboarding,
-                scope: { ...project.onboarding.scope, confirmed: true, confirmedAt: new Date().toISOString() },
+                ...onboarding,
+                scope: { ...onboarding.scope, confirmed: true, confirmedAt: new Date().toISOString() },
             },
         };
         validateProject(next);

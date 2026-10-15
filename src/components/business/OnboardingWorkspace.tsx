@@ -28,12 +28,17 @@ import {
 import {
     AGREEMENT_STATUSES,
     CASE_STUDY_CONSENT_TEXT,
+    CLIENT_AGREEMENT_LABELS,
+    CLIENT_PAYMENT_LABELS,
+    clientFormStatus,
     DEPLOYMENT_TOOL_FIELDS,
     DEPLOYMENT_TOOL_HINT,
     currentFreeAgreementIntro,
     DEFAULT_ONBOARDING_TEMPLATES,
     FUNNEL_OFFER_HINT,
     FUNNEL_OFFER_QUESTION,
+    DIFFERENTIATION_QUESTION,
+    UNSUITABLE_CLIENTS_QUESTION,
     FUNNEL_LABELS,
     FUNNEL_TYPES,
     PAYMENT_STATUSES,
@@ -54,6 +59,7 @@ import {
     type ProjectData,
 } from '@/lib/business';
 import { agreementPdf } from '@/lib/agreement-pdf';
+import { ClientScopeSummary } from './ClientScopeSummary';
 import { Empty, Field, LinkOut, Panel, type RunAction } from './BusinessUi';
 import { CompelLogo } from './CompelLogo';
 import './compel-onboarding.css';
@@ -545,7 +551,9 @@ function OnboardingEditor({
 
 function AgreementStep({ data, update }: StepProps) {
     const setAgreement = (key: keyof OnboardingData['agreement'], value: string) =>
-        update((current) => ({ ...current, agreement: { ...current.agreement, [key]: value } }));
+        update((current) => ({ ...current, agreement: { ...current.agreement, [key]: value },
+            ...(key === 'deliverables' ? { scope: { ...current.scope, included: value, confirmed: false, confirmedAt: '' } } : {}),
+        }));
     const pdf = async (mode: 'preview' | 'download') => {
         const preview = mode === 'preview' ? window.open('', '_blank') : null;
         if (preview) preview.opener = null;
@@ -656,14 +664,14 @@ function FormStep({ data, update }: StepProps) {
             {hint && <p className="text-sm text-[var(--text-dim)]">{hint}</p>}
             <div className="grid sm:grid-cols-2 gap-4">{fields.map(([key, label, multiline]) => {
                 const required = requiredKeys.includes(key);
-                return <div key={key} className={key === 'offer' ? 'sm:col-span-2' : undefined}><Field label={required ? label : `${label} · Optional`} hint={key === 'offer' ? FUNNEL_OFFER_HINT : undefined} required={required} multiline={multiline} value={data.form[key]} onChange={(value) => set(key, value)} /></div>;
+                return <div key={key} className={['offer', 'differentiation', 'unsuitableClients'].includes(key) ? 'sm:col-span-2' : undefined}><Field label={required ? label : `${label} · Optional`} hint={key === 'offer' ? FUNNEL_OFFER_HINT : undefined} required={required} multiline={multiline} value={data.form[key]} onChange={(value) => set(key, value)} /></div>;
             })}</div>
         </div>
     );
     return (
         <Panel title="Client onboarding form" action={<select className="field" aria-label="Form status" value={data.form.status} onChange={(e) => set('status', e.target.value)}><option value="NOT_SENT">Not sent</option><option value="SENT">Sent</option><option value="IN_PROGRESS">In progress</option><option value="COMPLETE">Complete</option></select>}>
             <p className="text-sm text-[var(--text-dim)]">Collect structured information here. Keep strategy and context for the short discovery call.</p>
-            {group('Offer and business', [['offer', FUNNEL_OFFER_QUESTION], ['audience', 'Target audience'], ['customerProblem', 'Main customer problem', true], ['desiredOutcome', 'Desired outcome', true], ['trafficSources', 'Current traffic sources']])}
+            {group('Offer and business', [['offer', FUNNEL_OFFER_QUESTION], ['audience', 'Target audience'], ['customerProblem', 'Main customer problem', true], ['desiredOutcome', 'Desired outcome', true], ['differentiation', DIFFERENTIATION_QUESTION, true], ['unsuitableClients', UNSUITABLE_CLIENTS_QUESTION, true], ['trafficSources', 'Current traffic sources']])}
             {group('Funnel information', [['landingPageUrl', 'Current landing page URL'], ['bookingUrl', 'Booking URL'], ['qualification', 'Current qualification'], ['nurture', 'Current nurture / follow-up'], ['traffic', 'Approximate traffic'], ['bookings', 'Approximate bookings'], ['showRate', 'Approximate show rate'], ['closeRate', 'Approximate clients / close rate']])}
             {group('Existing tools', [['bookingPlatform', 'Booking platform'], ['crm', 'CRM'], ['emailPlatform', 'Email platform'], ['analyticsPlatform', 'Analytics platform']])}
             {group('Deployment tools and access · Optional', DEPLOYMENT_TOOL_FIELDS.map(([key, label]) => [key, label]), DEPLOYMENT_TOOL_HINT)}
@@ -742,7 +750,10 @@ function BaselineStep({ data, update }: StepProps) {
 }
 
 function ScopeStep({ data, update }: StepProps) {
-    const set = (key: keyof OnboardingData['scope'], value: string | boolean) => update((current) => ({ ...current, scope: { ...current.scope, [key]: value } }));
+    const set = (key: keyof OnboardingData['scope'], value: string | boolean) => update((current) => ({ ...current,
+        scope: { ...current.scope, [key]: value, confirmed: false, confirmedAt: '' },
+        ...(key === 'included' ? { agreement: { ...current.agreement, deliverables: String(value) } } : {}),
+    }));
     return (
         <div className="space-y-4">
             <Panel title="Scope confirmation" action={<span className={`mark ${data.scope.confirmed ? 'mark-ok' : 'mark-idle'}`}>{data.scope.confirmed ? 'Client confirmed' : 'Waiting for confirmation'}</span>}>
@@ -802,20 +813,21 @@ function Documents({ data }: { data: OnboardingData }) {
 }
 
 function PortalPreview({ data, blockers, onClose }: { data: OnboardingData; blockers: ReturnType<typeof onboardingBlockers>; onClose: () => void }) {
-    const outstanding = blockers.map((item) => item.label);
+    const outstanding = onboardingBlockers(data, 'client').map((item) => item.label);
     return (
         <div className="compel-portal fixed inset-0 z-50 overflow-y-auto">
             <header className="compel-portal-header"><CompelLogo /><span className="compel-portal-header-label">Client portal preview</span><button className="btn btn-outline ml-auto" onClick={onClose}><X className="w-3.5 h-3.5" /> Close preview</button></header>
             <main className="max-w-3xl mx-auto p-5 md:p-10 space-y-6">
                 <div><p className="label-micro">{data.businessName || data.clientName}</p><h1 className="text-2xl font-semibold mt-2">Welcome, {data.clientName.split(' ')[0]}</h1><p className="text-[var(--text-dim)] mt-2">Everything needed to prepare {data.projectName}, in one place.</p></div>
+                <section className="panel p-5 space-y-4"><h2 className="font-medium">Review your scope before signing</h2><ClientScopeSummary data={data} /></section>
                 <div className={`panel p-5 ${outstanding.length ? 'border-[rgba(232,177,76,.25)]' : 'border-[var(--signal-line)]'}`}>
                     <h2 className="font-medium">{outstanding.length ? "Here's what we still need from you before the project can start." : 'You are all set. This project is ready to start.'}</h2>
                     {outstanding.length > 0 && <ul className="mt-4 space-y-2">{outstanding.map((item) => <li key={item} className="flex items-center gap-2 text-sm text-[var(--text-dim)]"><CircleAlert className="w-4 h-4 text-[var(--warn)]" />{item}</li>)}</ul>}
                 </div>
                 <div className="space-y-2">{[
-                    ['Agreement', AGREEMENT_LABELS[data.agreement.status], data.agreement.status === 'FULLY_SIGNED'],
-                    ...(data.projectType === 'PAID' ? [['Payment', PAYMENT_LABELS[data.payment.status], ['FULLY_PAID', 'DEPOSIT_PAID'].includes(data.payment.status)]] : []),
-                    ['Onboarding form', data.form.status.replace('_', ' ').toLowerCase(), onboardingFormComplete(data)],
+                    ['Agreement', CLIENT_AGREEMENT_LABELS[data.agreement.status], data.agreement.status === 'FULLY_SIGNED'],
+                    ...(data.projectType === 'PAID' ? [['Payment', CLIENT_PAYMENT_LABELS[data.payment.status], ['FULLY_PAID', 'DEPOSIT_PAID'].includes(data.payment.status)]] : []),
+                    ['Onboarding form', clientFormStatus(data), onboardingFormComplete(data)],
                     ['Access requests', data.access.length ? `${data.access.filter((item) => item.status === 'VERIFIED').length} of ${data.access.filter((item) => item.required && !item.nonBlocking).length} verified` : onboardingFormComplete(data) ? 'Not needed' : 'Optional · share if applicable', onboardingAccessComplete(data)],
                     ['Assets', data.form.assets ? 'Received' : 'Waiting', Boolean(data.form.assets)],
                     ['Scope confirmation', data.scope.confirmed ? 'Confirmed' : 'Waiting', data.scope.confirmed],

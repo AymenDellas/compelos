@@ -197,6 +197,14 @@ export const PAYMENT_STATUSES = [
     'OVERDUE',
 ] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+export const CLIENT_AGREEMENT_LABELS: Record<AgreementStatus, string> = {
+    DRAFT: 'Ready to review', SENT: 'Please review and sign', VIEWED: 'Please sign the agreement',
+    SIGNED_CLIENT: 'Waiting for Compel to sign', FULLY_SIGNED: 'Signed by both parties',
+};
+export const CLIENT_PAYMENT_LABELS: Record<PaymentStatus, string> = {
+    NOT_SENT: 'Payment link to follow', LINK_SENT: 'Please complete your payment',
+    DEPOSIT_PAID: 'Deposit received', FULLY_PAID: 'Payment received', OVERDUE: 'Payment overdue',
+};
 export type AccessStatus = 'NOT_REQUESTED' | 'REQUESTED' | 'RECEIVED' | 'VERIFIED' | 'NOT_NEEDED';
 export type OnboardingDocument = {
     id: string;
@@ -266,6 +274,8 @@ export type OnboardingData = {
         audience: string;
         customerProblem: string;
         desiredOutcome: string;
+        differentiation: string;
+        unsuitableClients: string;
         trafficSources: string;
         landingPageUrl: string;
         bookingUrl: string;
@@ -346,6 +356,13 @@ const namedTool = (value: string) => Boolean(value?.trim() && !UNUSED_TOOL.test(
 export const FUNNEL_OFFER_QUESTION = 'Which single offer should this funnel promote?';
 export const FUNNEL_OFFER_HINT =
     'One offer keeps the message focused and gives visitors a clear next step, reducing distractions and helping the page convert.';
+export const DIFFERENTIATION_QUESTION = 'What makes your approach different from other coaches?';
+export const UNSUITABLE_CLIENTS_QUESTION = 'Who would you consider an unsuitable client?';
+export const DEFAULT_SCOPE_EXCLUSIONS =
+    'Unless agreed separately in writing, this project does not include:\nLead generation\nAdvertising, campaign management or ad spend\nThird-party subscriptions and platform costs\nOngoing optimization outside the agreed project scope';
+const LEGACY_SCOPE_DEPENDENCIES = 'Signed agreement, required payment, completed form, verified access, and baseline capture.';
+export const scopeDependencies = (projectType: OnboardingData['projectType']) =>
+    `Signed agreement, completed onboarding form, any required access verified, and starting funnel information recorded.${projectType === 'CASE_STUDY' ? ' No project payment is required.' : ' The agreed initial payment must also be received.'}`;
 
 export const REQUIRED_ONBOARDING_FORM_FIELDS = [
     ['offer', FUNNEL_OFFER_QUESTION],
@@ -365,6 +382,12 @@ export function missingOnboardingFormFields(data: OnboardingData): string[] {
 
 export function onboardingFormComplete(data: OnboardingData): boolean {
     return data.form.status === 'COMPLETE' && missingOnboardingFormFields(data).length === 0;
+}
+export function clientFormStatus(data: OnboardingData): string {
+    if (onboardingFormComplete(data)) return 'Answers submitted';
+    if (data.form.status === 'COMPLETE') return 'Please add the missing answers';
+    if (data.form.status === 'IN_PROGRESS') return 'Continue your saved answers';
+    return 'Please share your business details';
 }
 
 export type ProjectData = {
@@ -521,8 +544,9 @@ export function createOnboardingData(
                 : 'Portfolio and case-study use requires separate written permission from the client.',
             confidentiality:
                 'Both parties will keep non-public business, customer and access information confidential where reasonably required.',
-            termination:
-                'Either party may end the project with written notice. Completed work, outstanding payments and return or removal of access will be handled promptly.',
+            termination: isCaseStudy
+                ? 'Either party may end the project with written notice. Completed work and return or removal of access will be handled promptly. No project fee is due for this free engagement.'
+                : 'Either party may end the project with written notice. Completed work, outstanding payments and return or removal of access will be handled promptly.',
             revisions: isCaseStudy
                 ? 'Reasonable revisions are limited to the confirmed scope.'
                 : 'Revision rounds follow the confirmed project scope. Work outside that scope requires separate approval.',
@@ -546,6 +570,8 @@ export function createOnboardingData(
             audience: opportunity?.audience || '',
             customerProblem: '',
             desiredOutcome: '',
+            differentiation: '',
+            unsuitableClients: '',
             trafficSources: '',
             landingPageUrl: opportunity?.website || '',
             bookingUrl: opportunity?.bookingUrl || '',
@@ -590,11 +616,11 @@ export function createOnboardingData(
         },
         scope: {
             included: deliverables,
-            excluded: '',
+            excluded: DEFAULT_SCOPE_EXCLUSIONS,
             targetLaunchDate: project.launchAt,
             approvalOwner: opportunity?.name || project.name,
             revisionProcess: 'One consolidated feedback round per milestone unless otherwise agreed.',
-            dependencies: 'Signed agreement, required payment, completed form, verified access, and baseline capture.',
+            dependencies: scopeDependencies(isCaseStudy ? 'CASE_STUDY' : 'PAID'),
             confirmed: false,
             confirmedAt: '',
         },
@@ -619,6 +645,14 @@ export function normalizeOnboarding(
         form.offer = '';
     }
     const agreement = { ...fallback.agreement, ...saved.agreement };
+    const scope = { ...fallback.scope, ...saved.scope };
+    const signed = ['SIGNED_CLIENT', 'FULLY_SIGNED'].includes(agreement.status) || Boolean(agreement.clientSignature || agreement.signedPdfData || agreement.signedPdfName);
+    if (!signed && current.projectType === 'CASE_STUDY' && agreement.termination === 'Either party may end the project with written notice. Completed work, outstanding payments and return or removal of access will be handled promptly.')
+        agreement.termination = fallback.agreement.termination;
+    // Upgrade untouched defaults, never custom exclusions or an already confirmed/signed scope.
+    if (!signed && !scope.confirmed && !scope.excluded.trim()) scope.excluded = DEFAULT_SCOPE_EXCLUSIONS;
+    if ([LEGACY_SCOPE_DEPENDENCIES, scopeDependencies('PAID'), scopeDependencies('CASE_STUDY')].includes(scope.dependencies))
+        scope.dependencies = scopeDependencies(current.projectType || fallback.projectType);
     // Upgrade unsigned terms; signatures and stored signed PDFs retain their original wording.
     if (['DRAFT', 'SENT', 'VIEWED'].includes(agreement.status) && !agreement.clientSignature && !agreement.signedPdfData) {
         const commitments = [DEPLOYMENT_ACCESS_CONSENT_TEXT, ...(current.projectType === 'CASE_STUDY' ? [TESTIMONIAL_COMMITMENT_TEXT] : [])];
@@ -636,7 +670,7 @@ export function normalizeOnboarding(
         payment: { ...fallback.payment, ...saved.payment },
         form,
         baseline: { ...fallback.baseline, ...saved.baseline },
-        scope: { ...fallback.scope, ...saved.scope },
+        scope,
         access: form.status === 'COMPLETE'
             ? mergeAccessChecklist(Array.isArray(saved.access) ? saved.access : [], generateAccessChecklist(form))
             : Array.isArray(saved.access) ? saved.access : [],
@@ -743,7 +777,7 @@ export function onboardingAccessComplete(data: OnboardingData): boolean {
 }
 
 export type OnboardingBlocker = { key: string; label: string; detail: string };
-export function onboardingBlockers(data: OnboardingData): OnboardingBlocker[] {
+export function onboardingBlockers(data: OnboardingData, audience: 'internal' | 'client' = 'internal'): OnboardingBlocker[] {
     const blockers: OnboardingBlocker[] = [];
     const add = (key: string, label: string, detail: string) => {
         if (!data.overrides.includes(key)) blockers.push({ key, label, detail });
@@ -779,7 +813,18 @@ export function onboardingBlockers(data: OnboardingData): OnboardingBlocker[] {
         add('baseline', 'Baseline not captured', 'Preserve the current funnel and mark unavailable metrics as unknown.');
     if (!data.scope.confirmed)
         add('scope', 'Scope not confirmed', 'The client needs to approve the included work, exclusions, and dependencies.');
-    return blockers;
+    if (audience === 'internal') return blockers;
+    const clientDetails: Record<string, { label: string; detail: string }> = {
+        agreement: data.agreement.status === 'SIGNED_CLIENT'
+            ? { label: 'Waiting for Compel to sign', detail: 'You have signed. Compel will complete the agreement and share the signed copy with you.' }
+            : { label: 'Review and sign your agreement', detail: 'Read the included work and exclusions, then review your agreement PDF and arrange your signature with Compel.' },
+        payment: { label: data.payment.status === 'OVERDUE' ? 'Complete your overdue payment' : 'Complete the agreed initial payment', detail: data.payment.link ? 'Use the secure payment link in the Payment section.' : 'Compel will share your payment link. Contact Aymen if you need help.' },
+        form: { label: 'Tell us about your business', detail: data.form.status === 'COMPLETE' ? `Please add the missing answers: ${missingOnboardingFormFields(data).join(', ')}.` : 'Complete the business questions below. You can save your answers and finish later.' },
+        access: { label: 'Share the requested tool access', detail: 'Follow the access instructions below and let us know when you have sent the invitations. Never send passwords.' },
+        baseline: { label: 'Compel is preparing your starting-point record', detail: 'We will record your current funnel and available booking figures. We will contact you if we need anything else.' },
+        scope: { label: 'Confirm the work we will deliver', detail: 'Review what is included, what is excluded and what we need before starting, then select Confirm this scope.' },
+    };
+    return blockers.map(item => ({ ...item, ...clientDetails[item.key] }));
 }
 
 export function onboardingProgress(data: OnboardingData) {
