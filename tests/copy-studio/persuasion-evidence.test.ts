@@ -146,3 +146,18 @@ test('copy exports contain generated public headings without extra template-labe
   assert.doesNotMatch(text, /## The problem\n/);
   assert.doesNotMatch(text, /### /);
 });
+
+test('manual-review failures are caught: generic hero, invented follow-ups, financial stakes and Unicode-hyphen promises', () => {
+  const bad = structuredClone(draft);
+  bad.sections[0].headline = 'Discover your next step';
+  bad.sections[0].body = 'If you are ready to move forward, you are in the right place.';
+  bad.sections.find(section => section.id === 'objections')!.body = 'We can extend the discussion or schedule a follow-up session.';
+  bad.sections.find(section => section.id === 'problem')!.body = 'Staying here can mean lost income.';
+  bad.sections.find(section => section.id === 'cta')!.body = 'This is a no‑obligation step.';
+  const issues = auditDraft(bad, input.brief);
+  assert.ok(issues.some(issue => /approved audience/.test(issue.message)));
+  assert.ok(issues.some(issue => /Follow-up or extended-call/.test(issue.message)));
+  assert.ok(issues.some(issue => /financial consequence/.test(issue.message)));
+  assert.ok(issues.some(issue => /sales-process promise/.test(issue.message)));
+  assert.equal(auditDraft({ ...draft, sections: [{ ...draft.sections.at(-1)!, body: 'This is a no‑obligation conversation.' }] }, { ...input.brief, nextStep: 'A no-obligation conversation.' }).length, 0);
+});

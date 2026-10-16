@@ -49,6 +49,17 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
         add('A testimonial quotation was changed or invented. Copy its wording from the approved evidence.', 'warning');
     }
     const prose = quoted.reduce((text, quote) => text.replace(quote, ''), copy);
+    const plainProse = prose.toLowerCase().replace(/[\u2010-\u2015\u2212]/g, '-');
+    const policyFacts = [brief.description, brief.deliverables, brief.price, brief.guarantee, brief.nextStep].join(' ').toLowerCase().replace(/[-\u2010-\u2015\u2212]/g, ' ');
+    const audienceWords = (brief.audience.toLowerCase().match(/[\p{L}]{3,}/gu) || [])
+      .filter(word => !/^(?:the|and|for|with|who|have|their|they|are|that|want|looking|existing|independent|seeking|need|from|into|this|your)$/.test(word));
+    if (section.id === 'hero' && audienceWords.length && !audienceWords.some(word => plainProse.includes(word)))
+      add('The hero does not clearly identify the approved audience. Replace the generic invitation with a recognizable audience callout.', 'warning');
+    if (/extend (?:the|our|your) (?:discussion|call)|(?:schedule|book|arrange|offer).{0,40}(?:follow[- ]up|another|additional|extra) (?:call|session|appointment)/i.test(plainProse)
+      && !/follow up|extend (?:the|our|your) (?:discussion|call)|(?:another|additional|extra) (?:call|session|appointment)/i.test(policyFacts))
+      add('Follow-up or extended-call arrangements are not confirmed in the brief. Remove this process promise.', 'warning');
+    if (/lost income|loss of income|cost(?:ing)? you money|missed wages/i.test(plainProse) && !/lost income|loss of income|missed wages|financial loss/i.test(facts))
+      add('This financial consequence is not supplied in the brief. Describe the stated practical difficulty without inventing financial stakes.', 'warning');
     if (/—/.test(prose)) add('Replace em dashes in written copy with natural sentence punctuation; preserve original testimonial wording.', 'warning');
     if (section.id === 'proof' && !brief.proof.trim() && copy.trim())
       add(
@@ -77,12 +88,9 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
       /money.back|risk.free|guaranteed|refund|no.questions.asked/i.test(copy)
     )
       add('Check this guarantee or refund claim against your actual terms.', 'warning');
-    if (
-      /(?:no spam|never (?:share|sell) your|unsubscribe (?:anytime|at any time)|no sales pitch|no obligation|no commitment)/i.test(
-        copy,
-      )
-    )
-      add('Confirm this privacy or sales-process promise before publishing.');
+    const promises = plainProse.match(/no[- ]spam|never (?:share|sell) your|unsubscribe (?:anytime|at any time)|no[- ]sales[- ]pitch|no[- ]obligation|no[- ]commitment|low[- ]commitment/gi) || [];
+    if (promises.some(promise => !policyFacts.includes(promise.replace(/-/g, ' '))))
+      add('This privacy or sales-process promise is not confirmed in the brief. Remove it or provide approved terms.', 'warning');
     if (/\b(?:free|complimentary)\b/i.test(copy) && !/\b(?:free|complimentary)\b/i.test(facts))
       add('The brief does not confirm that this offer or next step is free.', 'warning');
     if (/unlock (?:your |their |full )?potential|game.changer|revolutionary|transform your life|\bleverage\b/i.test(prose))
