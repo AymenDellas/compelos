@@ -7,6 +7,7 @@ import { draftSchema } from '../../src/lib/copy-studio/shared/contracts';
 import { auditDraft } from '../../src/lib/copy-studio/shared/quality';
 import { generate, revise } from '../../src/lib/copy-studio/server/engine';
 import { extractionContext, byteSize } from '../../src/lib/copy-studio/server/source-context';
+import { ProviderSizeError } from '../../src/lib/copy-studio/server/provider';
 import { input, draft, strategy } from './fixtures';
 
 const clientQuote = 'I came to coaching during a difficult career transition. I had several options but did not know how to weigh them. My coach helped me understand my priorities and compare the roles against the work I wanted to do. I chose a new career direction with a practical plan and felt more confident about my next move.';
@@ -134,4 +135,39 @@ test('full testimonials survive claim repair within the production provider requ
   const section = result.draft.sections.find(section => section.id === 'proof')!;
   assert.ok(section.body.includes(clientQuote) && section.body.includes(endorsement));
   assert.equal(result.issues.length, 0);
+});
+
+test('a detailed model strategy cannot crowd out approved proof or make the next writing pass fail', async () => {
+  const detailed = { ...strategy,
+    angle: 'Explain the existing positioning offer clearly for the business coach audience. '.repeat(12),
+    promise: 'Help business coaches explain their existing offer in clearer language. '.repeat(12),
+    frameworkPlan: strategy.frameworkPlan.map(step => ({ ...step, application: step.application.repeat(4).slice(0, 590) })),
+  };
+  const replies = [detailed, framed()];
+  const request = { ...withProof, reference: { title: 'Original offer', url: 'https://coach.example', headings: [], selectedOffer: '', tone: 'preserve' as const,
+    text: 'The original coaching offer explains the positioning service and the business coach audience. '.repeat(2000) } };
+  const completion = Object.assign(async (system: string, prompt: string) => {
+    assert.ok(byteSize(system + prompt) <= 20_000);
+    return JSON.stringify(replies.shift());
+  }, { inputByteLimit: 20_000 });
+  const result = await generate(completion, request, new AbortController().signal, () => {});
+  assert.ok(result.draft.sections.find(section => section.id === 'proof')!.body.includes(clientQuote));
+  assert.equal(replies.length, 0);
+});
+
+test('a smaller provider allowance after planning reduces reference material instead of dropping approved evidence', async () => {
+  let calls = 0;
+  const request = { ...withProof, reference: { title: 'Original offer', url: 'https://coach.example', headings: [], selectedOffer: '', tone: 'preserve' as const,
+    text: 'The original coaching offer explains the positioning service and the business coach audience. '.repeat(2000) } };
+  const completion = Object.assign(async (system: string, prompt: string) => {
+    calls++;
+    if (calls === 1) return JSON.stringify(strategy);
+    if (calls === 2) { completion.inputByteLimit = 16_000; throw new ProviderSizeError(); }
+    assert.ok(byteSize(system + prompt) <= 16_000);
+    assert.ok(prompt.includes(clientQuote) && prompt.includes(endorsement));
+    return JSON.stringify(framed());
+  }, { inputByteLimit: 20_000 });
+  const result = await generate(completion, request, new AbortController().signal, () => {});
+  assert.equal(calls, 3);
+  assert.ok(result.draft.sections.find(section => section.id === 'proof')!.body.includes(clientQuote));
 });

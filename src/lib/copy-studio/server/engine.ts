@@ -46,26 +46,40 @@ const shape = `{"strategy":{"angle":"...","promise":"...","objection":"...","act
 const context = (input: GenerationInput, complete: Completion, surrounding: string, compact = false) => {
   const framework = resolveFramework(input);
   const approvedEvidence = approvedProofEntries(input);
-  const data = {
+  const buildData = (short: boolean) => ({
     brief: input.brief,
     template: templates[input.template].name,
     conversionGoal: templates[input.template].short,
     defaultAction: templates[input.template].action,
-    persuasion: compact ? { id: framework.id, name: framework.name, stages: framework.stages.map(({ stage, sectionIds }) => ({ stage, sectionIds })) } : framework,
+    persuasion: short ? { id: framework.id, name: framework.name, stages: framework.stages.map(({ stage, sectionIds }) => ({ stage, sectionIds })) } : framework,
     creativeDirection: input.context || { mode: 'current' },
     ...(approvedEvidence.length ? { approvedEvidence: approvedEvidence.map(({ id, attribution, category }) => ({ id, attribution, category })) } : {}),
-    outline: templates[input.template].sections.map(({ id, purpose, instruction }) => compact ? { id, purpose } : { id, purpose, instruction }),
-  };
-  const budget = (complete.inputByteLimit || 80_000) - byteSize(rules + surrounding + JSON.stringify(data)) - 2200;
+    outline: templates[input.template].sections.map(({ id, purpose, instruction }) => short ? { id, purpose } : { id, purpose, instruction }),
+  });
+  let data = buildData(compact);
+  const available = () => (complete.inputByteLimit || 80_000) - byteSize(rules + surrounding + JSON.stringify(data)) - 2200;
+  if (!compact && available() < 2500) data = buildData(true);
+  const budget = available();
   if (budget < 0) throw new AppError(400, 'The approved brief is too long for the configured AI provider. Shorten long brief fields or client notes, then retry.');
-  return JSON.stringify({ ...data, ...(input.reference ? { originalCopyReference: sourceContext(input.reference, budget, input.reference.selectedOffer || input.brief.offerName).value } : {}) });
+  let reference: object | undefined;
+  if (input.reference) {
+    const retained = { tone: input.reference.tone,
+      contextSelection: 'The full original capture is retained in the project. This writing pass reserves its limited request space for the approved brief and current draft; original-page passages are not repeated here. This is not evidence that the original page lacks material.' };
+    reference = retained;
+    if (budget >= 2500) {
+      try { reference = sourceContext(input.reference, budget, input.reference.selectedOffer || input.brief.offerName).value; }
+      catch (error) { if (!(error instanceof AppError && error.status === 400)) throw error; }
+    }
+  }
+  return JSON.stringify({ ...data, ...(reference ? { originalCopyReference: reference } : {}) });
 };
 const generationPrompt = (complete: Completion, input: GenerationInput, instruction: string, extra = '') =>
   () => `${instruction}\nBRIEF DATA: ${context(input, complete, instruction + extra, Boolean(extra))}${extra}`;
 
 const draftForEditing = (draft: Draft, input: GenerationInput) => !approvedProofEntries(input).length ? draft : ({
   ...draft,
-  strategy: { angle: draft.strategy.angle, promise: draft.strategy.promise, action: draft.strategy.action },
+  strategy: { angle: draft.strategy.angle, action: draft.strategy.action },
+  notes: [],
   sections: draft.sections.map(section => section.id === 'proof' ? {
     ...section, body: 'Approved quotations are already supplied in brief.proof. The server renders them in full; edit proofFraming instead of repeating or rewriting those quotations.',
   } : section),
