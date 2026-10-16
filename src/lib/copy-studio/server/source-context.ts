@@ -1,5 +1,6 @@
 import type { Source } from '../shared/contracts';
 import { AppError } from './errors';
+import { findTestimonials } from './testimonials';
 
 export const byteSize = (value: string) => Buffer.byteLength(value, 'utf8');
 const normalized = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -85,7 +86,8 @@ export function sourceContext(
 
 /** Models cite passage IDs; the server copies the actual source wording into evidence. */
 export function extractionContext(source: Source, budget: number, target: string) {
-  const selected = sourceContext(source, Math.floor(budget * 0.78), target);
+  const testimonials = findTestimonials(source, target);
+  const selected = sourceContext(source, Math.floor((budget - byteSize(JSON.stringify(testimonials))) * 0.78), target);
   const passages: { id: string; page: string; text: string }[] = [];
   for (const part of selected.value.text.split(/(?=^SOURCE PAGE: )/m).filter(part => part.trim())) {
     const header = part.match(/^SOURCE PAGE: ([^\n]+)\n(?:TITLE: [^\n]*\n)?/);
@@ -96,7 +98,7 @@ export function extractionContext(source: Source, budget: number, target: string
     }
   }
   const { text: _text, ...metadata } = selected.value;
-  const value = { ...metadata, passages };
+  const value = { ...metadata, passages, testimonials };
   if (byteSize(JSON.stringify(value)) > budget)
     throw new AppError(400, 'The source passage index exceeds the AI request allowance. Use a more specific source.');
   return { value, excerpted: selected.excerpted, quotes: new Map(passages.map(passage => [passage.id, passage.text])) };

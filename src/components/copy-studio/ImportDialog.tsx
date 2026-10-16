@@ -4,6 +4,7 @@ import {
   fieldLabels,
   requiredKeys,
   MAX_SOURCE_CHARACTERS,
+  EXTRACTION_VERSION,
   type Brief,
   type BriefKey,
   type ImportResult,
@@ -32,7 +33,7 @@ export function ImportDialog({
   const form = useRef<HTMLFormElement>(null);
   const controller = useRef<AbortController | null>(null);
   const [mode, setMode] = useState<'url' | 'text'>(initial && !initial.source.url ? 'text' : 'url');
-  const reusable = initial && (Object.keys(initial.extraction.fields).length || initial.extraction.offers?.length) && (!targetOffer || initial.selectedOffer === targetOffer) ? initial : null;
+  const reusable = initial?.extractionVersion === EXTRACTION_VERSION && (Object.keys(initial.extraction.fields).length || initial.extraction.offers?.length) && (!targetOffer || initial.selectedOffer === targetOffer) ? initial : null;
   const [url, setUrl] = useState(initial?.source.url || initialUrl);
   const [text, setText] = useState(initial?.source.url ? '' : initial?.source.text.slice(0, MAX_SOURCE_CHARACTERS) || '');
   const [offerFocus, setOfferFocus] = useState(targetOffer);

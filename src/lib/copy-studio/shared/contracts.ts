@@ -2,6 +2,7 @@ import { z } from 'zod/v4';
 import { OFFER_ESSENTIAL_KEYS, OFFER_ESSENTIAL_LABELS } from '../../offer-essentials';
 
 export const MAX_SOURCE_CHARACTERS = 240_000;
+export const EXTRACTION_VERSION = 2;
 
 const text = z.string().trim().max(6000);
 export const briefSchema = z.object({
@@ -95,6 +96,14 @@ export const strategySchema = z.object({
   objection: z.string().max(1200),
   action: z.string().min(2).max(400),
   missingEvidence: z.array(z.string().max(500)).max(10),
+  framework: z.object({
+    id: z.enum(['pas', 'aida', 'bab', 'star', 'fourps']),
+    name: z.string().max(100), recommended: z.boolean(), reason: z.string().max(1000),
+  }).optional(),
+  frameworkPlan: z.array(z.object({
+    stage: z.string().max(80), application: z.string().max(600),
+    sectionIds: z.array(z.string().max(80)).max(15),
+  })).max(4).optional(),
 });
 export type Strategy = z.infer<typeof strategySchema>;
 export const draftSchema = z.object({
@@ -148,7 +157,7 @@ export const sourceSchema = z.object({
   }).optional(),
 });
 export type Source = z.infer<typeof sourceSchema>;
-export const importResultSchema = z.object({ source: sourceSchema, extraction: extractionSchema, selectedOffer: z.string().max(200).optional() });
+export const importResultSchema = z.object({ source: sourceSchema, extraction: extractionSchema, selectedOffer: z.string().max(200).optional(), extractionVersion: z.number().int().optional() });
 export type ImportResult = z.infer<typeof importResultSchema>;
 export const revisionSchema = generationSchema.extend({
   draft: draftSchema,

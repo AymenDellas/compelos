@@ -1,5 +1,6 @@
 import type { Brief, Draft, Issue, TemplateId } from './contracts';
 import { templates } from './templates';
+import { approvedTestimonials } from './evidence';
 
 const previousDirectCallIds = 'hero|problem|approach|call|fit|proof|objections|cta';
 export function isLegacyDirectCallDraft(draft: Draft, template: TemplateId): boolean {
@@ -30,10 +31,25 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
   const factNumbers = new Set(
     (facts.match(/\d+(?:[.,]\d+)*%?/g) ?? []).map((v) => v.replace(/,/g, '')),
   );
+  const testimonials = approvedTestimonials(brief.proof);
+  const normalizeQuote = (value: string) => value.replace(/\s+/g, ' ').trim();
+  const primaryCta = draft.sections.find(section => section.id === 'hero')?.cta.trim()
+    || draft.sections.find(section => section.cta.trim())?.cta.trim();
   for (const section of draft.sections) {
     const copy = [section.headline, section.body, ...section.bullets, section.cta].join(' ');
     const add = (message: string, severity: Issue['severity'] = 'review') =>
       issues.push({ sectionId: section.id, severity, message });
+    if (section.cta.trim() && primaryCta && section.cta.trim() !== primaryCta)
+      add('Use the same approved primary CTA label throughout the page.', 'warning');
+    const quoted = [...copy.matchAll(/[“"]([^“”"]{25,})[”"]/g)].map(match => match[1]);
+    if (section.id === 'proof' && testimonials.length) {
+      const supported = quoted.some(quote => testimonials.some(item => normalizeQuote(item.quote).includes(normalizeQuote(quote)) && copy.includes(item.attribution)));
+      if (!supported) add('Include an exact approved testimonial or exact excerpt with its original attribution. Do not replace the evidence with a summary.', 'warning');
+      if (quoted.some(quote => !testimonials.some(item => normalizeQuote(item.quote).includes(normalizeQuote(quote)))))
+        add('A testimonial quotation was changed or invented. Copy its wording from the approved evidence.', 'warning');
+    }
+    const prose = quoted.reduce((text, quote) => text.replace(quote, ''), copy);
+    if (/—/.test(prose)) add('Replace em dashes in written copy with natural sentence punctuation; preserve original testimonial wording.', 'warning');
     if (section.id === 'proof' && !brief.proof.trim() && copy.trim())
       add(
         'Proof was written without evidence in the brief. Remove it or supply a verified source.',
@@ -69,8 +85,8 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
       add('Confirm this privacy or sales-process promise before publishing.');
     if (/\b(?:free|complimentary)\b/i.test(copy) && !/\b(?:free|complimentary)\b/i.test(facts))
       add('The brief does not confirm that this offer or next step is free.', 'warning');
-    if (/unlock your potential|game.changer|revolutionary|transform your life/i.test(copy))
-      add('Replace the broad claim with a specific, supported benefit.');
+    if (/unlock (?:your |their |full )?potential|game.changer|revolutionary|transform your life|\bleverage\b/i.test(prose))
+      add('Replace the broad claim with a specific, supported benefit.', 'warning');
     if (/\[(?!VIDEO PLACEHOLDER\])[^\]]+\]/.test(copy))
       add('Resolve the placeholder before using this copy.');
     if (section.id === 'hero' && section.headline.split(/\s+/).length > 12)

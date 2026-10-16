@@ -22,6 +22,7 @@ import {
 } from '@/lib/copy-studio/shared/contracts';
 import { ReferencePanel } from './ReferencePanel';
 import { templates, formulas } from '@/lib/copy-studio/shared/templates';
+import { recommendedFramework, resolveFramework } from '@/lib/copy-studio/shared/persuasion';
 
 const placeholders: Partial<Record<BriefKey, string>> = {
   offerName: 'e.g. The Clear Offer Sprint',
@@ -270,11 +271,11 @@ export function BriefPanel({
               >
                 {Object.entries(formulas).map(([id, formula]) => (
                   <option key={id} value={id}>
-                    {formula.name}
+                    {id === 'recommended' ? `Recommended: ${recommendedFramework(project.template, project.brief).name}` : formula.name}
                   </option>
                 ))}
               </select>
-              <small className="field-hint">{formulas[project.formula].description}</small>
+              <small className="field-hint">{resolveFramework(project).description} {project.formula === 'recommended' && recommendedFramework(project.template, project.brief).reason}</small>
             </div>
           </div>
         </details>

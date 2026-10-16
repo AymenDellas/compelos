@@ -370,6 +370,8 @@ export function DraftPanel({
               <Sparkles size={16} />
               <span className="eyebrow">THE STRATEGY</span>
             </div>
+            {result.draft.strategy.framework && <p className="field-hint"><strong>{result.draft.strategy.framework.name}</strong>{result.draft.strategy.framework.recommended ? ' · Recommended for this page' : ' · Selected framework'}</p>}
+            {!result.draft.strategy.framework && <p className="field-hint">This earlier draft has no recorded framework. Generate a new draft to apply the current framework plan.</p>}
             <h3>{result.draft.strategy.angle}</h3>
             <p>{result.draft.strategy.promise}</p>
             <details>
@@ -377,6 +379,8 @@ export function DraftPanel({
                 View the reasoning <ChevronDown size={14} />
               </summary>
               <dl>
+                {result.draft.strategy.framework && <><dt>Why this framework</dt><dd>{result.draft.strategy.framework.reason}</dd></>}
+                {result.draft.strategy.frameworkPlan?.map(step => <div key={step.stage}><dt>{step.stage}</dt><dd>{step.application} <small>Sections: {step.sectionIds.map(id => template.sections.find(section => section.id === id)?.name || id).join(', ')}</small></dd></div>)}
                 <dt>Hesitation to address</dt>
                 <dd>{result.draft.strategy.objection || 'No specific objection supplied.'}</dd>
                 <dt>The action</dt>

@@ -34,9 +34,9 @@ test('the approved biography and descriptive-title rules reach generation, rewri
   assert.deepEqual(result.draft.sections.map(section => section.id), ['hero', 'problem', 'approach', 'call', 'fit', 'about', 'proof', 'objections', 'cta']);
   for (const call of calls) {
     assert.match(call.prompt, /Jordan Lee/);
-    assert.match(call.system, /Supporting section headings must act as descriptive titles/);
-    assert.match(call.system, /The hero stays outcome-led/);
-    assert.match(call.system, /Do not invent personal experiences/);
+    assert.match(call.system, /Write original, concise, descriptive section headings/);
+    assert.match(call.system, /hero remains outcome-led/);
+    assert.match(call.system, /only approved coachBio facts/);
   }
   const saved = projectSchema.parse({ id: 'bio', name: 'Example project', updatedAt: '', ...withBio, result, source: null, generatedFrom: fingerprint(withBio), history: [] });
   const prompt = buildDesignPrompt(saved);
