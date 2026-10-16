@@ -120,6 +120,24 @@ test('framing cannot invent colleague relationships or substitute hype for the a
   assert.ok(result.draft.sections.find(section => section.id === 'proof')!.body.startsWith('These individual accounts'));
 });
 
+test('a focused editorial pass fixes persistent framing issues without regenerating or shortening testimony', async () => {
+  const bad = framed();
+  bad.sections.find(section => section.id === 'proof')!.headline = 'What Clients and Professionals Say';
+  const improved = { headline: 'Career decisions and professional confidence', ...framed().sections.find(section => section.id === 'proof')!.proofFraming! };
+  const replies = [strategy, bad, bad, improved];
+  let editorialTokens = 0;
+  const result = await generate(async (_system, _prompt, _signal, maxTokens) => {
+    if (maxTokens) editorialTokens = maxTokens;
+    return JSON.stringify(replies.shift());
+  }, withProof, new AbortController().signal, () => {});
+  assert.equal(replies.length, 0);
+  assert.equal(editorialTokens, 1800);
+  const section = result.draft.sections.find(section => section.id === 'proof')!;
+  assert.equal(section.headline, improved.headline);
+  assert.ok(section.body.includes(clientQuote) && section.body.includes(endorsement));
+  assert.equal(result.issues.length, 0);
+});
+
 test('a bare quotation strip is rejected and retried with proper framing before returning a draft', async () => {
   const bare = framed();
   delete bare.sections.find(section => section.id === 'proof')!.proofFraming;
