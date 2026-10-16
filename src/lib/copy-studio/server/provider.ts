@@ -101,6 +101,16 @@ export function createCompletion(config: ProviderConfig): Completion {
           'The AI provider rejected the client integration. This does not establish that the API key is invalid. Check the configured provider endpoint and supported client requirements.',
         );
       }
+      if (response.status === 429) {
+        const message = failure?.error?.message || '';
+        const duration = message.match(/try again in ((?:\d+(?:\.\d+)?(?:ms|s|m|h|d))+)/i)?.[1];
+        const retrySeconds = response.headers.get('retry-after');
+        const wait = duration ? ` The provider suggests waiting ${duration}.`
+          : retrySeconds && /^\d+(?:\.\d+)?$/.test(retrySeconds) ? ` Try again in ${Math.ceil(Number(retrySeconds))} seconds.` : '';
+        if (/tokens per day|\bTPD\b|daily (?:token|usage|quota)/i.test(message))
+          throw new AppError(429, `The AI provider’s daily token allowance has been reached. Retry after its daily reset.${wait}`);
+        throw new AppError(429, `The AI provider is busy or its temporary usage limit was reached.${wait || ' Wait a moment and retry.'}`);
+      }
       if (/overdue|insufficient|quota|balance|credits/i.test(failure?.error?.message || ''))
         throw new AppError(
           502,
@@ -115,11 +125,6 @@ export function createCompletion(config: ProviderConfig): Completion {
         throw new AppError(
           502,
           'The AI provider reports insufficient credits. Check the balance on your provider account.',
-        );
-      if (response.status === 429)
-        throw new AppError(
-          429,
-          'The AI provider is busy or its usage limit was reached. Wait a moment and retry.',
         );
       if (response.status === 404)
         throw new AppError(

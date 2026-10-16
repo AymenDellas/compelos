@@ -66,3 +66,18 @@ test('network and balance errors are actionable without exposing provider intern
     globalThis.fetch = original;
   }
 });
+
+test('daily token exhaustion is distinguished from a temporary limit without exposing account details', async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({ error: { message: 'Rate limit for model in organization private-org on tokens per day (TPD). Please try again in 6h12m3.5s.' } }, { status: 429 });
+    await assert.rejects(createCompletion(config)('', '', new AbortController().signal), error => {
+      assert.match((error as Error).message, /daily token allowance/);
+      assert.match((error as Error).message, /6h12m3.5s/);
+      assert.doesNotMatch((error as Error).message, /private-org/);
+      return true;
+    });
+    globalThis.fetch = async () => Response.json({ error: { message: 'Temporary token limit in private-org.' } }, { status: 429, headers: { 'retry-after': '90' } });
+    await assert.rejects(createCompletion(config)('', '', new AbortController().signal), /temporary usage limit.*90 seconds/);
+  } finally { globalThis.fetch = original; }
+});

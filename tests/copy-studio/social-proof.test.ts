@@ -94,7 +94,13 @@ test('generation and proof rewrites preserve framing while the server inserts co
   assert.ok(result.draft.sections.find(section => section.id === 'proof')!.body.includes(clientQuote));
   assert.match(prompts[1], /approvedEvidence/);
   assert.match(prompts[1], /Professional recommendation/);
-  const revision = await revise(async () => JSON.stringify(framed().sections.find(section => section.id === 'proof')), { ...withProof, draft: result.draft, sectionId: 'proof', direction: 'stronger' }, new AbortController().signal);
+  const proofSection = framed().sections.find(section => section.id === 'proof')!;
+  const revision = await revise(async (system, prompt, _signal, maxTokens) => {
+    assert.equal(maxTokens, 1800);
+    assert.ok(byteSize(system + prompt) < 6000);
+    assert.doesNotMatch(prompt, /CURRENT PAGE DATA/);
+    return JSON.stringify({ headline: proofSection.headline, ...proofSection.proofFraming });
+  }, { ...withProof, draft: result.draft, sectionId: 'proof', direction: 'stronger' }, new AbortController().signal);
   assert.ok(revision.section.body.includes(clientQuote));
   assert.match(revision.section.body, /These individual accounts/);
   assert.equal(revision.issues.length, 0);
