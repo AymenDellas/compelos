@@ -125,6 +125,15 @@ test('an explicitly selected AIDA is planned and persisted instead of the defaul
   assert.deepEqual(result.draft.strategy.frameworkPlan?.map(step => step.stage), ['Attention', 'Interest', 'Desire', 'Action']);
 });
 
+test('unsupported free-call and financial-strain assumptions are removed from the strategy before drafting', async () => {
+  const bad = { ...strategy, objection: 'Will a free Discovery appointment be useful?', frameworkPlan: strategy.frameworkPlan.map(step => step.stage === 'Agitation' ? { ...step, application: 'Warn about financial strain if the prospect does not act.' } : step) };
+  const responses = [bad, strategy, draft];
+  const result = await generate(async () => JSON.stringify(responses.shift()), input, new AbortController().signal, () => {});
+  assert.equal(result.draft.strategy.objection, strategy.objection);
+  assert.doesNotMatch(result.draft.strategy.frameworkPlan!.map(step => step.application).join(' '), /financial strain/);
+  assert.equal(responses.length, 0);
+});
+
 test('approved testimonials cannot be silently omitted and changed quotations are flagged', async () => {
   const proof = testimonialProof(findTestimonials(source, 'Career Coaching').slice(0, 1));
   const withProof = { ...input, brief: { ...input.brief, proof } };

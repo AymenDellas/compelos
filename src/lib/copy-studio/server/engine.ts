@@ -90,6 +90,10 @@ export async function generate(
         throw new Error('The framework plan must cover every resolved stage exactly once and in order.');
       if (value.frameworkPlan.some(step => step.application.trim().length < 15))
         throw new Error('Explain how each framework stage applies to this particular offer, rather than leaving a label or empty plan.');
+      const planClaims = [value.angle, value.promise, value.objection, ...value.frameworkPlan.map(step => step.application)].join(' ');
+      const unsupported = auditDraft({ strategy: value, sections: [{ id: 'strategy', headline: '', body: planClaims, bullets: [], cta: '' }], notes: [] }, input.brief)
+        .filter(issue => issue.severity === 'warning' && !/em dashes|broad claim/i.test(issue.message));
+      if (unsupported.length) throw new Error(`The strategy itself contains unapproved claims. Re-plan using only approved brief facts: ${unsupported.map(issue => issue.message).join(' ')}`);
     },
   );
   strategy.framework = { id: framework.id, name: framework.name, reason: framework.reason, recommended: framework.recommended };

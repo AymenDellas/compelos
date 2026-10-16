@@ -58,7 +58,7 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
     if (/extend (?:the|our|your) (?:discussion|call)|(?:schedule|book|arrange|offer).{0,40}(?:follow[- ]up|another|additional|extra) (?:call|session|appointment)/i.test(plainProse)
       && !/follow up|extend (?:the|our|your) (?:discussion|call)|(?:another|additional|extra) (?:call|session|appointment)/i.test(policyFacts))
       add('Follow-up or extended-call arrangements are not confirmed in the brief. Remove this process promise.', 'warning');
-    if (/lost income|loss of income|cost(?:ing)? you money|missed wages/i.test(plainProse) && !/lost income|loss of income|missed wages|financial loss/i.test(facts))
+    if (/lost income|loss of income|cost(?:ing)? you money|missed wages|financial strain|financial hardship/i.test(plainProse) && !/lost income|loss of income|missed wages|financial loss|financial strain|financial hardship/i.test(facts))
       add('This financial consequence is not supplied in the brief. Describe the stated practical difficulty without inventing financial stakes.', 'warning');
     if (/—/.test(prose)) add('Replace em dashes in written copy with natural sentence punctuation; preserve original testimonial wording.', 'warning');
     if (section.id === 'proof' && !brief.proof.trim() && copy.trim())
