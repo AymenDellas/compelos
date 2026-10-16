@@ -54,6 +54,24 @@ test('large-site extraction stays bounded, verifies evidence and returns the com
   assert.match(result.extraction.warnings.join(' '), /selected exact excerpts/);
 });
 
+test('passage citations produce original quotes and unknown IDs cannot approve fields or offers', async () => {
+  const source = largeSource();
+  const complete = Object.assign(async (_system: string, prompt: string) => {
+    const data = JSON.parse(prompt.split('SOURCE DATA: ')[1]);
+    const offer = data.passages.find((passage: { text: string }) => passage.text.includes('helps career changers'));
+    const bio = data.passages.find((passage: { text: string }) => passage.text.includes('Master’s in Business Management'));
+    return JSON.stringify({ offers: [{ name: 'Career Coaching', summary: 'Career decisions', passageId: offer.id }, { name: 'Jo', summary: 'Not verified', passageId: 'P999999' }],
+      fields: { offerName: 'Career Coaching', coachBio: 'Jo holds a Master’s in Business Management.', price: '$500' },
+      evidence: [{ field: 'offerName', passageId: offer.id }, { field: 'coachBio', passageId: bio.id }, { field: 'price', passageId: 'P999999', quote: 'Invented price' }], warnings: [] });
+  }, { inputByteLimit: 20_000 });
+  const result = await extract(complete, source, controller().signal, 'Career Coaching');
+  assert.equal(result.extraction.fields.coachBio, 'Jo holds a Master’s in Business Management.');
+  assert.equal(result.extraction.fields.price, undefined);
+  assert.equal(result.extraction.offers?.length, 1);
+  for (const evidence of result.extraction.evidence) assert.ok(source.text.includes(evidence.quote));
+  assert.equal(result.extraction.evidence.find(evidence => evidence.field === 'coachBio')?.quote, 'Jo holds a Master’s in Business Management and has senior leadership experience.');
+});
+
 test('strategy, draft, claim repair and rewrite budget their own source context without dropping approved facts', async () => {
   const payload = { ...input, reference: { ...largeSource(), selectedOffer: 'Career Coaching', tone: 'preserve' as const } };
   const bad = structuredClone(draft);

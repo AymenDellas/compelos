@@ -47,8 +47,10 @@ export function sourceContext(
         seen.add(key);
         const matches = terms.filter(term => key.includes(term)).length;
         const relevant = /coaching|clients?|sessions?|program|offer|help|struggl|career|outcome|background|experience|certif|master|degree|founder|testimonial|book|discovery/i.test(text);
+        const trust = kind === 'about' && /certif|credential|degree|master|experience in|years of experience|my background|i[’']m|i am/i.test(text) ? 24
+          : kind === 'proof' && /helped me|recommend|my experience|with her support|with his support|i (?:was|have|am)/i.test(text) ? 18 : 0;
         candidates.push({ text: `${label}\n${text}`, page: index, kind,
-          score: routeScore + matches * 12 + (relevant ? 6 : 0) - (archive ? 12 : 0), order: candidates.length });
+          score: routeScore + matches * 12 + (relevant ? 6 : 0) + trust - (archive ? 12 : 0), order: candidates.length });
       }
     }
   });
@@ -79,4 +81,23 @@ export function sourceContext(
   if (!text || byteSize(JSON.stringify(value)) > budget)
     throw new AppError(400, 'The source could not fit the AI request limit. Shorten long brief fields or use a more specific source.');
   return { value, excerpted: true };
+}
+
+/** Models cite passage IDs; the server copies the actual source wording into evidence. */
+export function extractionContext(source: Source, budget: number, target: string) {
+  const selected = sourceContext(source, Math.floor(budget * 0.78), target);
+  const passages: { id: string; page: string; text: string }[] = [];
+  for (const part of selected.value.text.split(/(?=^SOURCE PAGE: )/m).filter(part => part.trim())) {
+    const header = part.match(/^SOURCE PAGE: ([^\n]+)\n(?:TITLE: [^\n]*\n)?/);
+    const body = header ? part.slice(header[0].length) : part;
+    for (let offset = 0; offset < body.length; offset += 1000) {
+      const text = body.slice(offset, offset + 1200).trim();
+      if (text) passages.push({ id: `P${passages.length + 1}`, page: header?.[1] || source.url || 'Pasted copy', text });
+    }
+  }
+  const { text: _text, ...metadata } = selected.value;
+  const value = { ...metadata, passages };
+  if (byteSize(JSON.stringify(value)) > budget)
+    throw new AppError(400, 'The source passage index exceeds the AI request allowance. Use a more specific source.');
+  return { value, excerpted: selected.excerpted, quotes: new Map(passages.map(passage => [passage.id, passage.text])) };
 }
