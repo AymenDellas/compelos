@@ -20,7 +20,7 @@ test('the design handoff preserves complete final copy, omits empty proof, and i
   assert.doesNotMatch(JSON.stringify(copyData(prompt)), /INTERNAL_REVIEW_ONLY|INTERNAL_CLAIM_FLAG/);
   assert.match(prompt.split('EDITORIAL HANDOFF DATA')[1], /INTERNAL_REVIEW_ONLY/);
   assert.match(prompt, /No navbar.*navigation menu/);
-  assert.match(prompt, /No mesh gradients/);
+  assert.match(prompt, /Custom grain-treated mesh gradients are allowed/);
   assert.match(prompt, /No repeated cards/);
   assert.match(prompt, /No fake testimonials/);
   assert.match(prompt, /375px and 1440px/);
@@ -78,7 +78,7 @@ test('no draft has no prompt, and old backups work without leaking raw source or
   assert.doesNotMatch(buildDesignPrompt(saved), /OUTDATED_OTHER_OFFER_DATA|PRIVATE_ONBOARDING_ID|PRIVATE_CONTACT_NAME/);
 });
 
-test('the quality brief stays portable without enforcing the reference page identity', () => {
+test('the quality brief preserves rich art direction across offers without requiring a reference design', () => {
   for (const template of ['direct_to_call', 'lead_magnet', 'vsl'] as const) {
     const saved = project();
     saved.generatedFrom = fingerprint({ ...input, template });
@@ -90,6 +90,15 @@ test('the quality brief stays portable without enforcing the reference page iden
     assert.match(prompt, /Content sections remain transparent/);
     assert.match(prompt, /three materially different visual directions/);
     assert.match(prompt, /Dots and overhead lighting are optional/);
+    assert.match(prompt, /Framer and Dribbble/);
+    assert.match(prompt, /FIXED QUALITY, FLEXIBLE IDENTITY/);
+    assert.match(prompt, /no reference page or screenshot is required/);
+    assert.match(prompt, /Custom grain-treated mesh gradients are allowed/);
+    assert.match(prompt, /No individual technique is mandatory/);
+    assert.match(prompt, /WHEN THE USER REQUESTS A NEW DESIGN DIRECTION/);
+    assert.match(prompt, /Preserve exact copy, section order, approved assets, functionality and real integrations/);
+    assert.match(prompt, /almost invisible effect/);
+    assert.doesNotMatch(prompt, /No mesh gradients|mesh gradients[^\n]*remain excluded|The approved reference establishes/);
     assert.match(prompt, /copy template controls section meaning and order/);
     assert.match(prompt, /one coherent supporting-content grid/);
     assert.match(prompt, /heading directly above its related text or list/);
@@ -109,6 +118,8 @@ test('client asset references use the generated draft snapshot and omit query or
   saved.reference = { ...reference, url: 'https://different-client.com/UNGENERATED_REFERENCE' };
   const prompt = buildDesignPrompt(saved);
   assert.match(prompt, /https:\/\/www\.clientstudio\.com\/coaching\//);
+  assert.match(prompt, /client asset discovery only, not a visual design reference/);
+  assert.match(prompt, /Do not reproduce the source page's layout, section styling or background composition/);
   assert.doesNotMatch(prompt, /PRIVATE_QUERY|PRIVATE_FRAGMENT|RAW_REFERENCE_COPY|different-client|UNGENERATED_REFERENCE/);
 });
 
