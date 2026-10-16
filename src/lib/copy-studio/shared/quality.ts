@@ -3,7 +3,7 @@ import { templates } from './templates';
 import { approvedTestimonials } from './evidence';
 
 const previousDirectCallIds = 'hero|problem|approach|call|fit|proof|objections|cta';
-export const isGenericProofHeading = (headline: string) => /^(?:what\b.{0,70}\b(?:say|said)|testimonials|success stories|client (?:reviews|testimonials|stories))\W*$/i.test(headline.trim());
+export const isGenericProofHeading = (headline: string) => /^(?:what\b.{0,70}\b(?:say|said)|testimonials|success stories|client (?:reviews|testimonials|stories)|client (?:outcomes|experiences|results)(?: and professional (?:endorsements?|recommendations?))?(?: of coaching services)?)\W*$/i.test(headline.trim());
 export function isLegacyDirectCallDraft(draft: Draft, template: TemplateId): boolean {
   return template === 'direct_to_call' && draft.sections.map(s => s.id).join('|') === previousDirectCallIds;
 }
@@ -46,6 +46,9 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
     if (section.id === 'proof' && testimonials.length) {
       if (isGenericProofHeading(section.headline))
         add('Use a specific heading about the experiences this evidence supports, rather than a generic testimonial label.', 'warning');
+      if (section.headline.trim().split(/\s+/).length > 10 || (section.proofFraming?.introduction.trim().split(/\s+/).length || 0) > 35
+        || section.proofFraming?.items.some(item => item.heading.trim().split(/\s+/).length > 8 || /^(?:a |the )?(?:client|professional|customer|author|recommender) (?:achieved|notes|reports|describes|found|says)\b/i.test(item.heading)))
+        add('Keep social-proof framing concise: a short topic heading, one clear introduction, and short topic phrases for the individual accounts. Put detailed result claims in the original quotations.', 'warning');
       if (/\bcolleagues|\bco-workers|\bpartners/i.test(section.proofFraming?.introduction || '') && !/\bcolleagues|\bco-workers|\bpartners/i.test(brief.proof))
         add('The testimonial source does not establish a colleague or partner relationship. Use the actual attribution and evidence category.', 'warning');
       if (/life[-‑ ]changing|real impact|incredible|remarkable|powerful results/i.test([section.proofFraming?.introduction, ...(section.proofFraming?.items.map(item => item.heading) || [])].join(' ')))
