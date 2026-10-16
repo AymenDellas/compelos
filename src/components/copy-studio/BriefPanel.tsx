@@ -7,6 +7,7 @@ import {
   LoaderCircle,
   ShieldCheck,
   Sparkles,
+  UserRound,
 } from 'lucide-react';
 import {
   fieldLabels,
@@ -15,7 +16,11 @@ import {
   type Project,
   type TemplateId,
   type FormulaId,
+  copyContextSchema,
+  type CopyContext,
+  type ReferenceMode,
 } from '@/lib/copy-studio/shared/contracts';
+import { ReferencePanel } from './ReferencePanel';
 import { templates, formulas } from '@/lib/copy-studio/shared/templates';
 
 const placeholders: Partial<Record<BriefKey, string>> = {
@@ -29,6 +34,8 @@ const placeholders: Partial<Record<BriefKey, string>> = {
   deliverables: 'List the actual sessions, resources, services, or features included.',
   proof:
     'Paste real testimonials, case studies, results, or credentials. Include exact quotes and context.',
+  coachBio:
+    'The coach’s name, relevant background, experience, qualifications, and why they work with this audience. Include only details approved for the page.',
   objections: 'What might stop a qualified person from taking the next step?',
   price: 'Exact price, currency, and payment terms, if relevant.',
   guarantee: 'Only the guarantee or refund policy you actually offer.',
@@ -37,7 +44,7 @@ const placeholders: Partial<Record<BriefKey, string>> = {
   nextStep: 'Call length, delivery method, or what they can expect after taking action.',
 };
 const essential: BriefKey[] = ['offerName', 'description', 'audience', 'problem', 'outcome'];
-const substance: BriefKey[] = ['mechanism', 'deliverables', 'proof', 'objections'];
+const substance: BriefKey[] = ['mechanism', 'deliverables', 'coachBio', 'proof', 'objections'];
 const details: BriefKey[] = [
   'price',
   'guarantee',
@@ -59,6 +66,11 @@ export function BriefPanel({
   onFormula,
   onImport,
   onGenerate,
+  onOnboarding,
+  onContext,
+  onboardingNote,
+  onDetachOnboarding,
+  onReferenceMode,
 }: {
   project: Project;
   disabled: boolean;
@@ -70,14 +82,20 @@ export function BriefPanel({
   onFormula: (value: FormulaId) => void;
   onImport: () => void;
   onGenerate: () => void;
+  onOnboarding: () => void;
+  onContext: (value: CopyContext) => void;
+  onboardingNote: string;
+  onDetachOnboarding: () => void;
+  onReferenceMode: (value: ReferenceMode) => void;
 }) {
+  const context = copyContextSchema.parse(project.context || {});
   const count = requiredKeys.filter((k) => project.brief[k].trim().length >= 3).length;
   const field = (key: BriefKey) => {
     const required = essential.includes(key);
     const invalid = attempted && required && project.brief[key].trim().length < 3;
     const props = {
       id: `brief-${key}`,
-      value: project.brief[key],
+      value: project.brief[key] ?? '',
       maxLength: 6000,
       onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
         onBrief(key, e.target.value),
@@ -112,6 +130,14 @@ export function BriefPanel({
             No proof yet? Leave this empty. We’ll omit the proof block.
           </small>
         )}
+        {key === 'coachBio' && (
+          <small className="field-hint">
+            Used for the About me section. Add the coach’s actual background; leave empty to omit it until you have the details.
+          </small>
+        )}
+        {key === 'voice' && project.source && project.referenceMode !== 'off' && (
+          <small className="field-hint">The original voice is preserved by default. Add a specific instruction here when you want to change it.</small>
+        )}
         {key === 'urgency' && (
           <small className="field-hint">
             No scarcity switches. Only facts you can stand behind.
@@ -129,24 +155,50 @@ export function BriefPanel({
           <p>Good copy starts with a clear offer.</p>
         </div>
       </div>
+      <button className="import-trigger onboarding-trigger" onClick={onOnboarding} disabled={disabled}>
+        <span className="import-icon"><UserRound size={18} /></span>
+        <span><strong>{project.onboarding ? project.onboarding.clientName || project.onboarding.projectName : 'Choose client onboarding'}</strong>
+          <small>{project.onboarding ? project.onboarding.projectName : 'Find the client and review their answers'}</small></span>
+        <ArrowRight size={17} />
+      </button>
+      {onboardingNote && <p className="onboarding-status" role="status">{onboardingNote}</p>}
+      {project.onboarding && <button className="text-button small onboarding-unlink" disabled={disabled} onClick={onDetachOnboarding}>Unlink client</button>}
+      <fieldset disabled={disabled} className="offer-scope">
+        <legend className="eyebrow">WHAT ARE WE WRITING FOR?</legend>
+        <div className="offer-mode-options" role="radiogroup" aria-label="Offer focus">
+          {([
+            ['current', project.onboarding ? 'The onboarding offer' : 'My current offer'],
+            ['focused', 'One specific offer'],
+            ['new', 'A new offer'],
+          ] as const).map(([value, label]) => <label key={value} className={context.mode === value ? 'selected' : ''}>
+            <input type="radio" name="offer-mode" checked={context.mode === value} onChange={() => onContext({ ...context, mode: value })} />{label}
+          </label>)}
+        </div>
+        <p className="field-hint">{context.mode === 'focused' ? 'Name the offer below. When importing a page, choose that offer so its facts stay separate.' : context.mode === 'new' ? 'Build the brief around the new offer. Use client answers for context and edit the facts to fit.' : 'Use the brief below to define the offer. A page is optional.'} Each option keeps its own brief, so you can switch back without losing edits.</p>
+        <details className="brief-accordion">
+          <summary><span><Sparkles size={17} /> Creative direction & client notes</span><ChevronDown size={16} /></summary>
+          <div className="accordion-content">
+            {([
+              ['direction', 'What should this page do differently?', 'e.g. Focus on the executive program for newly promoted leaders. Position the call as a fit assessment.'],
+              ['background', 'Client context & traffic', 'Traffic sources, buyer awareness, qualification, or relevant client notes.'],
+              ['mustKeep', 'What must stay?', 'Client preferences, approved wording, or brand requirements.'],
+              ['avoid', 'What should we avoid?', 'Other offers, angles, terms, or language to leave out.'],
+            ] as const).map(([key, label, placeholder]) => <div className="field" key={key}><label htmlFor={`context-${key}`}>{label}</label><textarea id={`context-${key}`} rows={3} maxLength={6000} value={context[key]} placeholder={placeholder} onChange={(event) => onContext({ ...context, [key]: event.target.value })} /></div>)}
+          </div>
+        </details>
+      </fieldset>
       <button className="import-trigger" onClick={onImport} disabled={disabled}>
         <span className="import-icon">
           <Link2 size={18} />
         </span>
         <span>
           <strong>Start with an existing page</strong>
-          <small>Import a URL or paste your page copy</small>
+          <small>Add the original copy for its voice and context. Your brief and changes guide the rewrite.</small>
         </span>
         <ArrowRight size={17} />
       </button>
       {project.source && (
-        <div className="source-note">
-          <FileText size={14} />
-          <span>Source: {project.source.source.title}</span>
-          <button onClick={onImport} disabled={disabled}>
-            Review
-          </button>
-        </div>
+        <ReferencePanel source={project.source} mode={project.referenceMode || 'preserve_voice'} disabled={disabled} onMode={onReferenceMode} onChange={onImport} />
       )}
       <fieldset disabled={disabled} className="brief-fields">
         <div className="field-group-header">
@@ -191,7 +243,7 @@ export function BriefPanel({
           </summary>
           <div className="accordion-content">
             <p className="muted small">Specifics make your offer credible. Add what you know.</p>
-            {substance.map(field)}
+            {substance.filter(key => key !== 'coachBio' || project.template === 'direct_to_call').map(field)}
           </div>
         </details>
         <details className="brief-accordion">

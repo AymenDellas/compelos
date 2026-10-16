@@ -1,13 +1,19 @@
 import type { Brief, Draft, Issue, TemplateId } from './contracts';
 import { templates } from './templates';
 
-export function validateStructure(draft: Draft, template: TemplateId): void {
+const previousDirectCallIds = 'hero|problem|approach|call|fit|proof|objections|cta';
+export function isLegacyDirectCallDraft(draft: Draft, template: TemplateId): boolean {
+  return template === 'direct_to_call' && draft.sections.map(s => s.id).join('|') === previousDirectCallIds;
+}
+
+export function validateStructure(draft: Draft, template: TemplateId, allowLegacy = false): void {
   const expected = templates[template].sections.map((s) => s.id);
-  if (draft.sections.map((s) => s.id).join('|') !== expected.join('|'))
+  if (draft.sections.map((s) => s.id).join('|') !== expected.join('|') &&
+      !(allowLegacy && isLegacyDirectCallDraft(draft, template)))
     throw new Error(`Sections must appear exactly once in this order: ${expected.join(', ')}`);
   for (const section of draft.sections) {
     if (
-      !['proof', 'next'].includes(section.id) &&
+      !['proof', 'next', 'about'].includes(section.id) &&
       (!section.headline.trim() || (!section.body.trim() && section.bullets.length === 0))
     ) {
       throw new Error(`Section ${section.id} must have a headline and useful copy.`);
@@ -31,6 +37,11 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
     if (section.id === 'proof' && !brief.proof.trim() && copy.trim())
       add(
         'Proof was written without evidence in the brief. Remove it or supply a verified source.',
+        'warning',
+      );
+    if (section.id === 'about' && !brief.coachBio?.trim() && copy.trim())
+      add(
+        'The About me section needs approved coach background. Add it to the brief or omit this section.',
         'warning',
       );
     const newNumbers = [...new Set(copy.match(/\d+(?:[.,]\d+)*%?/g) ?? [])].filter(

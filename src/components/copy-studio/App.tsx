@@ -22,9 +22,14 @@ import {
   type Project,
   type RevisionInput,
   type Section,
+  briefSchema,
+  copyContextSchema,
+  onboardingLinkSchema,
 } from '@/lib/copy-studio/shared/contracts';
-import { auditDraft, validateStructure } from '@/lib/copy-studio/shared/quality';
-import { generateCopy, reviseCopy, testConnection } from './api';
+import { matchOnboardings, type OnboardingBrief } from '@/lib/copy-studio/shared/onboarding';
+import { changeOfferContext } from '@/lib/copy-studio/shared/workspace';
+import { auditDraft, isLegacyDirectCallDraft, validateStructure } from '@/lib/copy-studio/shared/quality';
+import { generateCopy, reviseCopy, testConnection, loadOnboardings } from './api';
 import {
   loadProjects,
   newProject,
@@ -37,6 +42,7 @@ import { exportMarkdown } from './export';
 import { BriefPanel } from './BriefPanel';
 import { DraftPanel } from './DraftPanel';
 import { ImportDialog } from './ImportDialog';
+import { OnboardingDialog } from './OnboardingDialog';
 import './copy-studio.css';
 
 export default function CopyStudio() {
@@ -52,6 +58,11 @@ export default function CopyStudio() {
   const [stage, setStage] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [onboardings, setOnboardings] = useState<OnboardingBrief[]>([]);
+  const [onboardingLoading, setOnboardingLoading] = useState(false);
+  const [onboardingError, setOnboardingError] = useState('');
+  const onboardingRequest = useRef<AbortController | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [health, setHealth] = useState<{ configured: boolean; model: string } | null>(null);
   const [healthFailed, setHealthFailed] = useState(false);
@@ -60,7 +71,36 @@ export default function CopyStudio() {
   const inFlight = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const project = projects.find((p) => p.id === activeId) || projects[0];
-  const stale = Boolean(project.result && project.generatedFrom !== fingerprint(project));
+  const stale = Boolean(project.result && (project.generatedFrom !== fingerprint(project) ||
+    isLegacyDirectCallDraft(project.result.draft, project.template)));
+  const linkedOnboarding = onboardings.find((record) => record.id === project.onboarding?.id);
+  const onboardingMatches = matchOnboardings(onboardings, project.source?.source.url || '');
+  const onboardingNote = project.onboarding
+    ? linkedOnboarding && linkedOnboarding.revision !== project.onboarding.revision
+      ? 'New onboarding answers are available. Open the client brief to review them.'
+      : 'Client answers are saved with this project. You can review and edit them anytime.'
+    : onboardingMatches.length
+      ? `${onboardingMatches.length === 1 ? 'Client onboarding found for this website.' : `${onboardingMatches.length} onboarding projects match this website.`} Choose the client brief above.`
+      : '';
+  const refreshOnboardings = () => {
+    onboardingRequest.current?.abort();
+    const controller = new AbortController();
+    onboardingRequest.current = controller;
+    setOnboardingLoading(true);
+    setOnboardingError('');
+    const timeout = setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), 20000);
+    void loadOnboardings(controller.signal).then(setOnboardings).catch((error) => {
+      if (!controller.signal.aborted || controller.signal.reason?.name === 'TimeoutError')
+        setOnboardingError(error instanceof Error ? error.message : 'Onboarding could not be loaded. Please retry.');
+    }).finally(() => {
+      clearTimeout(timeout);
+      if (onboardingRequest.current === controller) setOnboardingLoading(false);
+    });
+  };
+  useEffect(() => {
+    refreshOnboardings();
+    return () => onboardingRequest.current?.abort();
+  }, []);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -164,7 +204,7 @@ export default function CopyStudio() {
         (p) => ({ ...p, result, generatedFrom: fingerprint(captured), history: snapshot(p) }),
         captured.id,
       );
-      setToast('Your draft is ready. Review the copy and notes.');
+      setToast('Your draft is ready. Open Design prompt to take the page into ChatGPT.');
     });
   };
   const revise = (sectionId: string, direction: RevisionInput['direction']) => {
@@ -209,7 +249,7 @@ export default function CopyStudio() {
       sections: project.result.draft.sections.map((s) => (s.id === section.id ? parsed.data : s)),
     };
     try {
-      validateStructure(draft, project.template);
+      validateStructure(draft, project.template, true);
     } catch (err) {
       setError(
         err instanceof Error
@@ -243,7 +283,7 @@ export default function CopyStudio() {
         const template = parsed.generatedFrom
           ? JSON.parse(parsed.generatedFrom).template
           : parsed.template;
-        validateStructure(parsed.result.draft, template);
+        validateStructure(parsed.result.draft, template, true);
       }
       if (projects.length >= 100)
         throw new Error('Export and remove an older project before importing another.');
@@ -522,6 +562,11 @@ export default function CopyStudio() {
               onFormula={(formula) => update((p) => ({ ...p, formula }))}
               onImport={() => setImportOpen(true)}
               onGenerate={generate}
+              onOnboarding={() => { setOnboardingOpen(true); refreshOnboardings(); }}
+              onboardingNote={onboardingNote}
+              onDetachOnboarding={() => update((p) => ({ ...p, onboarding: null }))}
+              onContext={(context) => update((p) => changeOfferContext(p, context))}
+              onReferenceMode={(referenceMode) => update((p) => ({ ...p, referenceMode }))}
             />
             <DraftPanel
               project={project}
@@ -540,6 +585,9 @@ export default function CopyStudio() {
               onCopy={copy}
               onExport={() =>
                 download(`${slug(project.name)}.md`, exportMarkdown(project), 'text/markdown')
+              }
+              onExportDesign={(prompt) =>
+                download(`${slug(project.name)}-design-prompt.txt`, prompt, 'text/plain')
               }
               onExample={() => add(true)}
             />
@@ -563,8 +611,27 @@ export default function CopyStudio() {
         <ImportDialog
           current={project.brief}
           initial={project.source}
+          targetOffer={project.context?.mode === 'focused' ? project.brief.offerName.slice(0, 200) : ''}
+          initialUrl={linkedOnboarding?.landingPageUrl || linkedOnboarding?.website || ''}
+          projectLimitReached={projects.length >= 100}
           onClose={() => setImportOpen(false)}
-          onApply={(source, keys) => {
+          onApply={(source, keys, separateOffer) => {
+            if (separateOffer) {
+              if (projects.length >= 100) return;
+              const brief = briefSchema.parse({ voice: project.brief.voice });
+              for (const key of keys) brief[key] = source.extraction.fields[key] || '';
+              const next: Project = {
+                ...newProject(), brief, source, onboarding: project.onboarding,
+                template: project.template, formula: project.formula,
+                context: { ...copyContextSchema.parse(project.context || {}), mode: 'focused' },
+                name: brief.offerName || source.selectedOffer || 'Untitled project',
+              };
+              setProjects((old) => [next, ...old]);
+              select(next.id);
+              setImportOpen(false);
+              setToast('A separate offer project is ready. Your previous project is saved.');
+              return;
+            }
             update((p) => {
               const brief = { ...p.brief };
               for (const key of keys) brief[key] = source.extraction.fields[key] || '';
@@ -572,14 +639,41 @@ export default function CopyStudio() {
                 ...p,
                 brief,
                 source,
+                referenceMode: p.referenceMode === 'rework_voice' ? 'rework_voice' : 'preserve_voice',
                 name: p.name === 'Untitled project' && brief.offerName ? brief.offerName : p.name,
               };
             });
             setImportOpen(false);
-            setToast(`${keys.length} reviewed fields added to your brief.`);
+            setToast(keys.length ? `${keys.length} reviewed fields added. Full original copy is also attached as a reference.` : 'Original copy attached. Your brief stays unchanged.');
           }}
         />
       )}
+      {onboardingOpen && <OnboardingDialog
+        project={project} records={onboardings} loading={onboardingLoading} error={onboardingError}
+        onRefresh={refreshOnboardings} onClose={() => setOnboardingOpen(false)}
+        onApply={(record, fields, useTemplate, useConstraints) => {
+          update((p) => {
+            const brief = { ...p.brief };
+            const differentClient = Boolean(p.onboarding && p.onboarding.id !== record.id);
+            if (differentClient) brief.coachBio = '';
+            for (const key of fields) brief[key] = record.brief[key];
+            return {
+              ...p, brief,
+              offerBriefs: differentClient && p.offerBriefs ? {
+                current: p.offerBriefs.current && { ...p.offerBriefs.current, coachBio: '' },
+                focused: p.offerBriefs.focused && { ...p.offerBriefs.focused, coachBio: '' },
+                new: p.offerBriefs.new && { ...p.offerBriefs.new, coachBio: '' },
+              } : p.offerBriefs,
+              onboarding: onboardingLinkSchema.parse(record),
+              template: useTemplate ? record.template : p.template,
+              context: useConstraints ? { ...copyContextSchema.parse(p.context || {}), background: record.context.background, mustKeep: record.context.mustKeep, avoid: record.context.avoid } : p.context,
+              name: p.name === 'Untitled project' ? record.projectName : p.name,
+            };
+          });
+          setOnboardingOpen(false);
+          setToast('Client onboarding selected. Review the offer brief before generating.');
+        }}
+      />}
       <input
         type="file"
         ref={fileInput}

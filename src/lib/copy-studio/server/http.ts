@@ -1,16 +1,17 @@
 import { z, ZodError } from 'zod/v4';
-import { generationSchema, revisionSchema } from '../shared/contracts';
+import { generationSchema, revisionSchema, MAX_SOURCE_CHARACTERS } from '../shared/contracts';
 import { generate, extract, revise } from './engine';
 import { createCompletion, type Completion } from './provider';
 import { providerConfig, providerStatus } from './config';
 import { readSource } from './source';
 import { AppError, publicError } from './errors';
 
-const operations = new Set(['generate', 'revise', 'import', 'connection']);
+const operations = new Set(['generate', 'revise', 'import', 'reference', 'connection']);
 const importSchema = z
   .object({
     url: z.string().trim().max(2000).optional(),
-    text: z.string().trim().min(100).max(24000).optional(),
+    text: z.string().trim().min(100).max(MAX_SOURCE_CHARACTERS).optional(),
+    targetOffer: z.string().trim().max(200).optional(),
   })
   .refine(
     (value) => Boolean(value.url) !== Boolean(value.text),
@@ -41,7 +42,7 @@ const jsonError = (error: unknown) => {
 async function readJson(request: Request): Promise<unknown> {
   const type = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
   if (type !== 'application/json') throw new AppError(415, 'Send a JSON request.');
-  if (Number(request.headers.get('content-length') || 0) > 300_000)
+  if (Number(request.headers.get('content-length') || 0) > 2_000_000)
     throw new AppError(413, 'The request is too large. Shorten the brief or source text.');
   if (!request.body) throw new AppError(400, 'Send a JSON request body.');
   const reader = request.body.getReader();
@@ -53,7 +54,7 @@ async function readJson(request: Request): Promise<unknown> {
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > 300_000)
+      if (bytes > 2_000_000)
         throw new AppError(413, 'The request is too large. Shorten the brief or source text.');
       text += decoder.decode(value, { stream: true });
     }
@@ -110,7 +111,7 @@ export async function handleCopyStudio(
     body = await readJson(request);
     if (operation === 'generate') body = generationSchema.parse(body);
     if (operation === 'revise') body = revisionSchema.parse(body);
-    if (operation === 'import') body = importSchema.parse(body);
+    if (operation === 'import' || operation === 'reference') body = importSchema.parse(body);
     if (limits.active >= 3)
       throw new AppError(429, 'Copy Studio is handling other requests. Try again in a moment.');
   } catch (error) {
@@ -130,6 +131,12 @@ export async function handleCopyStudio(
   };
   const run = async (progress: (stage: string) => void) => {
     signal.throwIfAborted();
+    if (operation === 'reference') {
+      const input = importSchema.parse(body);
+      return input.text
+        ? { title: 'Pasted page copy', url: '', text: input.text, headings: [] }
+        : readSource(input.url!, signal);
+    }
     const complete = completeOverride || createCompletion(providerConfig());
     if (operation === 'generate')
       return generate(complete, generationSchema.parse(body), signal, progress);
@@ -139,7 +146,7 @@ export async function handleCopyStudio(
       const source = input.text
         ? { title: 'Pasted page copy', url: '', text: input.text, headings: [] }
         : await readSource(input.url!, signal);
-      return extract(complete, source, signal);
+      return extract(complete, source, signal, input.targetOffer);
     }
     await complete(
       'You are testing an API connection. Reply with OK only.',

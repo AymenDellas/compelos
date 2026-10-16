@@ -1,5 +1,7 @@
 import { z } from 'zod/v4';
 
+export const MAX_SOURCE_CHARACTERS = 240_000;
+
 const text = z.string().trim().max(6000);
 export const briefSchema = z.object({
   offerName: text.default(''),
@@ -10,6 +12,7 @@ export const briefSchema = z.object({
   mechanism: text.default(''),
   deliverables: text.default(''),
   proof: text.default(''),
+  coachBio: text.default(''),
   objections: text.default(''),
   price: text.default(''),
   guarantee: text.default(''),
@@ -25,6 +28,31 @@ export const templateIdSchema = z.enum(['direct_to_call', 'lead_magnet', 'vsl'])
 export type TemplateId = z.infer<typeof templateIdSchema>;
 export const formulaSchema = z.enum(['recommended', 'pas', 'aida', 'bab', 'star', 'fourps']);
 export type FormulaId = z.infer<typeof formulaSchema>;
+export const copyContextSchema = z.object({
+  mode: z.enum(['current', 'focused', 'new']).default('current'),
+  direction: text.default(''),
+  background: text.default(''),
+  mustKeep: text.default(''),
+  avoid: text.default(''),
+});
+export type CopyContext = z.infer<typeof copyContextSchema>;
+export const referenceModeSchema = z.enum(['preserve_voice', 'rework_voice', 'off']);
+export type ReferenceMode = z.infer<typeof referenceModeSchema>;
+export const referenceSchema = z.object({
+  title: z.string().max(500),
+  url: z.string().max(2000),
+  text: z.string().min(1).max(MAX_SOURCE_CHARACTERS),
+  headings: z.array(z.string().max(500)).max(60),
+  selectedOffer: z.string().max(200).default(''),
+  tone: z.enum(['preserve', 'rework']).default('preserve'),
+});
+export const onboardingLinkSchema = z.object({
+  id: z.string().max(100),
+  revision: z.number().int().positive(),
+  clientName: z.string().max(200),
+  projectName: z.string().max(200),
+  updatedAt: z.string(),
+});
 export const requiredKeys = ['offerName', 'description', 'audience', 'problem', 'outcome'] as const;
 export const fieldLabels: Record<BriefKey, string> = {
   offerName: 'Offer name',
@@ -35,6 +63,7 @@ export const fieldLabels: Record<BriefKey, string> = {
   mechanism: 'Why does your approach work?',
   deliverables: 'What is included?',
   proof: 'Evidence & testimonials',
+  coachBio: 'Coach background & credentials',
   objections: 'Reasons they might hesitate',
   price: 'Price & payment terms',
   guarantee: 'Guarantee or refund terms',
@@ -51,6 +80,8 @@ export const generationSchema = z.object({
   ),
   template: templateIdSchema,
   formula: formulaSchema.default('recommended'),
+  context: copyContextSchema.optional(),
+  reference: referenceSchema.optional(),
 });
 export type GenerationInput = z.infer<typeof generationSchema>;
 export const sectionSchema = z.object({
@@ -84,6 +115,11 @@ export type Issue = z.infer<typeof issueSchema>;
 export const resultSchema = z.object({ draft: draftSchema, issues: z.array(issueSchema) });
 export type GenerationResult = z.infer<typeof resultSchema>;
 export const extractionSchema = z.object({
+  offers: z.array(z.object({
+    name: z.string().min(1).max(200),
+    summary: z.string().max(1200),
+    quote: z.string().min(1).max(1200),
+  })).max(12).optional(),
   fields: z.partialRecord(z.enum(Object.keys(fieldLabels) as [BriefKey, ...BriefKey[]]), text),
   evidence: z
     .array(
@@ -101,9 +137,21 @@ export const sourceSchema = z.object({
   url: z.string(),
   text: z.string(),
   headings: z.array(z.string()),
+  crawl: z.object({
+    pages: z.array(z.object({
+      url: z.string(), title: z.string(),
+      status: z.enum(['read', 'failed', 'unreadable', 'duplicate']),
+      detail: z.string().optional(),
+      truncated: z.boolean().optional(),
+    })),
+    discovered: z.number().int().nonnegative(),
+    pending: z.array(z.string()),
+    complete: z.boolean(),
+    warnings: z.array(z.string()),
+  }).optional(),
 });
 export type Source = z.infer<typeof sourceSchema>;
-export const importResultSchema = z.object({ source: sourceSchema, extraction: extractionSchema });
+export const importResultSchema = z.object({ source: sourceSchema, extraction: extractionSchema, selectedOffer: z.string().max(200).optional() });
 export type ImportResult = z.infer<typeof importResultSchema>;
 export const revisionSchema = generationSchema.extend({
   draft: draftSchema,
@@ -124,6 +172,10 @@ export const projectSchema = z.object({
   formula: formulaSchema,
   result: resultSchema.nullable(),
   source: importResultSchema.nullable(),
+  referenceMode: referenceModeSchema.optional(),
+  context: copyContextSchema.optional(),
+  onboarding: onboardingLinkSchema.nullable().default(null),
+  offerBriefs: z.object({ current: briefSchema.optional(), focused: briefSchema.optional(), new: briefSchema.optional() }).optional(),
   generatedFrom: z.string().nullable(),
   history: z.array(z.object({ result: resultSchema, generatedFrom: z.string().nullable() })).max(8),
 });
@@ -132,10 +184,34 @@ export const librarySchema = z.object({
   version: z.literal(2),
   projects: z.array(projectSchema).max(100),
 });
-export function fingerprint(input: GenerationInput): string {
+export type CopyInput = GenerationInput & { source?: ImportResult | null; referenceMode?: ReferenceMode };
+export function generationPayload(input: CopyInput): GenerationInput {
+  const source = input.source?.source;
+  const reference = input.referenceMode === 'off' ? undefined : input.reference || (source?.text.trim() ? {
+    title: source.title.slice(0, 500),
+    url: source.url.slice(0, 2000),
+    text: source.text.slice(0, MAX_SOURCE_CHARACTERS),
+    headings: source.headings.slice(0, 60).map((heading) => heading.slice(0, 500)),
+    selectedOffer: input.source?.selectedOffer || '',
+    tone: input.referenceMode === 'rework_voice' ? 'rework' as const : 'preserve' as const,
+  } : undefined);
+  return {
+    brief: input.brief, template: input.template, formula: input.formula,
+    context: input.context,
+    ...(reference ? { reference: referenceSchema.parse(reference) } : {}),
+  };
+}
+export function fingerprint(input: CopyInput): string {
+  const context = copyContextSchema.parse(input.context || {});
+  const { reference } = generationPayload(input);
+  const { coachBio, ...existingBrief } = briefSchema.parse(input.brief);
   return JSON.stringify({
-    brief: briefSchema.parse(input.brief),
+    // A new empty optional field must not invalidate unrelated saved templates.
+    brief: coachBio ? { ...existingBrief, coachBio } : existingBrief,
     template: input.template,
     formula: input.formula,
+    ...(context.mode !== 'current' || context.direction || context.background || context.mustKeep || context.avoid
+      ? { context } : {}),
+    ...(reference ? { reference } : {}),
   });
 }

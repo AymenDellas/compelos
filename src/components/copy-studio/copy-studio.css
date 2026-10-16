@@ -366,6 +366,49 @@
   color: var(--signal);
   margin-left: auto;
 }
+.copy-studio .original-reference {
+  margin: 0 18px 22px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.copy-studio .reference-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.copy-studio .reference-heading strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+.copy-studio .reference-title {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  margin-bottom: 12px;
+}
+.copy-studio .source-coverage { overflow-wrap: anywhere; }
+.copy-studio .source-coverage > ul { max-height: 20rem; overflow-y: auto; padding-left: 1.2rem; line-height: 1.6; }
+.copy-studio .source-coverage li + li { margin-top: .65rem; }
+.copy-studio .reference-preview {
+  margin: 14px 0;
+}
+.copy-studio .reference-preview summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.copy-studio .reference-preview textarea {
+  margin-top: 10px;
+}
 .copy-studio .brief-fields {
   padding: 0 18px;
 }
@@ -818,6 +861,42 @@
   color: var(--text-faint);
   font-size: 10px;
 }
+.copy-studio .design-prompt-panel {
+  min-width: 0;
+  padding: 20px 0;
+  border-top: 1px solid var(--line);
+}
+.copy-studio .design-prompt-heading h3 {
+  font-size: 18px;
+  line-height: 1.4;
+}
+.copy-studio .design-prompt-heading p {
+  margin-top: 8px;
+  max-width: 60ch;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.copy-studio .design-prompt-constraints {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+.copy-studio .design-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0;
+}
+.copy-studio .design-prompt-text {
+  margin: 8px 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.copy-studio .draft-actions > .segmented {
+  flex-wrap: wrap;
+}
 .copy-studio .copy-sections {
   display: grid;
   gap: 14px;
@@ -1133,6 +1212,114 @@
 .copy-studio .import-dialog .muted {
   font-size: 13px;
   margin-bottom: 18px;
+}
+.copy-studio .onboarding-trigger {
+  margin-bottom: 8px;
+}
+.copy-studio .onboarding-status {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 8px 18px 12px;
+}
+.copy-studio .onboarding-unlink {
+  margin: 0 18px;
+}
+.copy-studio .offer-scope {
+  margin: 22px 0;
+  padding: 0 18px;
+}
+.copy-studio .offer-scope legend {
+  padding: 0;
+}
+.copy-studio .offer-mode-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 12px 0 8px;
+}
+.copy-studio .offer-mode-options label,
+.copy-studio .onboarding-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  min-height: 36px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.copy-studio .offer-mode-options label.selected {
+  color: var(--text);
+}
+.copy-studio .onboarding-options {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 16px 0;
+}
+.copy-studio .onboarding-option,
+.copy-studio .offer-choice {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.copy-studio .onboarding-option.selected {
+  border-color: var(--signal-line);
+  background: var(--signal-dim);
+}
+.copy-studio .onboarding-option span,
+.copy-studio .offer-choice span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.copy-studio .onboarding-option strong,
+.copy-studio .offer-choice strong {
+  font-size: 13px;
+}
+.copy-studio .onboarding-option small,
+.copy-studio .offer-choice small {
+  display: block;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.copy-studio .onboarding-option .onboarding-match {
+  color: var(--signal);
+}
+.copy-studio .onboarding-review {
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+  margin-top: 20px;
+}
+.copy-studio .onboarding-review h3 {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+.copy-studio .onboarding-check {
+  margin-top: 14px;
+}
+.copy-studio .onboarding-client-notes {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.copy-studio .selected-offer-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 12px 0;
+  font-size: 12px;
 }
 .copy-studio .import-tabs {
   margin-bottom: 22px;

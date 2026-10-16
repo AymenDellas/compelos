@@ -10,6 +10,7 @@ import {
   FileText,
   LoaderCircle,
   Pencil,
+  PanelTop,
   RotateCcw,
   ShieldCheck,
   Sparkles,
@@ -24,7 +25,10 @@ import {
   type RevisionInput,
 } from '@/lib/copy-studio/shared/contracts';
 import { templates } from '@/lib/copy-studio/shared/templates';
+import { isLegacyDirectCallDraft } from '@/lib/copy-studio/shared/quality';
 import { sectionText } from './export';
+import { buildDesignPrompt } from '@/lib/copy-studio/shared/design-prompt';
+import { DesignPromptPanel } from './DesignPromptPanel';
 
 function SectionCard({
   section,
@@ -210,6 +214,7 @@ export function DraftPanel({
   onUndo,
   onCopy,
   onExport,
+  onExportDesign,
   onExample,
 }: {
   project: Project;
@@ -222,9 +227,10 @@ export function DraftPanel({
   onUndo: () => void;
   onCopy: (text?: string) => void;
   onExport: () => void;
+  onExportDesign: (prompt: string) => void;
   onExample: () => void;
 }) {
-  const [view, setView] = useState<'sections' | 'preview'>('sections');
+  const [view, setView] = useState<'sections' | 'preview' | 'design'>('sections');
   const result = project.result;
   let draftTemplate: TemplateId = project.template;
   try {
@@ -234,6 +240,7 @@ export function DraftPanel({
   }
   const template =
     templates[result ? draftTemplate : project.template] || templates[project.template];
+  const previousTemplate = Boolean(result && isLegacyDirectCallDraft(result.draft, project.template));
   const wordCount =
     result?.draft.sections.map(sectionText).join(' ').trim().split(/\s+/).filter(Boolean).length ||
     0;
@@ -243,7 +250,7 @@ export function DraftPanel({
         <div className="panel-number">02</div>
         <div>
           <h2 id="draft-heading">Make every word work</h2>
-          <p>Your strategy, copy, and next steps in one place.</p>
+          <p>Your strategy, copy, and design prompt in one place.</p>
         </div>
         {result && <span className="word-count">{wordCount} words</span>}
       </div>
@@ -349,10 +356,11 @@ export function DraftPanel({
             <div className="notice warning">
               <AlertCircle size={17} />
               <div>
-                <strong>Your brief has changed.</strong>
+                <strong>{previousTemplate ? 'This draft uses the earlier template.' : 'Your brief has changed.'}</strong>
                 <p>
-                  Generate a new draft to apply the changes. This draft still reflects the earlier
-                  brief; section editing is paused.
+                  {previousTemplate
+                    ? 'Generate a new draft to add About me and the updated section headings. Your existing copy stays saved; section editing is paused.'
+                    : 'Generate a new draft to apply the changes. This draft still reflects the earlier brief; section editing is paused.'}
                 </p>
               </div>
             </div>
@@ -383,9 +391,10 @@ export function DraftPanel({
             </details>
           </div>
           <div className="draft-actions">
-            <div className="segmented">
+            <div className="segmented" aria-label="Draft views">
               <button
                 className={view === 'sections' ? 'active' : ''}
+                aria-pressed={view === 'sections'}
                 onClick={() => setView('sections')}
               >
                 <FileText size={14} />
@@ -393,12 +402,22 @@ export function DraftPanel({
               </button>
               <button
                 className={view === 'preview' ? 'active' : ''}
+                aria-pressed={view === 'preview'}
                 onClick={() => setView('preview')}
               >
                 <Eye size={14} />
                 Preview
               </button>
+              <button
+                className={view === 'design' ? 'active' : ''}
+                aria-pressed={view === 'design'}
+                onClick={() => setView('design')}
+              >
+                <PanelTop size={14} />
+                Design prompt
+              </button>
             </div>
+            {view !== 'design' && (
             <div className="row">
               <button
                 className="icon-button"
@@ -418,6 +437,7 @@ export function DraftPanel({
                 Export
               </button>
             </div>
+            )}
           </div>
           <div className="review-status">
             <ShieldCheck size={15} />
@@ -427,7 +447,14 @@ export function DraftPanel({
                 : 'Automated checks complete. Review facts before publishing.'}
             </span>
           </div>
-          {view === 'sections' ? (
+          {view === 'design' ? (
+            <DesignPromptPanel
+              prompt={buildDesignPrompt(project)}
+              busy={busy}
+              onCopy={onCopy}
+              onExport={() => onExportDesign(buildDesignPrompt(project))}
+            />
+          ) : view === 'sections' ? (
             <div className="copy-sections">
               {result.draft.sections.map((section, i) => (
                 <SectionCard

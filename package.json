@@ -18,18 +18,10 @@
     "test:auth": "node scripts/check-dashboard-auth.cjs",
     "test:workers": "node --test tests/workers/*.test.cjs",
     "worker": "node scripts/linkedin-worker-supervisor.cjs",
-    "worker:single": "node worker.cjs"
+    "worker:single": "node worker.cjs",
+    "test:copy-studio": "node scripts/copy-studio-tests.mjs"
   },
   "dependencies": {
-    "lucide-react": "0.564.0",
-    "next": "16.3.8",
-    "pdfjs-dist": "6.3.289",
-    "pg": "8.23.0",
-    "puppeteer": "24.38.0",
-    "puppeteer-extra": "3.3.6",
-    "puppeteer-extra-plugin-stealth": "2.11.2",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
     "@qwen-code/qwen-code": "0.24.6",
     "axios": "^1.13.6",
     "cheerio": "^1.2.0",
@@ -38,18 +30,28 @@
     "https-proxy-agent": "^7.0.6",
     "imapflow": "^1.7.6",
     "ipaddr.js": "^2.5.0",
+    "lucide-react": "0.564.0",
+    "next": "16.3.8",
     "papaparse": "^5.5.3",
+    "pdfjs-dist": "6.3.289",
+    "pg": "8.23.0",
+    "puppeteer": "24.38.0",
+    "puppeteer-extra": "3.3.6",
+    "puppeteer-extra-plugin-stealth": "2.11.2",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
     "tailwind-merge": "latest",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.18",
     "@types/node": "^22.0.0",
+    "@types/papaparse": "^5.5.2",
     "@types/pg": "^8.20.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "tailwindcss": "4.1.18",
-    "typescript": "^5.0.0",
-    "@types/papaparse": "^5.5.2"
+    "tsx": "4.23.15",
+    "typescript": "^5.0.0"
   }
 }

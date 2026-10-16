@@ -11,6 +11,7 @@ export function newProject(): Project {
     formula: 'recommended',
     result: null,
     source: null,
+    onboarding: null,
     generatedFrom: null,
     history: [],
   };

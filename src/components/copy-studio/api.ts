@@ -1,9 +1,12 @@
 import { z } from 'zod/v4';
+import { onboardingBriefSchema } from '@/lib/copy-studio/shared/onboarding';
 import {
   importResultSchema,
   resultSchema,
   revisionResultSchema,
-  type GenerationInput,
+  sourceSchema,
+  generationPayload,
+  type CopyInput,
   type RevisionInput,
 } from '@/lib/copy-studio/shared/contracts';
 
@@ -24,13 +27,13 @@ async function post(path: string, data: unknown, signal: AbortSignal): Promise<R
   return response;
 }
 export async function generateCopy(
-  input: GenerationInput,
+  input: CopyInput,
   signal: AbortSignal,
   progress: (stage: string) => void,
 ) {
   const response = await post(
     '/api/copy-studio/generate',
-    { brief: input.brief, template: input.template, formula: input.formula },
+    generationPayload(input),
     signal,
   );
   if (!response.body) throw new Error('The response stream is unavailable. Please retry.');
@@ -74,21 +77,28 @@ export async function generateCopy(
     reader.releaseLock();
   }
 }
-export async function importSource(input: { url?: string; text?: string }, signal: AbortSignal) {
+export async function importSource(input: { url?: string; text?: string; targetOffer?: string }, signal: AbortSignal) {
   const response = await post('/api/copy-studio/import', input, signal);
   return importResultSchema.parse(await response.json());
+}
+export async function readReference(input: { url?: string; text?: string }, signal: AbortSignal) {
+  const response = await post('/api/copy-studio/reference', input, signal);
+  return sourceSchema.parse(await response.json());
+}
+export async function loadOnboardings(signal: AbortSignal) {
+  const response = await fetch('/api/copy-studio/onboardings', { signal, cache: 'no-store' });
+  if (!response.ok) throw new Error(errorMessage(await response.json().catch(() => null)));
+  return z.object({ onboardings: z.array(onboardingBriefSchema) }).parse(await response.json()).onboardings;
 }
 export async function testConnection(signal: AbortSignal) {
   const response = await post('/api/copy-studio/connection', {}, signal);
   return z.object({ connected: z.literal(true), model: z.string() }).parse(await response.json());
 }
-export async function reviseCopy(input: RevisionInput, signal: AbortSignal) {
+export async function reviseCopy(input: RevisionInput & CopyInput, signal: AbortSignal) {
   const response = await post(
     '/api/copy-studio/revise',
     {
-      brief: input.brief,
-      template: input.template,
-      formula: input.formula,
+      ...generationPayload(input),
       draft: input.draft,
       sectionId: input.sectionId,
       direction: input.direction,
