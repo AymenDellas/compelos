@@ -198,3 +198,9 @@ test('generation restores approved testimonial text before returning or auditing
   assert.equal(result.issues.length, 0);
   assert.equal(responses.length, 0);
 });
+
+test('spelled-out call durations are checked and equivalent approved durations are accepted', () => {
+  const withDuration = { ...draft, sections: [{ ...draft.sections.find(section => section.id === 'call')!, body: 'We start with a one‑hour Discovery appointment.' }] };
+  assert.ok(auditDraft(withDuration, input.brief).some(issue => /duration is not confirmed/.test(issue.message)));
+  assert.equal(auditDraft(withDuration, { ...input.brief, nextStep: 'A 60 minute Discovery appointment.' }).length, 0);
+});

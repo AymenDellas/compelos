@@ -91,6 +91,15 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
     const promises = plainProse.match(/no[- ]spam|never (?:share|sell) your|unsubscribe (?:anytime|at any time)|no[- ]sales[- ]pitch|no[- ]obligation|no[- ]commitment|low[- ]commitment/gi) || [];
     if (promises.some(promise => !policyFacts.includes(promise.replace(/-/g, ' '))))
       add('This privacy or sales-process promise is not confirmed in the brief. Remove it or provide approved terms.', 'warning');
+    const wordDurations = plainProse.match(/\b(?:one|two|three|four|five|six|seven|eight|nine|ten|half|an?)\s*[- ]\s*(?:minute|hour)s?\b/g) || [];
+    const durationNumbers: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, half: 0.5, a: 1, an: 1 };
+    const minutes = (phrase: string) => {
+      const [amount, unit] = phrase.replace(/-/g, ' ').split(/\s+/);
+      return (durationNumbers[amount] ?? Number(amount)) * (unit.startsWith('hour') ? 60 : 1);
+    };
+    const approvedDurations = policyFacts.match(/\b(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|half|an?)\s+(?:minute|hour)s?\b/g) || [];
+    if (wordDurations.some(duration => !approvedDurations.some(approved => minutes(duration) === minutes(approved))))
+      add('The call or session duration is not confirmed in the brief, including durations written in words. Remove it or provide the actual duration.', 'warning');
     if (/\b(?:free|complimentary)\b/i.test(copy) && !/\b(?:free|complimentary)\b/i.test(facts))
       add('The brief does not confirm that this offer or next step is free.', 'warning');
     if (/unlock (?:your |their |full )?potential|game.changer|revolutionary|transform your life|\bleverage\b/i.test(prose))
