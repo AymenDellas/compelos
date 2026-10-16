@@ -7,6 +7,7 @@ import { findTestimonials, testimonialProof } from '../../src/lib/copy-studio/se
 import { auditDraft } from '../../src/lib/copy-studio/shared/quality';
 import { extract, generate, revise } from '../../src/lib/copy-studio/server/engine';
 import { exportMarkdown } from '../../src/components/copy-studio/export';
+import { extractionContext, byteSize } from '../../src/lib/copy-studio/server/source-context';
 import { draft, input, strategy } from './fixtures';
 
 const quote = 'Coaching helped me choose a new career and make a practical plan. I recommend this support 100%.';
@@ -60,6 +61,27 @@ test('ambiguous offers cannot import selected testimonials into an unchosen brie
     { name: 'workplace training', summary: '', quote: 'Our workplace training has a 97% approval rating.' },
   ], fields: {}, evidence: [], selectedTestimonialIds: ['T1'], warnings: [] }), source, new AbortController().signal);
   assert.deepEqual(result.extraction.fields, {});
+});
+
+test('indexed testimonials leave room for the homepage outcome and next-step passages', () => {
+  const goal = 'Together we explore your goals and create a practical plan for your career aspirations.';
+  const large = { ...source, text: source.text.replace('Our workplace training', goal + '\n\nOur workplace training')
+    + Array.from({ length: 80 }, (_, i) => `\n\nSOURCE PAGE: https://coach.example/articles/${i}\nTITLE: Career article\n\n${'An article about careers and coaching. '.repeat(60)}`).join('') };
+  const selected = extractionContext(large, 12_000, 'Career Coaching');
+  assert.ok(selected.value.passages.some(passage => passage.text.includes(goal)));
+  assert.ok(selected.value.testimonials.some(item => item.attribution === 'Sam R., Bristol'));
+  assert.ok(byteSize(JSON.stringify(selected.value)) <= 12_000);
+});
+
+test('a paraphrased essential citation is rechecked once against the original passages', async () => {
+  let calls = 0;
+  const result = await extract(async () => {
+    calls++;
+    return JSON.stringify({ offers: [], fields: { offerName: 'Career Coaching', outcome: 'Choose a next role.' },
+      evidence: [{ field: 'offerName', quote: 'Career Coaching' }, { field: 'outcome', quote: calls === 1 ? 'A made-up paraphrased quotation.' : 'Career Coaching helps people choose their next role.' }], warnings: [] });
+  }, source, new AbortController().signal, 'Career Coaching');
+  assert.equal(calls, 2);
+  assert.equal(result.extraction.fields.outcome, 'Choose a next role.');
 });
 
 test('the resolved framework and offer-specific stage plan reach strategy, copy and rewrites', async () => {

@@ -11,7 +11,7 @@ type ContextSource = Pick<Source, 'title' | 'url' | 'text' | 'headings'> & {
   crawl?: Source['crawl']; selectedOffer?: string; tone?: string;
 };
 export function sourceContext(
-  source: ContextSource, budget: number, target: string,
+  source: ContextSource, budget: number, target: string, options: { indexedTestimonials?: boolean } = {},
 ): { value: Omit<ContextSource, 'crawl'> & { contextSelection?: string }; excerpted: boolean } {
   // Crawl records belong in the coverage UI, not in every model request.
   const { crawl, ...original } = source;
@@ -51,7 +51,7 @@ export function sourceContext(
         const trust = kind === 'about' && /certif|credential|degree|master|experience in|years of experience|my background|i[’']m|i am/i.test(text) ? 24
           : kind === 'proof' && /helped me|recommend|my experience|with her support|with his support|i (?:was|have|am)/i.test(text) ? 18 : 0;
         candidates.push({ text: `${label}\n${text}`, page: index, kind,
-          score: routeScore + matches * 12 + (relevant ? 6 : 0) + trust - (archive ? 12 : 0), order: candidates.length });
+          score: routeScore + matches * 12 + (relevant ? 6 : 0) + trust - (archive ? 12 : 0) - (options.indexedTestimonials && kind === 'proof' ? 40 : 0), order: candidates.length });
       }
     }
   });
@@ -66,8 +66,11 @@ export function sourceContext(
     remaining -= size;
   };
   // Reserve both trust routes and the strongest offer passages before filling by relevance.
-  for (const kind of ['about', 'proof']) candidates.filter(item => item.kind === kind).slice(0, 2).forEach(add);
-  const usedPages = new Set<number>();
+  for (const kind of options.indexedTestimonials ? ['about'] : ['about', 'proof']) candidates.filter(item => item.kind === kind).slice(0, 2).forEach(add);
+  // Indexed feedback is already supplied separately. Spend that room on the offer,
+  // including the homepage's later outcome and next-step paragraphs.
+  if (options.indexedTestimonials) candidates.filter(item => item.page === 0).slice(0, 6).forEach(add);
+  const usedPages = new Set(selected.map(item => item.page));
   for (const candidate of candidates) {
     if (usedPages.size >= 6) break;
     if (usedPages.has(candidate.page)) continue;
@@ -87,7 +90,7 @@ export function sourceContext(
 /** Models cite passage IDs; the server copies the actual source wording into evidence. */
 export function extractionContext(source: Source, budget: number, target: string) {
   const testimonials = findTestimonials(source, target);
-  const selected = sourceContext(source, Math.floor((budget - byteSize(JSON.stringify(testimonials))) * 0.78), target);
+  const selected = sourceContext(source, Math.floor((budget - byteSize(JSON.stringify(testimonials))) * 0.78), target, { indexedTestimonials: testimonials.length > 0 });
   const passages: { id: string; page: string; text: string }[] = [];
   for (const part of selected.value.text.split(/(?=^SOURCE PAGE: )/m).filter(part => part.trim())) {
     const header = part.match(/^SOURCE PAGE: ([^\n]+)\n(?:TITLE: [^\n]*\n)?/);
