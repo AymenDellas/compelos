@@ -72,6 +72,19 @@ test('passage citations produce original quotes and unknown IDs cannot approve f
   assert.equal(result.extraction.evidence.find(evidence => evidence.field === 'coachBio')?.quote, 'Jo holds a Master’s in Business Management and has senior leadership experience.');
 });
 
+test('a different service’s satisfaction score cannot become numeric proof for the chosen offer', async () => {
+  const source = { title: 'Services', url: '', headings: [], text: 'Career Coaching helps people choose their next role.\n\nWorkplace training has a 97% participant approval rating.' };
+  const run = (proof: string, quote: string, text = source.text) => extract(async () => JSON.stringify({
+    offers: [{ name: 'Career Coaching', summary: 'Career decisions', quote: 'Career Coaching helps people choose their next role.' }],
+    fields: { offerName: 'Career Coaching', proof }, evidence: [{ field: 'offerName', quote: 'Career Coaching helps people choose their next role.' }, { field: 'proof', quote }], warnings: [],
+  }), { ...source, text }, controller().signal, 'Career Coaching');
+  const result = await run('97% approval rating', source.text);
+  assert.equal(result.extraction.fields.proof, undefined);
+  assert.match(result.extraction.warnings.join(' '), /does not explicitly link/);
+  const specific = 'Career Coaching has a 94% client approval rating.';
+  assert.equal((await run('94% client approval rating', specific, source.text + '\n\n' + specific)).extraction.fields.proof, '94% client approval rating');
+});
+
 test('strategy, draft, claim repair and rewrite budget their own source context without dropping approved facts', async () => {
   const payload = { ...input, reference: { ...largeSource(), selectedOffer: 'Career Coaching', tone: 'preserve' as const } };
   const bad = structuredClone(draft);

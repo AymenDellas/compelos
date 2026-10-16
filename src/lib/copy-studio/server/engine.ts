@@ -223,6 +223,18 @@ export async function extract(
       );
     }
   }
+  // A shared homepage can put another service's statistics beside this offer.
+  // Only prefill numeric proof when the supporting paragraph names this offer.
+  const proofNumbers = extraction.fields.proof?.match(/\d+(?:[.,]\d+)*(?:%)?/g) || [];
+  const proofOffer = normalize(selectedOffer || extraction.fields.offerName || '');
+  if (proofNumbers.length && proofOffer && !proofNumbers.every(number => extraction.evidence
+    .filter(evidence => evidence.field === 'proof')
+    .some(evidence => evidence.quote.split(/\n\s*\n|\n/).some(paragraph =>
+      normalize(paragraph).includes(proofOffer) && paragraph.includes(number))))) {
+    delete extraction.fields.proof;
+    extraction.evidence = extraction.evidence.filter(evidence => evidence.field !== 'proof');
+    extraction.warnings.push('Numeric proof was omitted because its source paragraph does not explicitly link it to the selected offer. Verify the relevant service before adding it manually.');
+  }
   extraction.warnings = extraction.warnings.slice(0, 10);
   return { source, extraction, selectedOffer: selectedOffer || (!targetOffer && extraction.offers.length === 1 ? extraction.offers[0].name : '') };
 }
