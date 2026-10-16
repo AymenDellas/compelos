@@ -140,6 +140,7 @@ test('approved testimonials cannot be silently omitted and changed quotations ar
   const completeDraft = structuredClone(draft);
   completeDraft.sections.find(section => section.id === 'proof')!.headline = 'A client’s career decision';
   completeDraft.sections.find(section => section.id === 'proof')!.body = `“${quote}”\nSam R., Bristol`;
+  completeDraft.sections.find(section => section.id === 'proof')!.proofFraming = { introduction: 'One client describes the support behind a career decision.', items: [{ id: 'E1', heading: 'Choosing a career direction' }] };
   const responses = [strategy, draft, completeDraft];
   const result = await generate(async () => JSON.stringify(responses.shift()), withProof, new AbortController().signal, () => {});
   assert.ok(result.draft.sections.find(section => section.id === 'proof')!.body.includes(quote));
@@ -176,7 +177,7 @@ test('generated testimony wording comes from approved source data even when the 
   const original = 'With this support I found a practical way to move forward and the courage to pursue a new career that I had always dreamed of doing.';
   const excerpt = exactExcerpt(original, 'career pursue', 16);
   assert.ok(original.includes(excerpt));
-  assert.ok(excerpt.split(/\s+/).length <= 16);
+  assert.equal(excerpt, original); // A cap that cannot fit a complete sentence must not create an orphaned clause.
   assert.match(excerpt, /career/);
   const proof = `Quote:\n${original}\nAttribution: Sam R., Bristol\nSource: https://coach.example/testimonials`;
   const bad = structuredClone(draft);
@@ -192,6 +193,7 @@ test('generation restores approved testimonial text before returning or auditing
   const bad = structuredClone(draft);
   bad.sections.find(section => section.id === 'proof')!.headline = 'A client’s career change';
   bad.sections.find(section => section.id === 'proof')!.body = '“My income doubled after a week.” Sam';
+  bad.sections.find(section => section.id === 'proof')!.proofFraming = { introduction: 'One client describes the support behind a career decision.', items: [{ id: 'E1', heading: 'Choosing a career direction' }] };
   const responses = [strategy, bad];
   const result = await generate(async () => JSON.stringify(responses.shift()), { ...input, brief: { ...input.brief, proof } }, new AbortController().signal, () => {});
   assert.ok(result.draft.sections.find(section => section.id === 'proof')!.body.includes(quote));

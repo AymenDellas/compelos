@@ -103,6 +103,7 @@ test('a regenerated old project retries omitted proof and renders the recovered 
   const approved = applyRecoveredEvidence(legacy(), recovered, true);
   const withProof = structuredClone(draft);
   Object.assign(withProof.sections.find(section => section.id === 'proof')!, { headline: 'A client’s career decision', body: 'A client describes their career change.' });
+  withProof.sections.find(section => section.id === 'proof')!.proofFraming = { introduction: 'One client describes the support behind a career decision.', items: [{ id: 'E1', heading: 'Choosing a career direction' }] };
   const responses = [strategy, draft, withProof];
   const result = await generate(async () => JSON.stringify(responses.shift()), generationPayload(approved), new AbortController().signal, () => {});
   const section = result.draft.sections.find(section => section.id === 'proof')!;

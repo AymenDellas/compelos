@@ -89,7 +89,10 @@ export function sourceContext(
 
 /** Models cite passage IDs; the server copies the actual source wording into evidence. */
 export function extractionContext(source: Source, budget: number, target: string) {
-  const testimonials = findTestimonials(source, target);
+  const testimonials: ReturnType<typeof findTestimonials> = [];
+  for (const item of findTestimonials(source, target)) {
+    if (byteSize(JSON.stringify([...testimonials, item])) <= budget * 0.42) testimonials.push(item);
+  }
   const selected = sourceContext(source, Math.floor((budget - byteSize(JSON.stringify(testimonials))) * 0.78), target, { indexedTestimonials: testimonials.length > 0 });
   const passages: { id: string; page: string; text: string }[] = [];
   for (const part of selected.value.text.split(/(?=^SOURCE PAGE: )/m).filter(part => part.trim())) {

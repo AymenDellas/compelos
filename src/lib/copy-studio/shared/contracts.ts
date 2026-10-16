@@ -88,6 +88,10 @@ export const sectionSchema = z.object({
   body: z.string().max(6000),
   bullets: z.array(z.string().max(800)).max(8),
   cta: z.string().max(120),
+  proofFraming: z.object({
+    introduction: z.string().max(500),
+    items: z.array(z.object({ id: z.string().max(20), heading: z.string().max(150) })).max(8),
+  }).optional(),
 });
 export type Section = z.infer<typeof sectionSchema>;
 export const strategySchema = z.object({
@@ -131,7 +135,7 @@ export const extractionSchema = z.object({
     .array(
       z.object({
         field: z.enum(Object.keys(fieldLabels) as [BriefKey, ...BriefKey[]]),
-        quote: z.string().min(1).max(1200),
+        quote: z.string().min(1).max(3000),
       }),
     )
     .max(24),

@@ -63,7 +63,7 @@ export const templates: Record<TemplateId, Template> = {
         'proof',
         'Client results & evidence',
         'Support the promise with evidence.',
-        'Write a descriptive heading matching the actual evidence. Include approved proof when present. For testimonials, use an exact relevant quote or clearly marked exact excerpt with its real attribution. An individual experience is not a general result promise. If proof is absent, leave this section empty and explain in notes.',
+        'Build a complete social-proof section with a descriptive heading about the actual evidence, a grounded introduction, and topic-specific headings for the approved testimonials. Preserve each client’s situation, support and change in full relevant testimony, not isolated fragments. Put directly relevant client experiences first and clearly distinguish professional recommendations. The server renders exact approved quotations and attributions from proofFraming IDs. Do not generalize individual results. If proof is absent, leave this section empty and explain in notes.',
       ),
       s(
         'objections',

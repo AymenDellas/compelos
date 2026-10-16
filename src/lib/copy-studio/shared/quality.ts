@@ -43,6 +43,8 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
       add('Use the same approved primary CTA label throughout the page.', 'warning');
     const quoted = [...copy.matchAll(/[“"]([^“”"]{25,})[”"]/g)].map(match => match[1]);
     if (section.id === 'proof' && testimonials.length) {
+      if (/^(?:what (?:our )?clients (?:have )?(?:say|said)|testimonials|success stories|client (?:reviews|testimonials))\W*$/i.test(section.headline.trim()))
+        add('Use a specific heading about the experiences this evidence supports, rather than a generic testimonial label.', 'warning');
       const supported = quoted.some(quote => testimonials.some(item => normalizeQuote(item.quote).includes(normalizeQuote(quote)) && copy.includes(item.attribution)));
       if (!supported) add('Include an exact approved testimonial or exact excerpt with its original attribution. Do not replace the evidence with a summary.', 'warning');
       if (quoted.some(quote => !testimonials.some(item => normalizeQuote(item.quote).includes(normalizeQuote(quote)))))
