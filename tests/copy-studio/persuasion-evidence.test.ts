@@ -8,6 +8,7 @@ import { auditDraft } from '../../src/lib/copy-studio/shared/quality';
 import { extract, generate, revise } from '../../src/lib/copy-studio/server/engine';
 import { exportMarkdown } from '../../src/components/copy-studio/export';
 import { extractionContext, byteSize } from '../../src/lib/copy-studio/server/source-context';
+import { exactExcerpt, restoreApprovedProof } from '../../src/lib/copy-studio/server/approved-proof';
 import { draft, input, strategy } from './fixtures';
 
 const quote = 'Coaching helped me choose a new career and make a practical plan. I recommend this support 100%.';
@@ -160,4 +161,31 @@ test('manual-review failures are caught: generic hero, invented follow-ups, fina
   assert.ok(issues.some(issue => /financial consequence/.test(issue.message)));
   assert.ok(issues.some(issue => /sales-process promise/.test(issue.message)));
   assert.equal(auditDraft({ ...draft, sections: [{ ...draft.sections.at(-1)!, body: 'This is a no‑obligation conversation.' }] }, { ...input.brief, nextStep: 'A no-obligation conversation.' }).length, 0);
+});
+
+test('generated testimony wording comes from approved source data even when the model changes it', () => {
+  const original = 'With this support I found a practical way to move forward and the courage to pursue a new career that I had always dreamed of doing.';
+  const excerpt = exactExcerpt(original, 'career pursue', 16);
+  assert.ok(original.includes(excerpt));
+  assert.ok(excerpt.split(/\s+/).length <= 16);
+  assert.match(excerpt, /career/);
+  const proof = `Quote:\n${original}\nAttribution: Sam R., Bristol\nSource: https://coach.example/testimonials`;
+  const bad = structuredClone(draft);
+  bad.sections.find(section => section.id === 'proof')!.headline = 'A client’s career change';
+  bad.sections.find(section => section.id === 'proof')!.body = '“I doubled my income.” Sam';
+  const restored = restoreApprovedProof(bad, { ...input, brief: { ...input.brief, proof } });
+  assert.doesNotMatch(restored.sections.find(section => section.id === 'proof')!.body, /doubled my income/);
+  assert.equal(auditDraft(restored, { ...input.brief, proof }).length, 0);
+});
+
+test('generation restores approved testimonial text before returning or auditing the model draft', async () => {
+  const proof = testimonialProof(findTestimonials(source, 'Career Coaching').slice(0, 1));
+  const bad = structuredClone(draft);
+  bad.sections.find(section => section.id === 'proof')!.headline = 'A client’s career change';
+  bad.sections.find(section => section.id === 'proof')!.body = '“My income doubled after a week.” Sam';
+  const responses = [strategy, bad];
+  const result = await generate(async () => JSON.stringify(responses.shift()), { ...input, brief: { ...input.brief, proof } }, new AbortController().signal, () => {});
+  assert.ok(result.draft.sections.find(section => section.id === 'proof')!.body.includes(quote));
+  assert.equal(result.issues.length, 0);
+  assert.equal(responses.length, 0);
 });
