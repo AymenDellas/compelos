@@ -25,7 +25,6 @@ stub(path.join(root, 'src/lib/pg_setup.ts'), { pool: { query: async () => ({ row
 const b = require('../../src/lib/business.ts');
 const actions = require('../../src/app/actions/portal-actions.ts');
 const agreementRoute = require('../../src/app/portal/[token]/agreement/route.ts');
-// Reuse this TypeScript loader so these checks run without another test dependency.
 require('./template.test.ts');
 const token = '11111111-1111-4111-8111-111111111111';
 function reset() {
@@ -39,16 +38,40 @@ test('portal action saves both new answers and an older cached form cannot erase
     const form = new FormData();
     form.set('token', token);
     form.set('intent', 'save');
+    form.set('offerName', 'The Practical Decisions Program');
     form.set('differentiation', 'We use real decisions from the client week.');
     form.set('unsuitableClients', 'People seeking therapy rather than coaching.');
     await actions.saveClientPortalFormAction(form);
+    assert.equal(record.data.onboarding.form.offerName, 'The Practical Decisions Program');
     assert.equal(record.data.onboarding.form.differentiation, form.get('differentiation'));
     assert.equal(record.data.onboarding.form.unsuitableClients, form.get('unsuitableClients'));
     form.delete('differentiation');
+    form.delete('offerName');
     form.delete('unsuitableClients');
     await actions.saveClientPortalFormAction(form);
+    assert.equal(record.data.onboarding.form.offerName, 'The Practical Decisions Program');
     assert.match(record.data.onboarding.form.differentiation, /real decisions/);
     assert.match(record.data.onboarding.form.unsuitableClients, /therapy/);
+});
+
+test('portal completion requires every essential answer and saves the separate offer name', async () => {
+    const values = { offerName: 'Practical Decisions', offer: 'Six private coaching sessions', audience: 'New managers', customerProblem: 'Decisions keep getting delayed', desiredOutcome: 'Make clear decisions' };
+    for (const [missing] of b.REQUIRED_ONBOARDING_FORM_FIELDS) {
+        reset();
+        const form = new FormData();
+        form.set('token', token); form.set('intent', 'complete');
+        for (const [key, value] of Object.entries(values)) if (key !== missing) form.set(key, value);
+        form.set('caseStudyConsent', 'accepted'); form.set('caseStudyConsentVersion', b.CASE_STUDY_CONSENT_VERSION);
+        await assert.rejects(actions.saveClientPortalFormAction(form), /required onboarding/);
+        assert.equal(record.data.onboarding.form.status, 'NOT_SENT');
+    }
+    reset();
+    const form = new FormData(); form.set('token', token); form.set('intent', 'complete');
+    for (const [key, value] of Object.entries(values)) form.set(key, value);
+    form.set('caseStudyConsent', 'accepted'); form.set('caseStudyConsentVersion', b.CASE_STUDY_CONSENT_VERSION);
+    await actions.saveClientPortalFormAction(form);
+    assert.equal(record.data.onboarding.form.status, 'COMPLETE');
+    assert.equal(record.data.onboarding.form.offerName, values.offerName);
 });
 
 test('scope confirmation persists the normalized scope that the client reviewed', async () => {

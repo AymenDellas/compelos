@@ -8,7 +8,7 @@ import { businessTransaction, recordActivity } from '@/lib/business-store';
 import { validateProject } from '@/lib/business-validation';
 
 const PORTAL_FORM_FIELDS = [
-    'offer', 'audience', 'customerProblem', 'desiredOutcome', 'differentiation', 'unsuitableClients', 'trafficSources',
+    'offerName', 'offer', 'audience', 'customerProblem', 'desiredOutcome', 'differentiation', 'unsuitableClients', 'trafficSources',
     'landingPageUrl', 'bookingUrl', 'qualification', 'nurture', 'traffic', 'bookings', 'showRate',
     'closeRate', 'bookingPlatform', 'crm', 'emailPlatform', 'analyticsPlatform', 'hostingPlatform',
     'domainProvider', 'websitePlatform', 'repositoryProvider', 'assets', 'mustStay', 'avoid',
@@ -138,7 +138,7 @@ export async function saveClientPortalFormAction(formData: FormData) {
         const nextForm = { ...onboarding.form };
         for (const key of PORTAL_FORM_FIELDS) {
             // Older open forms must not erase answers to the newly added questions.
-            if ((key === 'differentiation' || key === 'unsuitableClients') && !formData.has(key)) continue;
+            if (['offerName', 'differentiation', 'unsuitableClients'].includes(key) && !formData.has(key)) continue;
             nextForm[key] = portalValue(formData, key);
         }
         nextForm.caseStudyConsent = onboarding.projectType === 'CASE_STUDY' && formData.get('caseStudyConsent') === 'accepted';

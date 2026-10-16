@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, LoaderCircle, X } from 'lucide-react';
-import { fieldLabels, type BriefKey, type Project } from '@/lib/copy-studio/shared/contracts';
+import { fieldLabels, requiredKeys, type BriefKey, type Project } from '@/lib/copy-studio/shared/contracts';
 import { matchOnboardings, type OnboardingBrief } from '@/lib/copy-studio/shared/onboarding';
 import { templates } from '@/lib/copy-studio/shared/templates';
 
@@ -34,7 +34,7 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
     <dialog ref={dialog} className="import-dialog onboarding-dialog" aria-labelledby="onboarding-picker-heading"
       onCancel={onClose} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div className="dialog-header">
-        <div><span className="eyebrow">CLIENT BRIEF</span><h2 id="onboarding-picker-heading">Choose client onboarding</h2></div>
+        <div><span className="eyebrow">CLIENT BRIEF</span><h2 id="onboarding-picker-heading">Prefill from onboarding</h2></div>
         <button className="icon-button" aria-label="Close onboarding picker" onClick={onClose}><X size={20} /></button>
       </div>
       <p className="muted">Find the client by name or page URL. Review their answers before adding them to this copy project.</p>
@@ -49,7 +49,7 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
           <label className={`onboarding-option ${selectedId === record.id ? 'selected' : ''}`} key={record.id}>
             <input type="radio" name="client-onboarding" checked={selectedId === record.id} onChange={() => setSelectedId(record.id)} />
             <span><strong>{record.clientName || record.businessName || record.projectName}</strong>
-              <small>{record.projectName} · {record.formStatus === 'COMPLETE' ? 'Form complete' : 'Form in progress'}</small>
+              <small>{record.projectName} · {requiredKeys.every(key => record.brief[key].trim().length >= 3) ? 'Essentials complete' : 'Answers incomplete'}</small>
               {matches.some((match) => match.id === record.id) && <small className="onboarding-match">Matches this page’s website</small>}
             </span>
           </label>
@@ -59,6 +59,7 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
       {selected && <div className="onboarding-review">
         <h3>Review {selected.clientName || selected.projectName}’s answers</h3>
         <p className="muted">Select fields to apply. Existing values change only when you select a replacement. Missing answers stay editable in your brief.</p>
+        {requiredKeys.some(key => selected.brief[key].trim().length < 3) && <p className="notice warning">This onboarding is missing: {requiredKeys.filter(key => selected.brief[key].trim().length < 3).map(key => fieldLabels[key]).join(', ')}. Use any saved answers, then prefill from the page or add the missing details yourself.</p>}
         <div className="selection-actions">
           <button onClick={() => setFields((Object.keys(fieldLabels) as BriefKey[]).filter((key) => key !== 'voice' && Boolean(selected.brief[key])))}>Select all answers</button>
           <button onClick={() => setFields([])}>Clear selection</button>

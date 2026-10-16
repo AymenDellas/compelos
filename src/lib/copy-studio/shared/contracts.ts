@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { OFFER_ESSENTIAL_KEYS, OFFER_ESSENTIAL_LABELS } from '../../offer-essentials';
 
 export const MAX_SOURCE_CHARACTERS = 240_000;
 
@@ -53,13 +54,9 @@ export const onboardingLinkSchema = z.object({
   projectName: z.string().max(200),
   updatedAt: z.string(),
 });
-export const requiredKeys = ['offerName', 'description', 'audience', 'problem', 'outcome'] as const;
+export const requiredKeys = OFFER_ESSENTIAL_KEYS;
 export const fieldLabels: Record<BriefKey, string> = {
-  offerName: 'Offer name',
-  description: 'What are you offering?',
-  audience: 'Who is it for?',
-  problem: 'What problem are they facing?',
-  outcome: 'What outcome do they want?',
+  ...OFFER_ESSENTIAL_LABELS,
   mechanism: 'Why does your approach work?',
   deliverables: 'What is included?',
   proof: 'Evidence & testimonials',

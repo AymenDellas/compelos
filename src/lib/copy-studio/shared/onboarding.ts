@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import type { ClientProject } from '../../business';
+import { legacyOfferName } from '../../offer-essentials';
 import { briefSchema, copyContextSchema, onboardingLinkSchema, templateIdSchema } from './contracts';
 
 export const onboardingBriefSchema = onboardingLinkSchema.extend({
@@ -32,8 +33,7 @@ export function toOnboardingBrief(project: ClientProject): OnboardingBrief | nul
     formStatus: form.status,
     template: project.data.funnel === 'VSL' ? 'vsl' : project.data.funnel === 'LEAD_MAGNET' ? 'lead_magnet' : 'direct_to_call',
     brief: briefSchema.parse({
-      // A short first line is a useful editable label, never an invented offer name.
-      offerName: offer.split('\n')[0].length <= 200 ? offer.split('\n')[0] : '',
+      offerName: bounded(form.offerName ?? legacyOfferName(form.offer)),
       description: offer,
       audience: bounded(form.audience),
       problem: bounded(form.customerProblem),

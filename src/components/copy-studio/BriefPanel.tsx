@@ -43,7 +43,7 @@ const placeholders: Partial<Record<BriefKey, string>> = {
   customerLanguage: 'Phrases you hear in customer conversations or research.',
   nextStep: 'Call length, delivery method, or what they can expect after taking action.',
 };
-const essential: BriefKey[] = ['offerName', 'description', 'audience', 'problem', 'outcome'];
+const essential: readonly BriefKey[] = requiredKeys;
 const substance: BriefKey[] = ['mechanism', 'deliverables', 'coachBio', 'proof', 'objections'];
 const details: BriefKey[] = [
   'price',
@@ -155,12 +155,20 @@ export function BriefPanel({
           <p>Good copy starts with a clear offer.</p>
         </div>
       </div>
-      <button className="import-trigger onboarding-trigger" onClick={onOnboarding} disabled={disabled}>
-        <span className="import-icon"><UserRound size={18} /></span>
-        <span><strong>{project.onboarding ? project.onboarding.clientName || project.onboarding.projectName : 'Choose client onboarding'}</strong>
-          <small>{project.onboarding ? project.onboarding.projectName : 'Find the client and review their answers'}</small></span>
+      <div className="prefill-options" role="group" aria-label="Prefill the five essentials">
+      <p className="eyebrow">PREFILL THE FIVE ESSENTIALS</p>
+      <button className="import-trigger page-prefill-trigger" onClick={onImport} disabled={disabled}>
+        <span className="import-icon"><Link2 size={18} /></span>
+        <span><strong>Prefill from page</strong><small>Review facts from the page. Keep its full copy as your reference.</small></span>
         <ArrowRight size={17} />
       </button>
+      <button className="import-trigger onboarding-trigger" onClick={onOnboarding} disabled={disabled}>
+        <span className="import-icon"><UserRound size={18} /></span>
+        <span><strong>Prefill from onboarding</strong>
+          <small>{project.onboarding ? `${project.onboarding.clientName} · ${project.onboarding.projectName}` : 'Choose a client and review their saved answers.'}</small></span>
+        <ArrowRight size={17} />
+      </button>
+      </div>
       {onboardingNote && <p className="onboarding-status" role="status">{onboardingNote}</p>}
       {project.onboarding && <button className="text-button small onboarding-unlink" disabled={disabled} onClick={onDetachOnboarding}>Unlink client</button>}
       <fieldset disabled={disabled} className="offer-scope">
@@ -187,16 +195,6 @@ export function BriefPanel({
           </div>
         </details>
       </fieldset>
-      <button className="import-trigger" onClick={onImport} disabled={disabled}>
-        <span className="import-icon">
-          <Link2 size={18} />
-        </span>
-        <span>
-          <strong>Start with an existing page</strong>
-          <small>Add the original copy for its voice and context. Your brief and changes guide the rewrite.</small>
-        </span>
-        <ArrowRight size={17} />
-      </button>
       {project.source && (
         <ReferencePanel source={project.source} mode={project.referenceMode || 'preserve_voice'} disabled={disabled} onMode={onReferenceMode} onChange={onImport} />
       )}

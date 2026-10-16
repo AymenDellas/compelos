@@ -1,3 +1,5 @@
+import { ESSENTIAL_MIN_LENGTH, OFFER_ESSENTIAL_LABELS, ONBOARDING_ESSENTIAL_FIELDS, legacyOfferName } from './offer-essentials';
+
 /** Shared, serializable business records. Kept independent of the lead send gate. */
 export type BusinessView = 'today' | 'onboarding';
 export const FUNNEL_TYPES = ['DIRECT_TO_CALL', 'VSL', 'LEAD_MAGNET'] as const;
@@ -270,6 +272,7 @@ export type OnboardingData = {
     };
     form: {
         status: 'NOT_SENT' | 'SENT' | 'IN_PROGRESS' | 'COMPLETE';
+        offerName: string;
         offer: string;
         audience: string;
         customerProblem: string;
@@ -364,16 +367,13 @@ const LEGACY_SCOPE_DEPENDENCIES = 'Signed agreement, required payment, completed
 export const scopeDependencies = (projectType: OnboardingData['projectType']) =>
     `Signed agreement, completed onboarding form, any required access verified, and starting funnel information recorded.${projectType === 'CASE_STUDY' ? ' No project payment is required.' : ' The agreed initial payment must also be received.'}`;
 
-export const REQUIRED_ONBOARDING_FORM_FIELDS = [
-    ['offer', FUNNEL_OFFER_QUESTION],
-    ['audience', 'Target audience'],
-    ['customerProblem', 'Main customer problem'],
-    ['desiredOutcome', 'Desired outcome'],
-] as const;
+export const REQUIRED_ONBOARDING_FORM_FIELDS = ONBOARDING_ESSENTIAL_FIELDS.map(
+    ([key, briefKey]) => [key, OFFER_ESSENTIAL_LABELS[briefKey]] as const,
+);
 
 export function missingOnboardingFormFields(data: OnboardingData): string[] {
     const missing: string[] = REQUIRED_ONBOARDING_FORM_FIELDS
-        .filter(([key]) => !String(data.form[key] || '').trim())
+        .filter(([key]) => String(data.form[key] || '').trim().length < ESSENTIAL_MIN_LENGTH)
         .map(([, label]) => label);
     if (data.projectType === 'CASE_STUDY' && (!data.form.caseStudyConsent || !data.form.testimonialCommitment))
         missing.push('Case-study permission and testimonial commitment');
@@ -566,6 +566,7 @@ export function createOnboardingData(
         },
         form: {
             status: 'NOT_SENT',
+            offerName: '',
             offer: '',
             audience: opportunity?.audience || '',
             customerProblem: '',
@@ -644,6 +645,7 @@ export function normalizeOnboarding(
     if ((form.status === 'NOT_SENT' || form.status === 'SENT') && form.offer === opportunity?.currentOffer) {
         form.offer = '';
     }
+    if (savedForm.offerName === undefined) form.offerName = legacyOfferName(form.offer);
     const agreement = { ...fallback.agreement, ...saved.agreement };
     const scope = { ...fallback.scope, ...saved.scope };
     const signed = ['SIGNED_CLIENT', 'FULLY_SIGNED'].includes(agreement.status) || Boolean(agreement.clientSignature || agreement.signedPdfData || agreement.signedPdfName);

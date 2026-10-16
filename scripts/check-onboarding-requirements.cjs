@@ -15,13 +15,14 @@ function load(relative, imports = {}) {
   return mod.exports;
 }
 
-const business = load('src/lib/business.ts');
-const validation = load('src/lib/business-validation.ts', { './business': business });
+const essentials = load('src/lib/offer-essentials.ts');
+const business = load('src/lib/business.ts', { './offer-essentials': essentials });
+const validation = load('src/lib/business-validation.ts', { './business': business, './offer-essentials': essentials });
 const opportunity = { ...business.blankOpportunity(), name: 'Test Client', funnel: 'DIRECT_TO_CALL', mode: 'CASE_STUDY' };
 const initial = business.buildProject(opportunity, business.DEFAULT_OFFER);
 const complete = structuredClone(initial);
 Object.assign(complete.onboarding.form, {
-  status: 'COMPLETE', offer: 'One coaching offer', audience: 'Coaches', customerProblem: 'Low bookings',
+  status: 'COMPLETE', offerName: 'Coaching Program', offer: 'One coaching offer', audience: 'Coaches', customerProblem: 'Low bookings',
   desiredOutcome: 'More discovery calls', websitePlatform: 'Webflow', hostingPlatform: 'Webflow',
   domainProvider: 'Cloudflare', repositoryProvider: 'Not used', caseStudyConsent: true,
   testimonialCommitment: true, deploymentAccessConsent: true,

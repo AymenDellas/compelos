@@ -119,7 +119,7 @@ export async function saveClientProjectAction(id: string, data: ProjectData, exp
 }
 
 const PORTAL_FORM_FIELDS = [
-    'offer', 'audience', 'customerProblem', 'desiredOutcome', 'differentiation', 'unsuitableClients', 'trafficSources',
+    'offerName', 'offer', 'audience', 'customerProblem', 'desiredOutcome', 'differentiation', 'unsuitableClients', 'trafficSources',
     'landingPageUrl', 'bookingUrl', 'qualification', 'nurture', 'traffic', 'bookings', 'showRate',
     'closeRate', 'bookingPlatform', 'crm', 'emailPlatform', 'analyticsPlatform', 'hostingPlatform',
     'domainProvider', 'websitePlatform', 'repositoryProvider', 'assets', 'mustStay', 'avoid',
@@ -150,7 +150,7 @@ export async function saveClientPortalFormAction(formData: FormData) {
         const onboarding = normalizeOnboarding(project, result.rows[0].opportunity, result.rows[0].profile);
         const nextForm = { ...onboarding.form };
         for (const key of PORTAL_FORM_FIELDS) {
-            if ((key === 'differentiation' || key === 'unsuitableClients') && !formData.has(key)) continue;
+            if (['offerName', 'differentiation', 'unsuitableClients'].includes(key) && !formData.has(key)) continue;
             nextForm[key] = portalValue(formData, key);
         }
         nextForm.caseStudyConsent = onboarding.projectType === 'CASE_STUDY' && formData.get('caseStudyConsent') === 'accepted';

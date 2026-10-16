@@ -78,6 +78,8 @@ export default function CopyStudio() {
   const onboardingNote = project.onboarding
     ? linkedOnboarding && linkedOnboarding.revision !== project.onboarding.revision
       ? 'New onboarding answers are available. Open the client brief to review them.'
+      : linkedOnboarding && requiredKeys.some(key => linkedOnboarding.brief[key].trim().length < 3)
+        ? 'This onboarding is missing essential answers. Prefill from page or add the missing details below.'
       : 'Client answers are saved with this project. You can review and edit them anytime.'
     : onboardingMatches.length
       ? `${onboardingMatches.length === 1 ? 'Client onboarding found for this website.' : `${onboardingMatches.length} onboarding projects match this website.`} Choose the client brief above.`

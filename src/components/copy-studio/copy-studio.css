@@ -1213,6 +1213,15 @@
   font-size: 13px;
   margin-bottom: 18px;
 }
+.copy-studio .prefill-options {
+  display: grid;
+  gap: 10px;
+  margin: 18px;
+}
+.copy-studio .prefill-options .import-trigger {
+  width: 100%;
+  margin: 0;
+}
 .copy-studio .onboarding-trigger {
   margin-bottom: 8px;
 }

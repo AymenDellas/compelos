@@ -1,3 +1,4 @@
+import { ESSENTIAL_MAX_LENGTH, ONBOARDING_ESSENTIAL_FIELDS } from './offer-essentials';
 import {
     AGREEMENT_STATUSES,
     FUNNEL_TYPES,
@@ -183,6 +184,7 @@ export function validateProject(d: ProjectData) {
         date(o.scope?.targetLaunchDate, 'Target launch date');
         date(o.scope?.confirmedAt, 'Scope confirmation date');
         if (!Array.isArray(o.access) || o.access.length > 100) throw new Error('Use up to 100 access items.');
+        for (const [key] of ONBOARDING_ESSENTIAL_FIELDS) text(o.form[key] ?? '', key, ESSENTIAL_MAX_LENGTH);
         if (!Array.isArray(o.documents) || o.documents.length > 100)
             throw new Error('Use up to 100 onboarding documents.');
         if (!Array.isArray(o.overrides)) throw new Error('Onboarding overrides must be a list.');

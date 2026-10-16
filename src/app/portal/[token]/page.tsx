@@ -22,6 +22,7 @@ import {
     FUNNEL_OFFER_QUESTION,
     DIFFERENTIATION_QUESTION,
     UNSUITABLE_CLIENTS_QUESTION,
+    REQUIRED_ONBOARDING_FORM_FIELDS,
     CLIENT_AGREEMENT_LABELS,
     CLIENT_PAYMENT_LABELS,
     clientFormStatus,
@@ -185,11 +186,8 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
                             <form action={saveClientPortalFormAction} className="panel-body flex flex-col compel-portal-form">
                                 <input type="hidden" name="token" value={token} />
                                 <PortalGroup number="01" title="Offer and business">
-                                    <PortalField name="offer" label={FUNNEL_OFFER_QUESTION} hint={FUNNEL_OFFER_HINT} value={data.form.offer} required />
-                                    <PortalField name="audience" label="Target audience" value={data.form.audience} required />
+                                    {REQUIRED_ONBOARDING_FORM_FIELDS.map(([key, label]) => <PortalField key={key} name={key} label={label} hint={key === 'offer' ? `${FUNNEL_OFFER_QUESTION} ${FUNNEL_OFFER_HINT}` : undefined} value={data.form[key]} multiline={key !== 'offerName'} required />)}
                                     <PortalField name="trafficSources" label="Current traffic sources" value={data.form.trafficSources} />
-                                    <PortalField name="customerProblem" label="Main customer problem" value={data.form.customerProblem} multiline required />
-                                    <PortalField name="desiredOutcome" label="Desired outcome" value={data.form.desiredOutcome} multiline required />
                                     <PortalField name="differentiation" label={DIFFERENTIATION_QUESTION} value={data.form.differentiation} multiline />
                                     <PortalField name="unsuitableClients" label={UNSUITABLE_CLIENTS_QUESTION} value={data.form.unsuitableClients} multiline />
                                 </PortalGroup>
@@ -301,8 +299,8 @@ function PortalField({ name, label, value, hint, multiline = false, required = f
                 {!required && <span className="text-xs text-[var(--text-faint)]">Optional</span>}
             </label>
             {multiline
-                ? <textarea id={id} className="field w-full min-h-24" name={name} defaultValue={value || ''} required={required} aria-describedby={hintId} />
-                : <input id={id} className="field w-full" name={name} defaultValue={value || ''} required={required} aria-describedby={hintId} />}
+                ? <textarea id={id} className="field w-full min-h-24" name={name} defaultValue={value || ''} required={required} minLength={required ? 3 : undefined} maxLength={required ? 6000 : 20000} aria-describedby={hintId} />
+                : <input id={id} className="field w-full" name={name} defaultValue={value || ''} required={required} minLength={required ? 3 : undefined} maxLength={required ? 6000 : 20000} aria-describedby={hintId} />}
             {hint && <p id={hintId} className="text-xs text-[var(--text-faint)]">{hint}</p>}
         </div>
     );

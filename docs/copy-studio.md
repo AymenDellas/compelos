@@ -6,6 +6,10 @@ The dashboard owns its UI and API. The original `copy_generator` project and its
 
 ## Client onboarding and offer focus
 
+The brief starts with **Prefill from page** and **Prefill from onboarding**. Page prefill reads the source, asks which offer to use when needed, and proposes supported fields for review; applying them also retains the complete captured copy as the voice/context reference. **Add as reference only** remains a secondary action for keeping an already reviewed brief unchanged. Onboarding prefill reads the client's saved answers and lists missing essentials rather than inventing answers or marking an incomplete client form complete.
+
+Both paths use the same five essentials as client onboarding: Offer name; What are you offering?; Who is it for?; What problem are they facing?; What outcome do they want? These labels share one definition. Onboarding requires all five answers (3–6,000 characters each) for completion; draft saves remain possible. Older combined offer answers retain their short first line as the editable name only when the new name field did not exist.
+
 Choose **client onboarding** inside Copy Studio, search by client, project, or page URL, then review the answers to apply. Website matches are suggestions; multiple projects on the same website remain selectable. The studio reads only the client's offer, audience, problem, outcome, traffic/qualification context, and must-keep/avoid notes. Agency fees, agency deliverables, portal tokens, signatures, access data, and consent records are excluded from the response. No onboarding record is edited by Copy Studio.
 
 Choose the onboarding/current offer, one specific offer, or a new offer. Each option keeps a separate brief within the copy project. Switching options starts a clean brief, and switching back restores previous edits. Creative direction and client notes are included in strategy, generation, and section rewrites. Changes to them mark an existing draft as outdated.

@@ -671,7 +671,10 @@ function FormStep({ data, update }: StepProps) {
     return (
         <Panel title="Client onboarding form" action={<select className="field" aria-label="Form status" value={data.form.status} onChange={(e) => set('status', e.target.value)}><option value="NOT_SENT">Not sent</option><option value="SENT">Sent</option><option value="IN_PROGRESS">In progress</option><option value="COMPLETE">Complete</option></select>}>
             <p className="text-sm text-[var(--text-dim)]">Collect structured information here. Keep strategy and context for the short discovery call.</p>
-            {group('Offer and business', [['offer', FUNNEL_OFFER_QUESTION], ['audience', 'Target audience'], ['customerProblem', 'Main customer problem', true], ['desiredOutcome', 'Desired outcome', true], ['differentiation', DIFFERENTIATION_QUESTION, true], ['unsuitableClients', UNSUITABLE_CLIENTS_QUESTION, true], ['trafficSources', 'Current traffic sources']])}
+            {group('Offer and business', [
+                ...REQUIRED_ONBOARDING_FORM_FIELDS.map(([key, label]): [FormTextKey, string, boolean] => [key, label, key !== 'offerName']),
+                ['differentiation', DIFFERENTIATION_QUESTION, true], ['unsuitableClients', UNSUITABLE_CLIENTS_QUESTION, true], ['trafficSources', 'Current traffic sources'],
+            ], `${FUNNEL_OFFER_QUESTION} ${FUNNEL_OFFER_HINT}`)}
             {group('Funnel information', [['landingPageUrl', 'Current landing page URL'], ['bookingUrl', 'Booking URL'], ['qualification', 'Current qualification'], ['nurture', 'Current nurture / follow-up'], ['traffic', 'Approximate traffic'], ['bookings', 'Approximate bookings'], ['showRate', 'Approximate show rate'], ['closeRate', 'Approximate clients / close rate']])}
             {group('Existing tools', [['bookingPlatform', 'Booking platform'], ['crm', 'CRM'], ['emailPlatform', 'Email platform'], ['analyticsPlatform', 'Analytics platform']])}
             {group('Deployment tools and access · Optional', DEPLOYMENT_TOOL_FIELDS.map(([key, label]) => [key, label]), DEPLOYMENT_TOOL_HINT)}
