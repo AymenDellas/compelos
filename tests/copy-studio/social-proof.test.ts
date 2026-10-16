@@ -104,6 +104,20 @@ test('generic social-proof headings are flagged instead of silently passing as o
   const bad = restoreApprovedProof(framed(), withProof);
   bad.sections.find(section => section.id === 'proof')!.headline = 'What Clients Have Said';
   assert.ok(auditDraft(bad, withProof.brief).some(issue => /specific heading/.test(issue.message)));
+  bad.sections.find(section => section.id === 'proof')!.headline = 'What Clients and Professionals Say';
+  assert.ok(auditDraft(bad, withProof.brief).some(issue => /specific heading/.test(issue.message)));
+});
+
+test('framing cannot invent colleague relationships or substitute hype for the actual experience', async () => {
+  const bad = framed();
+  bad.sections.find(section => section.id === 'proof')!.proofFraming!.introduction = 'Clients and colleagues describe the real impact of coaching.';
+  const issues = auditDraft(restoreApprovedProof(bad, withProof), withProof.brief);
+  assert.ok(issues.some(issue => /colleague or partner/.test(issue.message)));
+  assert.ok(issues.some(issue => /promotional labels/.test(issue.message)));
+  const replies = [strategy, bad, framed()];
+  const result = await generate(async () => JSON.stringify(replies.shift()), withProof, new AbortController().signal, () => {});
+  assert.equal(replies.length, 0);
+  assert.ok(result.draft.sections.find(section => section.id === 'proof')!.body.startsWith('These individual accounts'));
 });
 
 test('a bare quotation strip is rejected and retried with proper framing before returning a draft', async () => {

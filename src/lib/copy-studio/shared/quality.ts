@@ -3,6 +3,7 @@ import { templates } from './templates';
 import { approvedTestimonials } from './evidence';
 
 const previousDirectCallIds = 'hero|problem|approach|call|fit|proof|objections|cta';
+export const isGenericProofHeading = (headline: string) => /^(?:what\b.{0,70}\b(?:say|said)|testimonials|success stories|client (?:reviews|testimonials|stories))\W*$/i.test(headline.trim());
 export function isLegacyDirectCallDraft(draft: Draft, template: TemplateId): boolean {
   return template === 'direct_to_call' && draft.sections.map(s => s.id).join('|') === previousDirectCallIds;
 }
@@ -43,8 +44,12 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
       add('Use the same approved primary CTA label throughout the page.', 'warning');
     const quoted = [...copy.matchAll(/[“"]([^“”"]{25,})[”"]/g)].map(match => match[1]);
     if (section.id === 'proof' && testimonials.length) {
-      if (/^(?:what (?:our )?clients (?:have )?(?:say|said)|testimonials|success stories|client (?:reviews|testimonials))\W*$/i.test(section.headline.trim()))
+      if (isGenericProofHeading(section.headline))
         add('Use a specific heading about the experiences this evidence supports, rather than a generic testimonial label.', 'warning');
+      if (/\bcolleagues|\bco-workers|\bpartners/i.test(section.proofFraming?.introduction || '') && !/\bcolleagues|\bco-workers|\bpartners/i.test(brief.proof))
+        add('The testimonial source does not establish a colleague or partner relationship. Use the actual attribution and evidence category.', 'warning');
+      if (/life[-‑ ]changing|real impact|incredible|remarkable|powerful results/i.test([section.proofFraming?.introduction, ...(section.proofFraming?.items.map(item => item.heading) || [])].join(' ')))
+        add('Frame this testimony with its concrete situation and experience; remove promotional labels such as life-changing or real impact from the framing.', 'warning');
       const supported = quoted.some(quote => testimonials.some(item => normalizeQuote(item.quote).includes(normalizeQuote(quote)) && copy.includes(item.attribution)));
       if (!supported) add('Include an exact approved testimonial or exact excerpt with its original attribution. Do not replace the evidence with a summary.', 'warning');
       if (quoted.some(quote => !testimonials.some(item => normalizeQuote(item.quote).includes(normalizeQuote(quote)))))
