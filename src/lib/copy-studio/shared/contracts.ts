@@ -179,6 +179,7 @@ export const projectSchema = z.object({
   result: resultSchema.nullable(),
   source: importResultSchema.nullable(),
   referenceMode: referenceModeSchema.optional(),
+  evidenceReview: z.object({ signature: z.string().max(100), decision: z.enum(['included', 'excluded']) }).optional(),
   context: copyContextSchema.optional(),
   onboarding: onboardingLinkSchema.nullable().default(null),
   offerBriefs: z.object({ current: briefSchema.optional(), focused: briefSchema.optional(), new: briefSchema.optional() }).optional(),

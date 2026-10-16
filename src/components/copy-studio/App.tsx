@@ -28,6 +28,7 @@ import {
 } from '@/lib/copy-studio/shared/contracts';
 import { matchOnboardings, type OnboardingBrief } from '@/lib/copy-studio/shared/onboarding';
 import { changeOfferContext } from '@/lib/copy-studio/shared/workspace';
+import { applyRecoveredEvidence, needsEvidenceReview, recordEvidenceReview } from '@/lib/copy-studio/shared/evidence-recovery';
 import { auditDraft, isLegacyDirectCallDraft, validateStructure } from '@/lib/copy-studio/shared/quality';
 import { generateCopy, reviseCopy, testConnection, loadOnboardings } from './api';
 import {
@@ -42,6 +43,7 @@ import { exportMarkdown } from './export';
 import { BriefPanel } from './BriefPanel';
 import { DraftPanel } from './DraftPanel';
 import { ImportDialog } from './ImportDialog';
+import { EvidenceRecoveryDialog } from './EvidenceRecoveryDialog';
 import { OnboardingDialog } from './OnboardingDialog';
 import './copy-studio.css';
 
@@ -58,6 +60,7 @@ export default function CopyStudio() {
   const [stage, setStage] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [evidenceProject, setEvidenceProject] = useState<Project | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardings, setOnboardings] = useState<OnboardingBrief[]>([]);
   const [onboardingLoading, setOnboardingLoading] = useState(false);
@@ -189,15 +192,18 @@ export default function CopyStudio() {
       inFlight.current = false;
     }
   };
-  const generate = () => {
+  const generate = (captured = project, evidenceReviewed = false) => {
     setAttempted(true);
-    const missing = requiredKeys.find((k) => project.brief[k].trim().length < 3);
+    const missing = requiredKeys.find((k) => captured.brief[k].trim().length < 3);
     if (missing) {
       document.getElementById(`brief-${missing}`)?.focus();
       setError('Complete the five essential fields so the copy can be specific to your offer.');
       return;
     }
-    const captured = project;
+    if (!evidenceReviewed && needsEvidenceReview(captured)) {
+      setEvidenceProject(captured);
+      return;
+    }
     void execute(async (signal) => {
       setStage('Preparing your brief');
       const result = await generateCopy(captured, signal, setStage);
@@ -550,20 +556,24 @@ export default function CopyStudio() {
               stage={stage}
               onCancel={() => request.current?.abort()}
               onBrief={(key, value) =>
-                update((p) => ({
-                  ...p,
-                  brief: { ...p.brief, [key]: value },
-                  name:
-                    key === 'offerName' &&
-                    (p.name === 'Untitled project' || p.name === p.brief.offerName)
-                      ? value || 'Untitled project'
-                      : p.name,
-                }))
+                update((p) => {
+                  const next = {
+                    ...p,
+                    brief: { ...p.brief, [key]: value },
+                    name:
+                      key === 'offerName' &&
+                      (p.name === 'Untitled project' || p.name === p.brief.offerName)
+                        ? value || 'Untitled project'
+                        : p.name,
+                  };
+                  return key === 'proof' ? recordEvidenceReview(next, value.trim() ? 'included' : 'excluded') : next;
+                })
               }
               onTemplate={(template) => update((p) => ({ ...p, template }))}
               onFormula={(formula) => update((p) => ({ ...p, formula }))}
               onImport={() => setImportOpen(true)}
-              onGenerate={generate}
+              onGenerate={() => generate()}
+              onReviewEvidence={() => setEvidenceProject(project)}
               onOnboarding={() => { setOnboardingOpen(true); refreshOnboardings(); }}
               onboardingNote={onboardingNote}
               onDetachOnboarding={() => update((p) => ({ ...p, onboarding: null }))}
@@ -628,7 +638,7 @@ export default function CopyStudio() {
                 context: { ...copyContextSchema.parse(project.context || {}), mode: 'focused' },
                 name: brief.offerName || source.selectedOffer || 'Untitled project',
               };
-              setProjects((old) => [next, ...old]);
+              setProjects((old) => [recordEvidenceReview(next, keys.includes('proof') ? 'included' : 'excluded'), ...old]);
               select(next.id);
               setImportOpen(false);
               setToast('A separate offer project is ready. Your previous project is saved.');
@@ -637,19 +647,28 @@ export default function CopyStudio() {
             update((p) => {
               const brief = { ...p.brief };
               for (const key of keys) brief[key] = source.extraction.fields[key] || '';
-              return {
+              const next: Project = {
                 ...p,
                 brief,
                 source,
                 referenceMode: p.referenceMode === 'rework_voice' ? 'rework_voice' : 'preserve_voice',
                 name: p.name === 'Untitled project' && brief.offerName ? brief.offerName : p.name,
               };
+              return recordEvidenceReview(next, keys.includes('proof') ? 'included' : 'excluded');
             });
             setImportOpen(false);
             setToast(keys.length ? `${keys.length} reviewed fields added. Full original copy is also attached as a reference.` : 'Original copy attached. Your brief stays unchanged.');
           }}
         />
       )}
+      {evidenceProject && <EvidenceRecoveryDialog project={evidenceProject}
+        onClose={() => setEvidenceProject(null)}
+        onContinue={(source, include) => {
+          const captured = applyRecoveredEvidence(evidenceProject, source, include);
+          update(() => captured, captured.id);
+          setEvidenceProject(null);
+          generate(captured, true);
+        }} />}
       {onboardingOpen && <OnboardingDialog
         project={project} records={onboardings} loading={onboardingLoading} error={onboardingError}
         onRefresh={refreshOnboardings} onClose={() => setOnboardingOpen(false)}

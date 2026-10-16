@@ -67,6 +67,7 @@ export function BriefPanel({
   onFormula,
   onImport,
   onGenerate,
+  onReviewEvidence,
   onOnboarding,
   onContext,
   onboardingNote,
@@ -83,6 +84,7 @@ export function BriefPanel({
   onFormula: (value: FormulaId) => void;
   onImport: () => void;
   onGenerate: () => void;
+  onReviewEvidence: () => void;
   onOnboarding: () => void;
   onContext: (value: CopyContext) => void;
   onboardingNote: string;
@@ -129,6 +131,9 @@ export function BriefPanel({
         {key === 'proof' && (
           <small className="field-hint">
             No proof yet? Leave this empty. We’ll omit the proof block.
+            {!project.brief.proof.trim() && project.source && project.referenceMode !== 'off' && project.context?.mode !== 'new' && <>
+              {' '}<button type="button" className="text-button" disabled={disabled} onClick={onReviewEvidence}>Check page for client evidence</button>
+            </>}
           </small>
         )}
         {key === 'coachBio' && (
