@@ -125,3 +125,10 @@ On September 27, 2026:
 The local dashboard is running the production build on port 3000. Production credentials are supplied at runtime, not packaged into the build. The local standalone launch uses Node's `--env-file=../../.env.local` from `.next/standalone`, with the generated static assets and public directory copied alongside it. Docker already supplies these assets and environment settings through its existing configuration.
 
 A development-server restart after changing the build root exhausted memory in its CSS workers. Those preview processes were stopped and the generated development cache was preserved as `.next/dev-before-copy-studio-root`. Final browser verification used the production server, which does not run the development compiler.
+
+
+## Large source requests
+
+Captured website text remains attached in full within the existing 240,000-character crawl budget. The server searches all captured text locally and selects exact passages with route attribution when a capture exceeds the AI input allowance. Offer relevance, About/credentials routes, and testimonials/results routes influence selection; this is retrieval, not a claim that the model read every captured word. The prefill review discloses excerpt use, and the existing coverage view still reports unread routes and shortened pages. Quotes are verified against the original capture before review. Approved brief facts are never shortened to fit a request.
+
+Strategy, drafting, claim repair, and section rewrites each budget source context against their own instructions and draft. Groq defaults to a conservative 20,000-byte input allowance; other endpoints default to 80,000 bytes. COPY_STUDIO_INPUT_BYTES optionally sets an allowance between 8,000 and 200,000 bytes; actual provider token limits still apply. A 413 triggers at most one rebuild with a smaller source allowance rather than resending the unchanged request. Short 429 cooldowns honor Retry-After with cancellation, at most two retries and 60 seconds total wait per call; longer or unspecified limits return an actionable error.

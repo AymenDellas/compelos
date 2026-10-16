@@ -1,14 +1,21 @@
 import type { z } from 'zod/v4';
 import { AppError } from './errors';
 import { createAgentRouterCompletion } from './agentrouter-client';
+import { setTimeout as delay } from 'node:timers/promises';
 
-export type Completion = (
+export type Completion = ((
   system: string,
   prompt: string,
   signal: AbortSignal,
   maxTokens?: number,
-) => Promise<string>;
-export type ProviderConfig = { apiKey: string; baseUrl: string; model: string; timeoutMs: number };
+) => Promise<string>) & { inputByteLimit?: number };
+export type ProviderConfig = { apiKey: string; baseUrl: string; model: string; timeoutMs: number; inputByteLimit?: number };
+
+export class ProviderSizeError extends AppError {
+  constructor() {
+    super(502, 'The source exceeds the AI provider’s request limit. Use a more specific page or pasted excerpt, or increase the provider’s input allowance. Retrying the same request will not resolve it.');
+  }
+}
 
 export function parseJson(text: string): unknown {
   const clean = text
@@ -28,9 +35,9 @@ export function parseJson(text: string): unknown {
 export function createCompletion(config: ProviderConfig): Completion {
   const hostname = new URL(config.baseUrl).hostname;
   if (hostname === 'agentrouter.org' || hostname.endsWith('.agentrouter.org')) {
-    return createAgentRouterCompletion(config);
+    return Object.assign(createAgentRouterCompletion(config), { inputByteLimit: config.inputByteLimit || 80_000 });
   }
-  return async (system, prompt, signal, maxTokens = 7000) => {
+  const complete: Completion = async (system, prompt, signal, maxTokens = 7000) => {
     if (!config.apiKey || /your.*key|placeholder/i.test(config.apiKey)) {
       throw new AppError(
         503,
@@ -40,25 +47,34 @@ export function createCompletion(config: ProviderConfig): Completion {
     const combinedSignal = AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]);
     let response: Response;
     try {
-      response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-        method: 'POST',
-        signal: combinedSignal,
-        headers: {
-          Authorization: `Bearer ${config.apiKey}`,
-          'Content-Type': 'application/json',
-          'User-Agent': 'CopyStudio/2.0',
-        },
-        body: JSON.stringify({
-          model: config.model,
-          stream: false,
-          temperature: 0.55,
-          max_tokens: maxTokens,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: prompt },
-          ],
-        }),
-      });
+      let waited = 0;
+      for (let attempt = 0; ; attempt++) {
+        response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+          method: 'POST',
+          signal: combinedSignal,
+          headers: {
+            Authorization: `Bearer ${config.apiKey}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'CopyStudio/2.0',
+          },
+          body: JSON.stringify({
+            model: config.model,
+            stream: false,
+            temperature: 0.55,
+            max_tokens: maxTokens,
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: prompt },
+            ],
+          }),
+        });
+        const retryAfter = response.headers.get('retry-after');
+        const waitMs = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? Math.ceil(Number(retryAfter) * 1000) : NaN;
+        if (response.status !== 429 || attempt >= 2 || !Number.isFinite(waitMs) || waitMs < 0 || waited + waitMs > 60_000) break;
+        await response.body?.cancel();
+        await delay(waitMs, undefined, { signal: combinedSignal });
+        waited += waitMs;
+      }
     } catch (error) {
       if (combinedSignal.aborted) throw combinedSignal.reason;
       throw new AppError(
@@ -71,6 +87,11 @@ export function createCompletion(config: ProviderConfig): Completion {
         type?: string;
         error?: { message?: string };
       } | null;
+      if (response.status === 413) {
+        // The caller can rebuild source context once against this smaller allowance.
+        complete.inputByteLimit = Math.min(complete.inputByteLimit!, Math.floor(Buffer.byteLength(system + prompt, 'utf8') * 0.6));
+        throw new ProviderSizeError();
+      }
       if (
         failure?.type === 'unauthorized_client_error' ||
         /unauthorized client/i.test(failure?.error?.message || '')
@@ -127,20 +148,36 @@ export function createCompletion(config: ProviderConfig): Completion {
       throw new AppError(502, 'The AI provider returned an empty response. Please try again.');
     return content;
   };
+  // Groq's free-tier token allowance is smaller than its advertised context window.
+  complete.inputByteLimit = config.inputByteLimit || (hostname === 'api.groq.com' ? 20_000 : 80_000);
+  return complete;
 }
 
 export async function structured<T>(
   complete: Completion,
   schema: z.ZodType<T>,
   system: string,
-  prompt: string,
+  prompt: string | (() => string),
   signal: AbortSignal,
   validate?: (value: T) => void,
 ): Promise<T> {
   let feedback = '';
+  let resized = false;
   for (let attempt = 0; attempt < 2; attempt++) {
     signal.throwIfAborted();
-    const raw = await complete(system, prompt + feedback, signal);
+    let raw: string;
+    const requestPrompt = (typeof prompt === 'function' ? prompt() : prompt) + feedback;
+    try {
+      raw = await complete(system, requestPrompt, signal);
+    } catch (error) {
+      if (error instanceof ProviderSizeError && typeof prompt === 'function' && !resized) {
+        if (Buffer.byteLength(prompt() + feedback, 'utf8') >= Buffer.byteLength(requestPrompt, 'utf8')) throw error;
+        resized = true;
+        attempt--;
+        continue;
+      }
+      throw error;
+    }
     try {
       const parsed = schema.parse(parseJson(raw));
       validate?.(parsed);
