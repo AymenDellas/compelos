@@ -1,5 +1,11 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
-import { WORKER_MESSAGE } from '@/lib/worker-availability';
-import { NextResponse } from 'next/server';
-export const dynamic = 'force-dynamic';
-export async function GET(){ await requireAdmin(); return NextResponse.json({ status: 'ok', available: false, queueSize: 0, workerStatus: { status: 'NOT_CONNECTED', message: WORKER_MESSAGE, stale: true }, dailyStats: { date: '', count: 0, limit: 0 }, recentLogs: [] }); }
+import {requireWorkerAdmin} from '@/lib/worker-admin';
+import {pool} from '@/lib/pg_setup';
+import {queueStatus} from '@/lib/linkedin-workers.cjs';
+import {NextResponse} from 'next/server';
+export const dynamic='force-dynamic';
+export async function GET(){
+ await requireWorkerAdmin();
+ const data=await queueStatus(pool),status=data.workerStatus;
+ const last=data.recentResults?.[0];
+ return NextResponse.json({...data,workerStatus:{...status,status:status.status==='processing'?'WORKING':status.status==='ready'?'READY':String(status.status).toUpperCase(),currentProfile:status.url,lastCompletedJobId:last?.jobId||'',lastCompletedAt:last?.completedAt||''}},{headers:{'Cache-Control':'private, no-store'}});
+}

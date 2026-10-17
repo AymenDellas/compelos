@@ -19,6 +19,11 @@ const {extractActivity}=require('./src/lib/linkedin-activity.cjs');
 const {publishedProfileWebsites}=require('./src/lib/profile-public-contacts.cjs');
 const { identityFromMe } = require('./src/lib/linkedin-session-identity.cjs');
 const {failureOf}=require('./src/lib/worker-failure.cjs');
+const prospectingStore=require('./src/lib/coach-prospecting-store.cjs');
+const prospectingWorker=require('./src/lib/coach-prospecting-worker.cjs');
+const {profileContactEvidence}=require('./src/lib/coach-prospecting.cjs');
+let prospectingContext=false;
+let prospectingFailure=null;
 const { VERSION: QUALIFICATION_VERSION, assessProspect, pipelineForAssessment, extractMatchingProfile, extractProfileLocation, extractProfileContactInfo, isPlatformWebsite, isUnsafeContact, hostOf } = require('./src/lib/prospect-qualification.cjs');
 
 puppeteerExtra.use(StealthPlugin());
@@ -131,6 +136,7 @@ async function startDatabaseAccount() {
         ssl: process.env.DATABASE_CA_CERT ? { ca: process.env.DATABASE_CA_CERT.replace(/\\n/g, '\n'), rejectUnauthorized: true } : { rejectUnauthorized: false } });
     const owner = require('node:crypto').randomUUID();
     await core.ensure(pool);
+    await prospectingStore.ensure(pool);
     const account = (await pool.query('SELECT *,login_requested_at::text AS login_request_token,logout_requested_at::text AS logout_request_token FROM compel_linkedin_accounts WHERE id=$1 AND archived IS FALSE', [ACCOUNT_ID])).rows[0];
     if (!account || !await core.acquireSession(pool, ACCOUNT_ID, owner)) { await pool.end(); return false; }
     dbWorker = { core, pool, owner, account, timer: null };
@@ -294,7 +300,7 @@ function purgeOldResults() {
 // ── Write worker status ──
 function writeStatus(status, extra = {}) {
     if(isShuttingDown&&!['offline','paused','signed_out'].includes(status))return;
-    latestStatus = { status, qualificationVersion: QUALIFICATION_VERSION, accountId: ACCOUNT_ID, ...extra, signedIn: signedInIdentity, updatedAt: new Date().toISOString() };
+    latestStatus = { status, qualificationVersion: QUALIFICATION_VERSION, prospectingVersion:'COACH_EVIDENCE_V1', accountId: ACCOUNT_ID, ...extra, signedIn: signedInIdentity, updatedAt: new Date().toISOString() };
     try {
         fs.writeFileSync(
             path.join(RESULTS_DIR, ACCOUNT_ID ? `worker-status-${ACCOUNT_ID}.json` : 'worker-status.json'),
@@ -497,7 +503,8 @@ const emailExtractHelpers = {
 
 // ── Voyager API call via browser fetch() ──
 async function voyagerFetch(page, apiPath) {
-    return await page.evaluate(async (p) => {
+    if(prospectingContext&&prospectingFailure)throw Object.assign(new Error(prospectingFailure.reason),{failure:prospectingFailure});
+    const response = await page.evaluate(async (p) => {
         try {
             const csrfMatch = document.cookie.match(/JSESSIONID="?([^";]+)"?/);
             const csrf = csrfMatch ? csrfMatch[1] : '';
@@ -515,6 +522,8 @@ async function voyagerFetch(page, apiPath) {
             return { status: res.status };
         } catch (e) { return { status: 0, error: e.message }; }
     }, apiPath);
+    if(prospectingContext&&[401,403,429,999].includes(response.status)){prospectingFailure={stage:'linkedin',code:response.status===429?'LINKEDIN_RATE_LIMIT':'LINKEDIN_AUTH',reason:'LinkedIn requires attention; prospecting is paused for manual review.',retryable:false};throw Object.assign(new Error(prospectingFailure.reason),{failure:prospectingFailure});}
+    return response;
 }
 function requireLinkedInResponse(response,stage,final=false) {
     if(![0,401,429,999,...(final?[403]:[])].includes(response.status))return;
@@ -584,6 +593,7 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
                 result.headline = item.headline || item.occupation || '';
                 result.about = item.summary || item.about || '';
                 result.profileLocation = extractProfileLocation(profileRes.data, slug);
+                if(prospectingContext)result.linkedinContact=profileContactEvidence(item,ACCOUNT_ID);
                 const urnMatch = [item.entityUrn,item.urn,item.objectUrn,item.dashEntityUrn].map(v=>String(v||'').match(/urn:li:(?:fsd_profile|fs_profile|fs_miniProfile):(ACoA[a-zA-Z0-9_-]+)/)).find(Boolean);
                 if (urnMatch) profileUrn = `urn:li:fsd_profile:${urnMatch[1]}`;
                 result.logs.push(`Name: ${result.firstName} ${result.lastName} (profile identity matched)`);
@@ -655,7 +665,7 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
             result.logs.push('No URN — cannot check activity');
         }
 
-        if(result.activityStatus==='Unknown'&&browserInstance){
+        if(result.activityStatus==='Unknown'&&browserInstance&&!prospectingFailure){
             try{
                 const visible=await require('./src/lib/linkedin-activity-page.cjs').checkActivityPage(browserInstance,result.url,{profileUrn:profileUrn||''});
                 if(visible){
@@ -670,6 +680,7 @@ async function scrapeProfile(page, profileUrl, browserInstance) {
         // session, so running them inline would hold the (rate-limited, ban-prone)
         // LinkedIn tab open while an unrelated marketing site loads — the single
         // slowest thing this worker does.
+        if(prospectingContext&&prospectingFailure)throw Object.assign(new Error(prospectingFailure.reason),{failure:prospectingFailure});
         result.status = 'PENDING';
     } catch (e) {
         result.logs.push(`Fatal error: ${e.message}`);
@@ -1247,6 +1258,14 @@ async function main() {
 
                 let reservation, job, jobFile, jobPath;
                 if (dbWorker) {
+                    const sourceRun=await prospectingStore.claimSource(dbWorker.pool,ACCOUNT_ID,dbWorker.owner);
+                    if(sourceRun){
+                        if(!signedInIdentity){const reason='LinkedIn viewer identity could not be confirmed. Sign in on the worker computer before prospecting.';await prospectingStore.pauseAccount(dbWorker.pool,ACCOUNT_ID,reason);writeStatus('paused',{reason,manualResumeRequired:true});await shutdown('Prospecting needs account identity confirmation.',1);return;}
+                        writeStatus('processing',{phase:'PROSPECT_DISCOVERY',url:sourceRun.data.sourceUrl,runId:sourceRun.id});
+                        const discovery=await prospectingWorker.discover(page,sourceRun,{pool:dbWorker.pool,owner:dbWorker.owner,log});
+                        if(discovery.paused){writeStatus('paused',{reason:discovery.paused,manualResumeRequired:true});await shutdown('Prospecting paused for LinkedIn attention.',1);return;}
+                        continue;
+                    }
                     reservation = await dbWorker.core.claim(dbWorker.pool, ACCOUNT_ID, dbWorker.owner);
                     if (reservation?.disabled) { await shutdown('Account disabled or no longer selected.'); return; }
                     if (reservation?.limited) {
@@ -1349,6 +1368,12 @@ async function main() {
                 if(isShuttingDown){inFlightJobs.delete(jobFile);break;}
 
                 let result;
+                if(job.prospecting&&!signedInIdentity){
+                    const reason='LinkedIn viewer identity could not be confirmed. Sign in on the worker computer before prospecting.';
+                    await prospectingStore.pauseAccount(dbWorker.pool,ACCOUNT_ID,reason);
+                    await dbWorker.core.defer(dbWorker.pool,jobId,dbWorker.owner,{status:'ERROR',failure:{stage:'linkedin',code:'LINKEDIN_AUTH',reason,retryable:false}},new Date().toISOString());
+                    writeStatus('paused',{reason,manualResumeRequired:true});await shutdown('Prospecting needs account identity confirmation.',1);return;
+                }
                 if(job.resumeResult) {
                     result=structuredClone(job.resumeResult);result.status='PENDING';
                     result.logs=['Resuming saved LinkedIn profile; no new LinkedIn scrape or daily slot used.'];
@@ -1362,16 +1387,22 @@ async function main() {
                     }
                 } else if (pageAlive) {
                     try {
+                        prospectingFailure=null;prospectingContext=Boolean(job.prospecting);
                         result = await scrapeProfile(page, profileUrl, browser);
                     } catch (e) {
                         log(`⚠️ scrapeProfile threw: ${e.message}`);
-                        result = { url: profileUrl, firstName: '', headline: '', activityStatus: 'Unknown', emails: [], websites: [], website: '', status: 'ERROR', logs: [`Fatal: ${e.message}`] };
-                    }
+                        result = { url: profileUrl, firstName: '', headline: '', activityStatus: 'Unknown', emails: [], websites: [], website: '', status: 'ERROR', failure:e.failure||prospectingFailure||undefined, logs: [`Fatal: ${e.message}`] };
+                    } finally {prospectingContext=false;}
                 } else {
                     result = { url: profileUrl, firstName: '', headline: '', activityStatus: 'Unknown', emails: [], websites: [], website: '', status: 'ERROR', logs: ['Browser page crashed before scrape'] };
                 }
                 if(result.status==='ERROR') {
                     result.failure=result.failure||failureOf(result);
+                    if(job.prospecting&&['LINKEDIN_AUTH','LINKEDIN_RATE_LIMIT'].includes(result.failure.code)){
+                        await prospectingStore.pauseAccount(dbWorker.pool,ACCOUNT_ID,result.failure.reason);
+                        await dbWorker.core.defer(dbWorker.pool,jobId,dbWorker.owner,result,new Date().toISOString());
+                        writeStatus('paused',{reason:result.failure.reason,manualResumeRequired:true});await shutdown('Prospecting paused for LinkedIn attention.',1);return;
+                    }
                     needsRecycle=true;
                 } else if(dbWorker&&!job.resumeResult) {
                     await dbWorker.core.checkpoint(dbWorker.pool,jobId,dbWorker.owner,result);
@@ -1388,7 +1419,10 @@ async function main() {
                 // Retain the job through research and persistence so a restart can resume it.
 
                 const finishJob = (async () => {
-                    if (result.status !== 'ERROR') {
+                    if(job.prospecting){
+                        try{result=await prospectingWorker.finish(dbWorker.pool,dbWorker.owner,job,result);}
+                        catch(error){result={...result,status:'ERROR',failure:{stage:'research',code:'PROSPECT_RESEARCH',reason:'Prospect research could not finish. The captured profile is retained for an explicit retry.',retryable:false},logs:[...(result.logs||[]),'Prospect research stopped: '+error.message]};}
+                    } else if (result.status !== 'ERROR') {
                         try {
                             result = await enrichAndFinalize(result, browser, job.retryCount || 0);
                         } catch (e) {
@@ -1406,7 +1440,7 @@ async function main() {
                         await nativePostProcess(job, result, log)
                             .catch(err => { result.crmSaved = false; log(`  [Research] Save error: ${err.message}`); });
                     }
-                    if(result.status==='ERROR'&&dbWorker) {
+                    if(result.status==='ERROR'&&dbWorker&&!job.prospecting) {
                         result.failure=result.failure||failureOf(result);
                         if(result.failure.retryable && job.retryCount < 3) {
                             const retryAt=result.failure.retryAt||new Date(Date.now()+(result.failure.stage==='linkedin'?15000:60000)).toISOString();

@@ -10,7 +10,7 @@ test('accounts, concurrent leases, recovery, hosted queue and email placement wo
  const raw=new Pool({connectionString:process.env.DATABASE_URL,max:6,connectionTimeoutMillis:10000,ssl:{rejectUnauthorized:false}});
  const schema='compel_worker_test_'+randomUUID().replaceAll('-','');
  assert.match(schema,/^compel_worker_test_[a-f0-9]{32}$/);
- const qualify=sql=>sql.replace(/\b(compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|leads)\b/g,`"${schema}".$1`);
+ const qualify=sql=>sql.replace(/\b(compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs|leads)\b/g,`"${schema}".$1`);
  const pool={query:(sql,values)=>raw.query(qualify(sql),values),connect:async()=>{
   const client=await raw.connect();return{query:(sql,values)=>client.query(qualify(sql),values),release:()=>client.release()};
  }};

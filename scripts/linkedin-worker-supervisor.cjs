@@ -85,6 +85,12 @@ async function tick(){
    const version=String(account.changed_at),logout=!!account.logout_requested_at,manual=!logout&&!!account.login_requested_at;
    const entry=children.get(account.id)||{child:null,blocked:false,lastStart:0,version};
    if(entry.child)continue;
+   if(!manual&&!logout){
+    const saved=(await pool.query('SELECT status FROM compel_worker_sessions WHERE account_id=$1',[account.id])).rows[0]?.status;
+    if(saved?.manualResumeRequired || saved?.status==='paused'&&/^LinkedIn (?:login|required|requires)/i.test(saved.reason||'')){
+     entry.blocked=true;entry.version=version;children.set(account.id,entry);continue;
+    }
+   }
    if(!manual&&entry.blocked&&entry.version===version)continue;
    if(!manual&&Date.now()-entry.lastStart<60000&&(!logout||entry.logout&&entry.version===version))continue;
    const child=fork(path.join(root,'worker.cjs'),['--account',account.id,...(logout?['--logout']:manual?['--login','--check-login']:[])],{cwd:root,windowsHide:true,stdio:['ignore','inherit','inherit','ipc']});

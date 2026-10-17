@@ -10,7 +10,7 @@ function load(name, next, context) {
     const start = worker.indexOf(`async function ${name}(`);
     const end = worker.indexOf(next, start);
     assert.ok(start >= 0 && end > start);
-    return vm.runInNewContext(`${worker.slice(start, end)}; ${name}`, { dbWorker: null, failureOf:require('../../src/lib/worker-failure.cjs').failureOf, pipelineForAssessment: q.pipelineForAssessment, ...context, AbortSignal, process: { env: {} } });
+    return vm.runInNewContext(`${worker.slice(start, end)}; ${name}`, { dbWorker: null, prospectingContext:false, prospectingFailure:null, failureOf:require('../../src/lib/worker-failure.cjs').failureOf, pipelineForAssessment: q.pipelineForAssessment, ...context, AbortSignal, process: { env: {} } });
 }
 test('the real enrichment function retains business fit but rejects qualification when no email is found', async () => {
     const r = research({ contacts: [], lastActivityAt: '2024-01-01T12:00:00.000Z' });

@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS compel_research_budget (id TEXT PRIMARY KEY,next_at T
 ALTER TABLE compel_worker_config ADD COLUMN IF NOT EXISTS supervisor_seen_at TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS compel_worker_pending_profile ON compel_worker_jobs(profile_key) WHERE status IN ('pending','processing');
 CREATE INDEX IF NOT EXISTS compel_worker_job_queue ON compel_worker_jobs(created_at) WHERE status IN ('pending','processing');
+CREATE TABLE IF NOT EXISTS compel_prospect_runs (
+ id UUID PRIMARY KEY,account_id TEXT NOT NULL,source TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING',
+ data JSONB NOT NULL,owner TEXT,lease_until TIMESTAMPTZ,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+CREATE INDEX IF NOT EXISTS compel_prospect_run_queue ON compel_prospect_runs(account_id,status);
 `;
 async function ensure(pool) {
  if (!ready.has(pool)) ready.set(pool, (async()=>{
@@ -46,13 +50,14 @@ async function ensure(pool) {
   // jobs. Only run migrations when the current columns are actually missing.
   const migrated=await pool.query(`SELECT to_regclass('compel_research_budget') IS NOT NULL
    AND to_regclass('compel_worker_profile_usage') IS NOT NULL
+   AND to_regclass('compel_prospect_runs') IS NOT NULL
    AND (SELECT count(*)=3 FROM pg_attribute WHERE attrelid=to_regclass('compel_worker_jobs') AND attname IN ('checkpoint','retry_at','retry_count') AND NOT attisdropped)
    AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('compel_worker_config') AND attname='supervisor_seen_at' AND NOT attisdropped) AS migrated`);
   if(migrated.rows[0]?.migrated)return;
   // All schema changes share one transaction lock across worker processes.
   const client=await pool.connect();
   try{
-   await client.query('BEGIN');await client.query("SELECT pg_advisory_xact_lock(hashtext('compel/worker-schema/v4'))");
+   await client.query('BEGIN');await client.query("SELECT pg_advisory_xact_lock(hashtext('compel/worker-schema/v5'))");
    // Recheck after acquiring the lock: only the first migrating process may
    // reconstruct today's allowance. Other workers must retain new reservations.
    const hadProfileUsage=(await client.query("SELECT to_regclass('compel_worker_profile_usage') IS NOT NULL AS present")).rows[0].present;
@@ -162,6 +167,7 @@ async function settings(pool) {
  return { revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: Math.min(config.active_count, rows.filter(a => a.enabled).length), accounts: rows.map(a => ({
   id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,
   dailyCount:a.daily_count,status:a.status?.status || 'offline',reason:a.status?.reason || '',
+  prospectingReady:a.status?.prospectingVersion==='COACH_EVIDENCE_V1',
   online:!!a.lease_until && new Date(a.lease_until).getTime() > Date.now(),
   loginPending:!!a.login_requested_at, logoutPending:!!a.logout_requested_at, signedOut:!!a.signed_out_at, updatedAt:a.updated_at || null,
   memoryMB:a.status?.memoryMB || 0,avgJobDurationMs:a.status?.avgJobDurationMs || 0,url:a.status?.url || '',
@@ -318,6 +324,7 @@ async function skipCompletedDuplicates(pool) {
  return (await pool.query(`UPDATE compel_worker_jobs j SET status='cancelled',completed_at=NOW(),
   result=jsonb_build_object('status','SKIPPED','url',j.profile_key,'reason','Profile already completed today; previous result retained')
   WHERE j.status='pending' AND j.checkpoint IS NULL AND j.payload->>'websiteContinuation' IS DISTINCT FROM 'true' AND j.payload->>'explicitRetry' IS DISTINCT FROM 'true'
+   AND j.payload->'prospecting' IS NULL
    AND EXISTS(SELECT 1 FROM compel_worker_jobs d WHERE d.profile_key=j.profile_key AND d.status='done'
     AND d.completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'))`)).rowCount;
 }
@@ -338,7 +345,9 @@ async function claim(pool,id,owner,options={}) {
    AND ($3 IS FALSE OR checkpoint IS NOT NULL OR EXISTS(
     SELECT 1 FROM compel_worker_profile_usage p WHERE p.profile_key=compel_worker_jobs.profile_key AND p.day=(NOW() AT TIME ZONE 'UTC')::date))
    AND ($2 IS FALSE OR result->'failure'->>'code' IS DISTINCT FROM 'AI_RATE_LIMIT' OR NOT EXISTS(SELECT 1 FROM compel_research_budget WHERE id=$1 AND next_at>NOW()))
-   ORDER BY (COALESCE(payload->>'websiteContinuation','false')<>'true') DESC,(checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b'),options.requiresAI===true,usage.count>=account.daily_limit])).rows[0];
+   AND (payload->'prospecting' IS NULL OR (payload->'prospecting'->>'accountId'=$4 AND EXISTS(
+    SELECT 1 FROM compel_prospect_runs r WHERE r.id::text=payload->'prospecting'->>'runId' AND r.status IN ('PENDING','RUNNING','QUEUED'))))
+   ORDER BY (COALESCE(payload->>'websiteContinuation','false')<>'true') DESC,(checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b'),options.requiresAI===true,usage.count>=account.daily_limit,id])).rows[0];
   if (!job) { await client.query('COMMIT'); return usage.count>=account.daily_limit?{limited:true,dailyCount:usage.count,dailyLimit:account.daily_limit}:null; }
   let charged=false;
   if(!job.checkpoint) {
@@ -429,6 +438,7 @@ async function clearQueue(pool) {
  return (await pool.query(`UPDATE compel_worker_jobs SET status='cancelled',completed_at=NOW() WHERE status='pending'`)).rowCount;
 }
 function normalizeResult(result) {
+ if (result?.status==='PROSPECTED') return result;
  if (result?.status==='ERROR' && /saved profile and crawl will be resumed/i.test(result.failure?.reason || ''))return {...result,failure:{...result.failure,retryable:false,reason:'Website could not be fully read; the saved profile is retained for manual retry.'}};
  if (!result?.prospectQualification?.research || result.status==='ERROR') return result;
  try {

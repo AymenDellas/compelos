@@ -3,11 +3,11 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),{EventEmitter}=require('node:events');
 const source=fs.readFileSync(path.resolve(__dirname,'../../scripts/linkedin-worker-supervisor.cjs'),'utf8');
 
-function supervisor(selectedIds=['one']) {
+function supervisor(selectedIds=['one'],savedStatus={status:'offline'}) {
  const accounts=[{id:'one',label:'Account 1',changed_at:'version-1',archived:false,login_requested_at:null},
   {id:'two',label:'Account 2',changed_at:'version-1',archived:false,login_requested_at:'request-1'}];
  const launches=[],errors=[];
- const pool={query:async(sql,values)=>({rows:sql.startsWith('UPDATE')?[]:sql.startsWith('SELECT status')?[{status:{status:'offline'}}]:accounts.filter(a=>!a.archived&&(a.login_requested_at||a.logout_requested_at||values[0].includes(a.id)))}),end:async()=>{}};
+ const pool={query:async(sql,values)=>({rows:sql.startsWith('UPDATE')?[]:sql.startsWith('SELECT status')?[{status:savedStatus}]:accounts.filter(a=>!a.archived&&(a.login_requested_at||a.logout_requested_at||values[0].includes(a.id)))}),end:async()=>{}};
  const modules={
   'node:fs':{readFileSync:()=>'',mkdirSync(){},existsSync:()=>false},'node:path':path,
   'node:child_process':{fork:(_file,args)=>{
@@ -63,4 +63,9 @@ test('sign-out stops the normal browser before opening the same profile solely f
  const logout=s.launches.at(-1);await s.tick();assert.equal(logout.stopped,undefined);
  s.accounts[0].logout_requested_at=null;s.accounts[0].signed_out_at='done';await exited(logout);await s.tick();
  assert.equal(s.launches.length,3,'a signed-out account must not auto-login');assert.deepEqual(s.errors,[]);
+});
+
+test('a supervisor restart preserves a manual LinkedIn pause until sign-in is explicitly requested',async()=>{
+ const s=supervisor(['one'],{status:'paused',reason:'LinkedIn requires attention.',manualResumeRequired:true});await s.tick();assert.equal(s.launches.filter(c=>c.args.includes('one')).length,0);
+ s.accounts[0].login_requested_at='new-manual-request';await s.tick();const manual=s.launches.find(c=>c.args.includes('one'));assert.ok(manual.args.includes('--login'));assert.deepEqual(s.errors,[]);
 });

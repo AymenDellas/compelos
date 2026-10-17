@@ -291,7 +291,7 @@ export default function Dashboard() {
     useEffect(() => { if (activeTab === 'copy-studio') setCopyStudioOpened(true); }, [activeTab]);
     const [contentCreateOpened, setContentCreateOpened] = useState(false);
     useEffect(() => { if (activeTab === 'content-create') setContentCreateOpened(true); }, [activeTab]);
-    const [caseStudyEntryView, setCaseStudyEntryView] = useState<'TODAY' | 'CRM_OUTREACH'>('TODAY');
+    const [caseStudyEntryView, setCaseStudyEntryView] = useState<'PROSPECTING' | 'CRM_OUTREACH'>('PROSPECTING');
     const [progress, setProgress] = useState(0);
     const [isProcessing, setIsProcessing] = useState(false);
     // (A "Row Limit" input used to sit on this screen. It was never read by any
@@ -1125,7 +1125,7 @@ export default function Dashboard() {
                     <nav className="flex-1 overflow-y-auto p-3.5 space-y-6 pt-6" aria-label="Main navigation">
                         <div className="space-y-0.5">
                             <p className="label-micro px-3 pb-2">Workspace</p>
-                            {NAV_SECTIONS.workspace.map(item => <button key={item.id} onClick={() => { if (item.id === 'case-study') setCaseStudyEntryView('TODAY'); setActiveTab(item.id); }} className={cn('nav-item', activeTab === item.id && 'nav-item-active')}><item.icon className="w-4 h-4 flex-none" />{item.label}</button>)}
+                            {NAV_SECTIONS.workspace.map(item => <button key={item.id} onClick={() => { if (item.id === 'case-study') setCaseStudyEntryView('PROSPECTING'); setActiveTab(item.id); }} className={cn('nav-item', activeTab === item.id && 'nav-item-active')}><item.icon className="w-4 h-4 flex-none" />{item.label}</button>)}
                         </div>
                         <div className="space-y-0.5">
                             <p className="label-micro px-3 pb-2">Pipeline</p>
@@ -1177,7 +1177,7 @@ export default function Dashboard() {
                             {[...NAV_SECTIONS.workspace, ...NAV_SECTIONS.pipeline, ...NAV_SECTIONS.tools].map(item => (
                                 <button
                                     key={item.id}
-                                    onClick={() => setActiveTab(item.id)}
+                                    onClick={() => { if (item.id === 'case-study') setCaseStudyEntryView('PROSPECTING'); setActiveTab(item.id); }}
                                     className={cn("tab", item.signal && "tab-signal", activeTab === item.id && "tab-active")}
                                 >
                                     {item.label}
