@@ -126,6 +126,7 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
             <header className="compel-portal-header">
                 <CompelLogo />
                 <span className="compel-portal-header-label">Client portal</span>
+                <a href={`/portal/${token}/project`} className="btn btn-outline">Project workspace <ArrowUpRight className="w-4 h-4" aria-hidden /></a>
                 <a href="#portal-help" className="compel-portal-help">Need a hand? <ArrowUpRight className="w-4 h-4" aria-hidden /></a>
             </header>
             <div className="compel-portal-wrap">

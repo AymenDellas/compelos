@@ -4,7 +4,7 @@ import { SESSION_COOKIE, sameOrigin, verifySession } from '@/lib/dashboard-sessi
 export function proxy(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const publicPage = path === '/login' || path === '/api/auth/login' ||
-    /^\/portal\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/agreement)?\/?$/i.test(path);
+    /^\/portal\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/(?:agreement|project|files\/[0-9a-f-]{36}))?\/?$/i.test(path);
   if (publicPage) return NextResponse.next();
   if (!verifySession(request.cookies.get(SESSION_COOKIE)?.value)) {
     if (path.startsWith('/api/') || !['GET', 'HEAD'].includes(request.method))

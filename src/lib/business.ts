@@ -1,7 +1,7 @@
 import { ESSENTIAL_MIN_LENGTH, OFFER_ESSENTIAL_LABELS, ONBOARDING_ESSENTIAL_FIELDS, legacyOfferName } from './offer-essentials';
 
 /** Shared, serializable business records. Kept independent of the lead send gate. */
-export type BusinessView = 'today' | 'onboarding';
+export type BusinessView = 'today' | 'onboarding' | 'projects';
 export const FUNNEL_TYPES = ['DIRECT_TO_CALL', 'VSL', 'LEAD_MAGNET'] as const;
 export type FunnelType = (typeof FUNNEL_TYPES)[number];
 export const FUNNEL_LABELS: Record<FunnelType, string> = {
@@ -165,6 +165,9 @@ export type Deliverable = {
     dueAt: string;
     content: string;
     url: string;
+    visibleToClient?: boolean;
+    version?: number;
+    reviews?: import('./project-workspace').DeliverableReview[];
 };
 export type Measurement = {
     baselineStart: string;
@@ -405,6 +408,7 @@ export type ProjectData = {
     invoiceStatus: 'NOT_INVOICED' | 'DRAFT' | 'SENT' | 'PAID';
     invoiceUrl: string;
     onboarding?: OnboardingData;
+    delivery?: import('./project-workspace').DeliveryWorkspace;
 };
 export type ClientProject = {
     id: string;

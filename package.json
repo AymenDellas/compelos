@@ -19,7 +19,8 @@
     "test:workers": "node --test tests/workers/*.test.cjs",
     "worker": "node scripts/linkedin-worker-supervisor.cjs",
     "worker:single": "node worker.cjs",
-    "test:copy-studio": "node scripts/copy-studio-tests.mjs"
+    "test:copy-studio": "node scripts/copy-studio-tests.mjs",
+    "test:projects": "tsx --test tests/projects/workspace.test.ts tests/projects/actions.test.cjs"
   },
   "dependencies": {
     "@qwen-code/qwen-code": "0.24.6",

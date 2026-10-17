@@ -27,7 +27,7 @@ assert.equal(auth.sameOrigin('https://compelos-three.vercel.app', 'compelos-thre
 assert.equal(auth.sameOrigin('https://attacker.example', 'compelos-three.vercel.app'), false);
 let checked = 0;
 const dir = path.join(__dirname, '../src/app/actions');
-for (const file of fs.readdirSync(dir).filter(name => name.endsWith('.ts') && name !== 'portal-actions.ts')) {
+for (const file of fs.readdirSync(dir).filter(name => name.endsWith('.ts') && !['portal-actions.ts', 'project-portal-actions.ts'].includes(name))) {
   const code = fs.readFileSync(path.join(dir, file), 'utf8');
   const ast = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true);
   for (const statement of ast.statements) {

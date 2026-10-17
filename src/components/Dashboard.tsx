@@ -245,6 +245,7 @@ const NAV_SECTIONS: { workspace: NavItem[]; pipeline: NavItem[]; tools: NavItem[
         { id: 'case-study', label: 'Case Study Hunter', icon: ScanSearch, signal: true },
         { id: 'discovery', label: 'Discovery Calls', icon: MessagesSquare },
         { id: 'onboarding', label: 'Onboarding', icon: ClipboardCheck },
+        { id: 'projects', label: 'Projects', icon: FolderOpen },
         { id: 'content-create', label: 'Create', icon: WandSparkles },
         { id: 'copy-studio', label: 'Copy Studio', icon: PenLine },
     ],
@@ -265,6 +266,7 @@ const NAV_SECTIONS: { workspace: NavItem[]; pipeline: NavItem[]; tools: NavItem[
 const SCREENS: Record<TabId, { title: string; sub: string }> = {
     today: { title: 'Overview', sub: 'Your pipeline and onboarding, at a glance' },
     onboarding: { title: 'Onboarding', sub: 'Move accepted clients from agreement to ready-to-build' },
+    projects: { title: 'Projects', sub: 'Deliverables, client requests, setup and approvals in one place' },
     discovery: { title: 'Discovery Calls', sub: 'Prepare the conversation, capture answers, and agree on the next step' },
     'case-study': { title: 'Case Study Hunter', sub: 'Find warm coaches, collect their websites, and manage LinkedIn outreach' },
     'content-create': { title: 'Create', sub: 'AI ideas and posts shaped by your voice' },
@@ -279,7 +281,11 @@ const SCREENS: Record<TabId, { title: string; sub: string }> = {
 };
 
 export default function Dashboard() {
-    const [activeTab, setActiveTab] = useState<TabId>('today');
+    const [activeTab, commitActiveTab] = useState<TabId>('today');
+    const setActiveTab = (next: TabId) => {
+        if (next !== activeTab && !window.dispatchEvent(new Event('compel:before-navigation', { cancelable: true }))) return;
+        commitActiveTab(next);
+    };
     const [onboardingProjectId, setOnboardingProjectId] = useState<string | undefined>();
     const [copyStudioOpened, setCopyStudioOpened] = useState(false);
     useEffect(() => { if (activeTab === 'copy-studio') setCopyStudioOpened(true); }, [activeTab]);

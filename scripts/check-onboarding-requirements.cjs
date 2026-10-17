@@ -17,7 +17,8 @@ function load(relative, imports = {}) {
 
 const essentials = load('src/lib/offer-essentials.ts');
 const business = load('src/lib/business.ts', { './offer-essentials': essentials });
-const validation = load('src/lib/business-validation.ts', { './business': business, './offer-essentials': essentials });
+const delivery = load('src/lib/project-workspace.ts', { 'zod/v4': require('zod/v4') });
+const validation = load('src/lib/business-validation.ts', { './business': business, './offer-essentials': essentials, './project-workspace': delivery });
 const opportunity = { ...business.blankOpportunity(), name: 'Test Client', funnel: 'DIRECT_TO_CALL', mode: 'CASE_STUDY' };
 const initial = business.buildProject(opportunity, business.DEFAULT_OFFER);
 const complete = structuredClone(initial);

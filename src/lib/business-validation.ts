@@ -1,4 +1,5 @@
 import { ESSENTIAL_MAX_LENGTH, ONBOARDING_ESSENTIAL_FIELDS } from './offer-essentials';
+import { validateDeliveryData } from './project-workspace';
 import {
     AGREEMENT_STATUSES,
     FUNNEL_TYPES,
@@ -111,6 +112,7 @@ export function validateOpportunity(d: OpportunityData) {
     if (d.stage === 'LOST' && !d.lostReason.trim()) throw new Error('Add a lost reason.');
 }
 export function validateProject(d: ProjectData) {
+    validateDeliveryData(d);
     required(d.name, 'Client name');
     choice(d.funnel, FUNNEL_TYPES, 'funnel');
     choice(d.mode, ['PERFORMANCE', 'CASE_STUDY'], 'engagement type');
