@@ -209,3 +209,9 @@ test('unrelated rewrites and manual edits cannot silently erase unresolved edito
   assert.deepEqual(mergeDraftIssues(draft, input.brief, issues, ['hero'], []), []);
   assert.deepEqual(mergeDraftIssues(draft, input.brief, [], ['hero'], issues), issues);
 });
+
+test('missing-price booking instructions belong in notes rather than invented public objection answers', () => {
+  const page = { ...draft, sections: [{ ...draft.sections[7], body: 'Pricing and program length are not listed here. Ask when you book.' }] };
+  assert.ok(auditDraft(page, input.brief).some(issue => /missing-price questions/.test(issue.message)));
+  assert.ok(!auditDraft(page, { ...input.brief, price: '$750' }).some(issue => /missing-price questions/.test(issue.message)));
+});

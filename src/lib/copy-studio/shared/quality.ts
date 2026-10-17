@@ -72,6 +72,8 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
     const prose = quoted.reduce((text, quote) => text.replace(quote, ''), copy);
     const plainProse = prose.toLowerCase().replace(/[\u2010-\u2015\u2212]/g, '-');
     const policyFacts = [brief.description, brief.deliverables, brief.price, brief.guarantee, brief.nextStep].join(' ').toLowerCase().replace(/[-\u2010-\u2015\u2212]/g, ' ');
+    if (!brief.price.trim() && /\bpricing\b|\b(?:price|prices)\b/i.test(prose))
+      add('Pricing is not supplied in the brief. Keep missing-price questions and booking advice in editorial notes, not public copy.', 'warning');
     const audienceWords = (brief.audience.toLowerCase().match(/[\p{L}]{3,}/gu) || [])
       .filter(word => !/^(?:the|and|for|with|who|have|their|they|are|that|want|looking|existing|independent|seeking|need|from|into|this|your)$/.test(word));
     if (section.id === 'hero' && audienceWords.length && !audienceWords.some(word => plainProse.includes(word)))

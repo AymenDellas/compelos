@@ -8,7 +8,7 @@ import { byteSize } from './source-context';
 export const PERSUASION_EDITOR = 'PERSUASION_EDITOR';
 const reviewSchema = z.object({ findings: z.array(z.object({
   sectionId: z.string().max(80), quote: z.string().min(6).max(250),
-  problem: z.string().min(10).max(350), change: z.string().min(10).max(400),
+  problem: z.string().min(10).max(600), change: z.string().min(10).max(900),
 })).max(3) });
 export type PersuasionFinding = z.infer<typeof reviewSchema>['findings'][number];
 export type PersuasionReview = { findings: PersuasionFinding[]; issues: Issue[] };
