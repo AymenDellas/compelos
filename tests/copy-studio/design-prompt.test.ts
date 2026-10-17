@@ -100,13 +100,20 @@ test('the quality brief preserves rich art direction across offers without requi
     assert.match(prompt, /almost invisible effect/);
     assert.doesNotMatch(prompt, /No mesh gradients|mesh gradients[^\n]*remain excluded|The approved reference establishes/);
     assert.match(prompt, /copy template controls section meaning and order/);
-    assert.match(prompt, /one coherent supporting-content grid/);
-    assert.match(prompt, /heading directly above its related text or list/);
+    assert.match(prompt, /SECTION ARCHITECTURE — WIDE COMPOSITION, COMFORTABLE READING/);
+    assert.match(prompt, /Reading width and composition width are different decisions/);
+    assert.match(prompt, /50–65 characters per line/);
+    assert.match(prompt, /one shared grid with content-specific compositions/);
+    assert.match(prompt, /Define separate color roles/);
+    assert.match(prompt, /Inspect the full-page silhouette/);
+    assert.match(prompt, /complete visible supplied testimonials/);
+    assert.doesNotMatch(prompt, /established content spine|Set a stable content spine|same supporting-content grid and heading\/body relationship throughout|without changing the reading axis/);
     assert.match(prompt, /There is no layout-variation quota/);
     assert.doesNotMatch(prompt, /at least three content-appropriate|Do not repeat the problem composition|Distinguish its arrangement from the conversation area through alignment/);
     assert.doesNotMatch(prompt, /#101113|#F1AD94|Outfit|IMPLEMENTATION STARTING POINT|\.light-left|\.light-right|approved charcoal\/soft-light/);
     assert.doesNotMatch(prompt, /luminous light main canvas|distinct tonal or material stage|reliable starting structure is an asymmetric hero/);
     assert.doesNotMatch(prompt, /judgment clear|through divorce|127\.0\.0\.1:3012|\.codex\/visualizations/);
+    assert.doesNotMatch(prompt, /Lisa Hack|Together we map out a career plan|#101116|#B8ACFF|Explore, Clarify and Identify/);
     assert.deepEqual(copyData(prompt), saved.result!.draft.sections.filter(section => !['proof', 'about'].includes(section.id)));
   }
 });
