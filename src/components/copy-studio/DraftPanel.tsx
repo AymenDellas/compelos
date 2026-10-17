@@ -26,6 +26,8 @@ import {
 } from '@/lib/copy-studio/shared/contracts';
 import { templates } from '@/lib/copy-studio/shared/templates';
 import { isLegacyDirectCallDraft } from '@/lib/copy-studio/shared/quality';
+import { sectionWritingRole } from '@/lib/copy-studio/shared/persuasion';
+import { sectionAngleOptions, wordingOptions } from '@/lib/copy-studio/shared/revision-options';
 import { sectionText } from './export';
 import { buildDesignPrompt } from '@/lib/copy-studio/shared/design-prompt';
 import { DesignPromptPanel } from './DesignPromptPanel';
@@ -36,6 +38,7 @@ function SectionCard({
   index,
   issues,
   disabled,
+  writingRole,
   onEdit,
   onRevise,
   onCopy,
@@ -45,12 +48,14 @@ function SectionCard({
   index: number;
   issues: Issue[];
   disabled: boolean;
+  writingRole: ReturnType<typeof sectionWritingRole>;
   onEdit: (s: Section) => boolean;
   onRevise: (id: string, direction: RevisionInput['direction']) => void;
   onCopy: (text: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(section);
+  const [menuPlacement, setMenuPlacement] = useState({ above: false, space: 400 });
   const empty = !sectionText(section).trim();
   return (
     <article className={`copy-section ${empty ? 'omitted-section' : ''}`}>
@@ -81,20 +86,38 @@ function SectionCard({
           >
             <Pencil size={14} />
           </button>
-          <details className="rewrite-menu">
+          <details className="rewrite-menu" onToggle={event => {
+            if (!event.currentTarget.open) return;
+            const rect = event.currentTarget.getBoundingClientRect();
+            const below = window.innerHeight - rect.bottom - 16;
+            const above = rect.top - 16;
+            setMenuPlacement({ above: above > below, space: Math.max(120, Math.max(above, below)) });
+          }} onKeyDown={event => {
+            if (event.key === 'Escape') {
+              event.currentTarget.removeAttribute('open');
+              event.currentTarget.querySelector('summary')?.focus();
+            }
+          }}>
             <summary aria-label={`Rewrite ${name}`} title={`Rewrite ${name}`}>
               <RotateCcw size={14} />
               <ChevronDown size={11} />
             </summary>
-            <div className="rewrite-options">
-              {(
-                [
-                  ['clearer', 'Make it clearer'],
-                  ['shorter', 'Make it shorter'],
-                  ['stronger', 'Sharpen the benefit'],
-                  ['alternative', 'Try another angle'],
-                ] as const
-              ).map(([direction, label]) => (
+            <div className={`rewrite-options ${menuPlacement.above ? 'opens-above' : ''}`}
+              style={{ maxHeight: `min(560px, ${menuPlacement.space}px)` }}>
+              <div className="rewrite-context">
+                <strong>Page framework: {writingRole.framework}</strong>
+                <span>Section role: {writingRole.stages.map(stage => stage.stage).join(' + ') || 'Support the page goal'}</span>
+                <span>Change the framing within this role.</span>
+              </div>
+              {sectionAngleOptions(section.id).length > 0 && <div className="rewrite-group-label">Section angle</div>}
+              {sectionAngleOptions(section.id).map(({ direction, label }) => (
+                <button key={direction} disabled={disabled || editing} onClick={event => {
+                  event.currentTarget.closest('details')?.removeAttribute('open');
+                  onRevise(section.id, direction);
+                }}>{label}</button>
+              ))}
+              <div className="rewrite-group-label">Wording</div>
+              {wordingOptions.map(({ direction, label }) => (
                 <button
                   key={direction}
                   disabled={disabled || editing}
@@ -468,6 +491,8 @@ export function DraftPanel({
                   name={template.sections.find((s) => s.id === section.id)?.name || section.id}
                   issues={result.issues.filter((v) => v.sectionId === section.id)}
                   disabled={busy || stale}
+                  writingRole={sectionWritingRole({ ...project, template: draftTemplate,
+                    formula: result.draft.strategy.framework?.id || project.formula }, section.id)}
                   onCopy={onCopy}
                   onEdit={onEdit}
                   onRevise={onRevise}

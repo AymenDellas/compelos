@@ -166,7 +166,7 @@ export type ImportResult = z.infer<typeof importResultSchema>;
 export const revisionSchema = generationSchema.extend({
   draft: draftSchema,
   sectionId: z.string().max(80),
-  direction: z.enum(['clearer', 'shorter', 'stronger', 'alternative']),
+  direction: z.enum(['clearer', 'shorter', 'stronger', 'alternative', 'problem_led', 'outcome_led', 'objection_led', 'difference_led']),
 });
 export type RevisionInput = z.infer<typeof revisionSchema>;
 export const revisionResultSchema = z.object({

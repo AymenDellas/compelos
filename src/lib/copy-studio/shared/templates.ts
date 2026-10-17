@@ -26,8 +26,8 @@ export const templates: Record<TemplateId, Template> = {
       s(
         'hero',
         'The first impression',
-        'Make the outcome immediately clear.',
-        'An audience callout in body, an outcome-led headline of at most 12 words, one specific subheadline, and the primary CTA.',
+        'Make this audience’s situation and the relevant next step immediately recognizable.',
+        'An audience callout in body, a specific headline of at most 12 words, concise supporting context, and the primary CTA. Follow the selected framework’s opening role rather than imposing a benefit headline on every framework. Describe only confirmed discovery-call outcomes; program deliverables do not automatically happen on the call.',
       ),
       s(
         'problem',
@@ -90,7 +90,7 @@ export const templates: Record<TemplateId, Template> = {
         'hero',
         'The first impression',
         'Sell the outcome of the resource.',
-        'An outcome-led headline of at most 12 words, audience-specific subheadline, and one CTA. Say free only if explicitly confirmed.',
+        'A specific headline of at most 12 words, audience-specific support, and one CTA. Follow the selected framework’s opening role while explaining the supplied resource’s relevance. Say free only if explicitly confirmed.',
       ),
       s(
         'inside',

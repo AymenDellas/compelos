@@ -2,6 +2,17 @@ import type { Brief, Draft, Issue, TemplateId } from './contracts';
 import { templates } from './templates';
 import { approvedTestimonials } from './evidence';
 
+export const PERSUASION_REVIEW_PREFIX = 'Persuasion review: ';
+
+export function mergeDraftIssues(draft: Draft, brief: Brief, previous: Issue[], changedIds: string[], incoming: Issue[] = []): Issue[] {
+  const issues = [...auditDraft(draft, brief),
+    ...previous.filter(issue => issue.message.startsWith(PERSUASION_REVIEW_PREFIX) && !changedIds.includes(issue.sectionId)),
+    ...incoming.filter(issue => changedIds.includes(issue.sectionId)),
+  ];
+  return issues.filter((issue, index) => issues.findIndex(other => other.sectionId === issue.sectionId
+    && other.message === issue.message && other.severity === issue.severity) === index);
+}
+
 const previousDirectCallIds = 'hero|problem|approach|call|fit|proof|objections|cta';
 export const isGenericProofHeading = (headline: string) => /^(?:what\b.{0,70}\b(?:say|said)|testimonials|success stories|client (?:reviews|testimonials|stories)|client (?:outcomes|experiences|results)(?: and professional (?:endorsements?|recommendations?))?(?: of coaching services)?)\W*$/i.test(headline.trim());
 export function isLegacyDirectCallDraft(draft: Draft, template: TemplateId): boolean {
@@ -99,7 +110,13 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
     )
       add('Check this guarantee or refund claim against your actual terms.', 'warning');
     const promises = plainProse.match(/no[- ]spam|never (?:share|sell) your|unsubscribe (?:anytime|at any time)|no[- ]sales[- ]pitch|no[- ]obligation|no[- ]commitment|low[- ]commitment/gi) || [];
-    if (promises.some(promise => !policyFacts.includes(promise.replace(/-/g, ' '))))
+    const assurances = [
+      [/(?:not|isn'?t|isn’t) (?:a )?sales pitch/i, /no sales pitch|not (?:a )?sales pitch/i],
+      [/(?:without|no)[- ](?:sales[- ])?pressure/i, /without (?:sales )?pressure|no (?:sales )?pressure/i],
+      [/(?:without|no) (?:any )?(?:long[- ]term |ongoing )?commitment/i, /(?:without|no) (?:any )?(?:long term |ongoing )?commitment/i],
+    ];
+    if (promises.some(promise => !policyFacts.includes(promise.replace(/-/g, ' ')))
+      || assurances.some(([copyPattern, factPattern]) => copyPattern.test(plainProse) && !factPattern.test(policyFacts)))
       add('This privacy or sales-process promise is not confirmed in the brief. Remove it or provide approved terms.', 'warning');
     const wordDurations = plainProse.match(/\b(?:one|two|three|four|five|six|seven|eight|nine|ten|half|an?)\s*[- ]\s*(?:minute|hour)s?\b/g) || [];
     const durationNumbers: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, half: 0.5, a: 1, an: 1 };

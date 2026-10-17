@@ -268,7 +268,7 @@ export function BriefPanel({
           </summary>
           <div className="accordion-content">
             <div className="field">
-              <label htmlFor="formula">Persuasion framework</label>
+              <label htmlFor="formula">Page persuasion framework</label>
               <select
                 id="formula"
                 value={project.formula}
@@ -281,6 +281,7 @@ export function BriefPanel({
                 ))}
               </select>
               <small className="field-hint">{resolveFramework(project).description} {project.formula === 'recommended' && recommendedFramework(project.template, project.brief).reason}</small>
+              <small className="field-hint">Shapes the full page. Section rewrite angles adjust the framing within that flow.</small>
             </div>
           </div>
         </details>

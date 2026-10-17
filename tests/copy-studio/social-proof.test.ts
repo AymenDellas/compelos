@@ -5,7 +5,7 @@ import { findTestimonials, testimonialProof } from '../../src/lib/copy-studio/se
 import { approvedTestimonials } from '../../src/lib/copy-studio/shared/evidence';
 import { draftSchema } from '../../src/lib/copy-studio/shared/contracts';
 import { auditDraft } from '../../src/lib/copy-studio/shared/quality';
-import { generate, revise } from '../../src/lib/copy-studio/server/engine';
+import { generate, revise } from './reviewed-engine';
 import { extractionContext, byteSize } from '../../src/lib/copy-studio/server/source-context';
 import { ProviderSizeError } from '../../src/lib/copy-studio/server/provider';
 import { input, draft, strategy } from './fixtures';
@@ -120,7 +120,7 @@ test('framing cannot invent colleague relationships or substitute hype for the a
   const issues = auditDraft(restoreApprovedProof(bad, withProof), withProof.brief);
   assert.ok(issues.some(issue => /colleague or partner/.test(issue.message)));
   assert.ok(issues.some(issue => /promotional labels/.test(issue.message)));
-  const replies = [strategy, bad, framed()];
+  const replies = [strategy, bad, { sections: [framed().sections.find(section => section.id === 'proof')] }];
   const result = await generate(async () => JSON.stringify(replies.shift()), withProof, new AbortController().signal, () => {});
   assert.equal(replies.length, 0);
   assert.ok(result.draft.sections.find(section => section.id === 'proof')!.body.startsWith('These individual accounts'));
@@ -130,7 +130,7 @@ test('a focused editorial pass fixes persistent framing issues without regenerat
   const bad = framed();
   bad.sections.find(section => section.id === 'proof')!.headline = 'What Clients and Professionals Say';
   const improved = { headline: 'Career decisions and professional confidence', ...framed().sections.find(section => section.id === 'proof')!.proofFraming! };
-  const replies = [strategy, bad, bad, improved];
+  const replies = [strategy, bad, { sections: [bad.sections.find(section => section.id === 'proof')] }, improved];
   let editorialTokens = 0;
   const result = await generate(async (_system, _prompt, _signal, maxTokens) => {
     if (maxTokens) editorialTokens = maxTokens;
@@ -159,7 +159,7 @@ test('full testimonials survive claim repair within the production provider requ
   good.sections.find(section => section.id === 'problem')!.body = 'Business coaches need to explain an existing service clearly so prospects can understand the offer. '.repeat(35);
   const bad = structuredClone(good);
   bad.sections[0].headline += ' 300%';
-  const replies = [strategy, bad, good];
+  const replies = [strategy, bad, { sections: [good.sections[0]] }];
   const sizes: number[] = [];
   const request = { ...withProof, reference: { title: 'Original offer', url: 'https://coach.example', headings: [], selectedOffer: '', tone: 'preserve' as const,
     text: 'The original coaching offer explains the positioning service and the business coach audience. '.repeat(2000) } };

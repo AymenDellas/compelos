@@ -5,7 +5,7 @@ import { templates } from '../../src/lib/copy-studio/shared/templates';
 import { draftSchema, fingerprint, projectSchema, EXTRACTION_VERSION } from '../../src/lib/copy-studio/shared/contracts';
 import { findTestimonials, testimonialProof } from '../../src/lib/copy-studio/server/testimonials';
 import { auditDraft } from '../../src/lib/copy-studio/shared/quality';
-import { extract, generate, revise } from '../../src/lib/copy-studio/server/engine';
+import { extract, generate, revise } from './reviewed-engine';
 import { exportMarkdown } from '../../src/components/copy-studio/export';
 import { extractionContext, byteSize } from '../../src/lib/copy-studio/server/source-context';
 import { exactExcerpt, restoreApprovedProof } from '../../src/lib/copy-studio/server/approved-proof';

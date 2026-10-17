@@ -29,7 +29,7 @@ import {
 import { matchOnboardings, type OnboardingBrief } from '@/lib/copy-studio/shared/onboarding';
 import { changeOfferContext } from '@/lib/copy-studio/shared/workspace';
 import { applyRecoveredEvidence, needsEvidenceReview, recordEvidenceReview } from '@/lib/copy-studio/shared/evidence-recovery';
-import { auditDraft, isLegacyDirectCallDraft, validateStructure } from '@/lib/copy-studio/shared/quality';
+import { mergeDraftIssues, isLegacyDirectCallDraft, validateStructure } from '@/lib/copy-studio/shared/quality';
 import { generateCopy, reviseCopy, testConnection, loadOnboardings } from './api';
 import {
   loadProjects,
@@ -234,7 +234,7 @@ export default function CopyStudio() {
         return {
           ...p,
           history: snapshot(p),
-          result: { draft, issues: auditDraft(draft, p.brief) },
+          result: { draft, issues: mergeDraftIssues(draft, p.brief, p.result.issues, [sectionId], result.issues) },
         };
       }, captured.id);
       setToast('Section updated. Use Undo to restore the previous version.');
@@ -269,7 +269,7 @@ export default function CopyStudio() {
     update((p) => ({
       ...p,
       history: snapshot(p),
-      result: { draft, issues: auditDraft(draft, p.brief) },
+      result: { draft, issues: mergeDraftIssues(draft, p.brief, p.result?.issues || [], []) },
     }));
     setToast('Section saved.');
     return true;

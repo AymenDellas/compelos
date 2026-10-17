@@ -62,6 +62,8 @@ export function createCompletion(config: ProviderConfig): Completion {
             stream: false,
             temperature: 0.55,
             max_tokens: maxTokens,
+            ...(hostname === 'api.groq.com' && /^openai\/gpt-oss-(?:20|120)b$/.test(config.model)
+              ? { reasoning_effort: 'low' } : {}),
             messages: [
               { role: 'system', content: system },
               { role: 'user', content: prompt },
@@ -69,7 +71,13 @@ export function createCompletion(config: ProviderConfig): Completion {
           }),
         });
         const retryAfter = response.headers.get('retry-after');
-        const waitMs = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? Math.ceil(Number(retryAfter) * 1000) : NaN;
+        let waitMs = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? Math.ceil(Number(retryAfter) * 1000) : NaN;
+        if (response.status === 429 && !Number.isFinite(waitMs)) {
+          const failure = await response.clone().json().catch(() => null) as { error?: { message?: string } } | null;
+          const duration = failure?.error?.message?.match(/try again in ((?:\d+(?:\.\d+)?(?:ms|s|m|h|d))+)/i)?.[1];
+          if (duration) waitMs = Math.ceil([...duration.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h|d)/g)]
+            .reduce((total, part) => total + Number(part[1]) * ({ ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[part[2]] || 0), 0));
+        }
         if (response.status !== 429 || attempt >= 2 || !Number.isFinite(waitMs) || waitMs < 0 || waited + waitMs > 60_000) break;
         await response.body?.cancel();
         await delay(waitMs, undefined, { signal: combinedSignal });

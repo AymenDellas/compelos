@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sourceContext, byteSize } from '../../src/lib/copy-studio/server/source-context';
-import { extract, generate, revise } from '../../src/lib/copy-studio/server/engine';
+import { extract, generate, revise } from './reviewed-engine';
 import { createCompletion, structured } from '../../src/lib/copy-studio/server/provider';
 import { z } from 'zod/v4';
 import { input, draft, strategy } from './fixtures';
@@ -89,7 +89,7 @@ test('strategy, draft, claim repair and rewrite budget their own source context 
   const payload = { ...input, reference: { ...largeSource(), selectedOffer: 'Career Coaching', tone: 'preserve' as const } };
   const bad = structuredClone(draft);
   bad.sections[0].headline = 'Guaranteed 300% growth';
-  const responses = [strategy, bad, draft, draft.sections[0]];
+  const responses = [strategy, bad, { sections: [draft.sections[0]] }, draft.sections[0]];
   const complete = Object.assign(async (system: string, prompt: string) => {
     assert.ok(byteSize(system + prompt) <= 20_000);
     assert.match(prompt, /Master’s in Business Management/);

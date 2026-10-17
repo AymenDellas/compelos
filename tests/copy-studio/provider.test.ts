@@ -8,6 +8,22 @@ const config = {
   model: 'test-model',
   timeoutMs: 1000,
 };
+
+test('Groq GPT-OSS requests leave room for JSON output with low reasoning effort while other models retain their provider defaults', async () => {
+  const original = globalThis.fetch;
+  const bodies: Record<string, unknown>[] = [];
+  try {
+    globalThis.fetch = async (_url, init) => {
+      bodies.push(JSON.parse(init!.body as string));
+      return Response.json({ choices: [{ message: { content: '{"ok":true}' } }] });
+    };
+    await createCompletion({ ...config, baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b' })('', '', new AbortController().signal, 4000);
+    await createCompletion(config)('', '', new AbortController().signal);
+    assert.equal(bodies[0].reasoning_effort, 'low');
+    assert.equal(bodies[0].max_tokens, 4000);
+    assert.equal(bodies[1].reasoning_effort, undefined);
+  } finally { globalThis.fetch = original; }
+});
 test('a client authorization rejection is not mislabeled as an invalid key', async () => {
   const original = globalThis.fetch;
   try {
@@ -23,6 +39,20 @@ test('a client authorization rejection is not mislabeled as an invalid key', asy
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test('short Groq retry hints in the response body receive the same bounded, cancellable retry as Retry-After', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  try {
+    globalThis.fetch = async () => ++calls === 1
+      ? Response.json({ error: { message: 'Rate limit. Please try again in 0.001s.' } }, { status: 429 })
+      : Response.json({ choices: [{ message: { content: '{"ok":true}' } }] });
+    assert.equal(await createCompletion(config)('', '', new AbortController().signal), '{"ok":true}');
+    assert.equal(calls, 2);
+    globalThis.fetch = async () => Response.json({ error: { message: 'Please try again in 30s.' } }, { status: 429 });
+    await assert.rejects(createCompletion(config)('', '', AbortSignal.timeout(10)), /aborted|timeout/i);
+  } finally { globalThis.fetch = original; }
 });
 test('provider identifies the application and rejects truncated drafts', async () => {
   const original = globalThis.fetch;

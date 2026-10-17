@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { applyRecoveredEvidence, evidenceSignature, needsEvidenceReview, recordEvidenceReview } from '../../src/lib/copy-studio/shared/evidence-recovery';
 import { projectSchema, generationPayload, EXTRACTION_VERSION } from '../../src/lib/copy-studio/shared/contracts';
 import { generateCopy, importSource } from '../../src/components/copy-studio/api';
-import { generate } from '../../src/lib/copy-studio/server/engine';
+import { generate } from './reviewed-engine';
 import { draft, input, strategy } from './fixtures';
 
 const quote = 'Coaching helped me choose a new career and make a practical plan.';
