@@ -90,7 +90,12 @@ function SectionCard({
             if (!event.currentTarget.open) return;
             const rect = event.currentTarget.getBoundingClientRect();
             const below = window.innerHeight - rect.bottom - 16;
-            const above = rect.top - 16;
+            const topBoundary = Math.max(16, ...Array.from(document.querySelectorAll('header')).map(header => {
+              const position = window.getComputedStyle(header).position;
+              const bounds = header.getBoundingClientRect();
+              return ['sticky', 'fixed'].includes(position) && bounds.top <= 0 ? bounds.bottom + 12 : 16;
+            }));
+            const above = rect.top - topBoundary;
             setMenuPlacement({ above: above > below, space: Math.max(120, Math.max(above, below)) });
           }} onKeyDown={event => {
             if (event.key === 'Escape') {
