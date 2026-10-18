@@ -44,6 +44,16 @@ export function clientResult(output: string): string {
     );
   if (result.is_error) {
     const message = result.error?.message || '';
+    if (/aliyun_waf|cf-chl-|challenge-platform|security challenge/i.test(message))
+      throw new AppError(
+        502,
+        'AgentRouter’s security gateway blocked the hosted request. The API key may still be valid. Ask AgentRouter to allow server-side access from this deployment, or configure a provider that supports it.',
+      );
+    if (/non-SSE response[\s\S]*(?:text\/html|<!doctype)|content.type.{0,10}text\/html/i.test(message))
+      throw new AppError(
+        502,
+        'AgentRouter returned an HTML page instead of AI data. Check its API endpoint and server-access policy. This does not establish that the API key is invalid.',
+      );
     if (/quota|overdue|balance|credits|insufficient/i.test(message))
       throw new AppError(
         502,
@@ -58,6 +68,11 @@ export function clientResult(output: string): string {
       throw new AppError(
         502,
         'AgentRouter rejected the credentials. Check the Copy Studio token in the dashboard environment.',
+      );
+    if (/\b401\b/.test(message))
+      throw new AppError(
+        502,
+        'AgentRouter could not authenticate this request. Check that the deployed API key belongs to the configured AgentRouter endpoint.',
       );
     if (/429|rate.limit/i.test(message))
       throw new AppError(

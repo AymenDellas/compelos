@@ -137,6 +137,18 @@ test('a completed supported-client response is required before accepting text', 
   );
 });
 
+test('hosted HTML security challenges and endpoint authentication failures are classified without exposing their contents', () => {
+  const failure = (message: string) => JSON.stringify([{type: 'result', is_error: true, error: {message}}]);
+  assert.throws(() => clientResult(failure('[API Error: Streaming request received a non-SSE response (HTTP 200, Content-Type: text/html). Body prefix: <!doctype html> <meta name="aliyun_waf_aa" content="private-challenge-token">]')), error => {
+    assert.match((error as Error).message, /security gateway blocked the hosted request/);
+    assert.doesNotMatch((error as Error).message, /private-challenge-token|rejected the credentials/);
+    return true;
+  });
+  assert.throws(() => clientResult(failure('[API Error: non-SSE response (HTTP 200, Content-Type: text/html)]')), /HTML page instead of AI data/);
+  assert.throws(() => clientResult(failure('[API Error: 401 status code (no body)]')), /could not authenticate.*configured AgentRouter endpoint/);
+  assert.throws(() => clientResult(failure('Invalid API key')), /rejected the credentials/);
+});
+
 test('private relay preserves genuine client identity and normalizes only provider bookkeeping', async () => {
   let called = false;
   const upstream = createServer(async (req, res) => {
