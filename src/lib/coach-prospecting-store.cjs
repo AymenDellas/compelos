@@ -493,6 +493,21 @@ async function finishProfile(pool, job, result, research) {
         caseStudyUrl: "",
       },
     };
+    let discoverySource = base.prospecting?.discoverySource;
+    if (
+      !discoverySource &&
+      meta.source === "RECHECK" &&
+      base.prospecting?.runId
+    ) {
+      discoverySource = (
+        await c.query(
+          "SELECT source FROM compel_prospect_runs WHERE id::text=$1",
+          [base.prospecting.runId],
+        )
+      ).rows[0]?.source;
+      if (discoverySource === "RECHECK") discoverySource = null;
+    }
+    discoverySource ||= meta.source !== "RECHECK" ? meta.source : base.source;
     const incomingContact = result.linkedinContact || null;
     const previousContact = base.prospecting?.contact;
     const contact =
@@ -541,6 +556,7 @@ async function finishProfile(pool, job, result, research) {
         runId: meta.runId,
         lastJobId: job.jobId,
         accountId: meta.accountId,
+        discoverySource,
         researchStatus:
           research.crawl?.complete === false ? "PARTIAL" : "COMPLETE",
         websiteSources: (research.pages || [])

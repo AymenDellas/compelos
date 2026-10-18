@@ -2,6 +2,102 @@
 const store = require("./coach-prospecting-store.cjs");
 const { researchProspect } = require("./prospect-research.cjs");
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function readDiscoveryState(page) {
+  return page.evaluate(() => ({
+    url: location.href,
+    text: document.body?.innerText.slice(0, 6000) || "",
+    urls: [...document.querySelectorAll('main a[href*="/in/"]')]
+      .filter((a) => a.getClientRects().length)
+      .map((a) => a.href),
+  }));
+}
+async function scrollList(page) {
+  await page.evaluate(() => {
+    const nodes = [
+      ...document.querySelectorAll("main,main section,main ul,main div"),
+    ].filter(
+      (e) =>
+        e.scrollHeight > e.clientHeight + 100 &&
+        e.querySelectorAll('a[href*="/in/"]').length > 2,
+    );
+    nodes.sort(
+      (a, b) =>
+        b.querySelectorAll('a[href*="/in/"]').length -
+        a.querySelectorAll('a[href*="/in/"]').length,
+    );
+    const list = nodes.find((e) =>
+      ["auto", "scroll"].includes(getComputedStyle(e).overflowY),
+    );
+    if (list) list.scrollBy(0, list.clientHeight * 0.85);
+    else window.scrollBy(0, innerHeight * 0.85);
+  });
+}
+async function nextSearchPage(page, urls) {
+  const clicked = await page.evaluate(() => {
+    const next = [
+      ...document.querySelectorAll(
+        "main button,main a,.artdeco-pagination button,.artdeco-pagination a",
+      ),
+    ].find((el) => {
+      if (
+        !el.getClientRects().length ||
+        el.disabled ||
+        el.getAttribute("aria-disabled") === "true"
+      )
+        return false;
+      const name = (
+        el.getAttribute("aria-label") ||
+        el.getAttribute("title") ||
+        el.innerText ||
+        ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+      return (
+        /^next(?:\s+page)?$/i.test(name) ||
+        el.classList.contains("artdeco-pagination__button--next")
+      );
+    });
+    if (!next) return false;
+    next.scrollIntoView({ block: "center" });
+    next.click();
+    return true;
+  });
+  if (!clicked) return "END";
+  try {
+    const changed = await page.waitForFunction(
+      (previous) => {
+        const links = [...document.querySelectorAll('main a[href*="/in/"]')]
+          .filter((a) => a.getClientRects().length)
+          .map((a) => a.href);
+        return (
+          !document.querySelector('main[aria-busy="true"]') &&
+          links.length > 0 &&
+          previous.filter(
+            (old) =>
+              !links.some(
+                (url) =>
+                  url.split(/[?#]/)[0].replace(/\/+$/, "").toLowerCase() ===
+                  old,
+              ),
+          ).length >= Math.min(3, previous.length)
+        );
+      },
+      { timeout: 20000, polling: 250 },
+      [
+        ...new Set(
+          urls.map((url) =>
+            url.split(/[?#]/)[0].replace(/\/+$/, "").toLowerCase(),
+          ),
+        ),
+      ].slice(0, 10),
+    );
+    await changed?.dispose?.();
+    return "NEXT";
+  } catch {
+    return "STALLED";
+  }
+}
 function restriction(status, url, text = "") {
   if (status === 429)
     return "LinkedIn reported a rate limit. Resolve it before manually resuming this run.";
@@ -15,7 +111,11 @@ function restriction(status, url, text = "") {
     return "LinkedIn requires attention. Resolve the account check before manually resuming this run.";
   return "";
 }
-async function discover(page, run, { pool, owner, log = () => {} }) {
+async function discover(
+  page,
+  run,
+  { pool, owner, log = () => {}, pause = wait },
+) {
   let blocked = "";
   const watch = (response) => {
     try {
@@ -26,21 +126,25 @@ async function discover(page, run, { pool, owner, log = () => {} }) {
   page.on("response", watch);
   try {
     const response = await page.goto(
-      store.sourceUrl(run.source, run.data.sourceUrl),
+      store.sourceUrl(
+        run.source,
+        run.source === "SEARCH" && run.data.cursorUrl
+          ? run.data.cursorUrl
+          : run.data.sourceUrl,
+      ),
       { waitUntil: "domcontentloaded", timeout: 45000 },
     );
     await page.waitForSelector("main", { timeout: 12000 }).catch(() => {});
+    const search = run.source === "SEARCH";
+    let stopReason = search
+      ? "The search reached this run’s 50-page budget."
+      : "The visible list reached this run’s 12-pass budget.";
     let stagnant = 0,
       previous = run.data.seen?.length || 0;
-    // A bounded visible-list scan. No private pagination calls, hidden-page enumeration or auto-invites.
-    for (let pass = 0; pass < 12; pass++) {
-      const state = await page.evaluate(() => ({
-        url: location.href,
-        text: document.body?.innerText.slice(0, 6000) || "",
-        urls: [...document.querySelectorAll('main a[href*="/in/"]')]
-          .filter((a) => a.getClientRects().length)
-          .map((a) => a.href),
-      }));
+    // People Search uses explicit Next pages; network lists use scrolling.
+    // Follow rendered controls only, without inventing URLs or private API pagination.
+    for (let pass = 0; pass < (search ? 50 : 12); pass++) {
+      let state = await readDiscoveryState(page);
       if (!/^(?:.*\.)?linkedin\.com$/.test(new URL(state.url).hostname))
         throw Error(
           "The discovery page left LinkedIn; no profiles were collected from that page.",
@@ -57,6 +161,7 @@ async function discover(page, run, { pool, owner, log = () => {} }) {
         state.urls,
         {
           pages: (run.data.pages || 0) + 1,
+          ...(search ? { cursorUrl: state.url } : {}),
           message:
             "Discovering visible profiles. Exact job titles are not used to discard candidates.",
         },
@@ -67,29 +172,55 @@ async function discover(page, run, { pool, owner, log = () => {} }) {
         `Prospecting: ${run.data.queued}/${run.data.limit} profiles queued; ${run.data.skipped} existing or excluded profiles skipped.`,
       );
       if (run.status !== "RUNNING") return { done: true };
+      if (search) {
+        if (pass === 49) break;
+        await scrollList(page);
+        await pause(1400);
+        if (!(await store.runIsActive(pool, run.id))) return { stopped: true };
+        // Capture cards that rendered while scrolling before leaving this page.
+        const settled = await readDiscoveryState(page);
+        if (!/^(?:.*\.)?linkedin\.com$/.test(new URL(settled.url).hostname))
+          throw Error("The discovery page left LinkedIn.");
+        blocked ||= restriction(200, settled.url, settled.text);
+        if (blocked) {
+          await store.pauseAccount(pool, run.account_id, blocked);
+          return { paused: blocked };
+        }
+        if (settled.urls.join("\n") !== state.urls.join("\n")) {
+          const updated = await store.sourceProgress(
+            pool,
+            run.id,
+            owner,
+            settled.urls,
+            { pages: run.data.pages, cursorUrl: settled.url },
+          );
+          if (!updated) return { stopped: true };
+          run = updated;
+          state = settled;
+          if (run.status !== "RUNNING") return { done: true };
+        }
+        const advanced = await nextSearchPage(page, state.urls);
+        if (blocked) {
+          await store.pauseAccount(pool, run.account_id, blocked);
+          return { paused: blocked };
+        }
+        if (advanced !== "NEXT") {
+          stopReason =
+            advanced === "END"
+              ? "LinkedIn has no enabled Next search page."
+              : "The next search page did not finish loading; collected profiles are retained.";
+          break;
+        }
+        continue;
+      }
       stagnant = run.data.seen.length === previous ? stagnant + 1 : 0;
       previous = run.data.seen.length;
-      if (stagnant >= 3) break;
-      await page.evaluate(() => {
-        const nodes = [
-          ...document.querySelectorAll("main,main section,main ul,main div"),
-        ].filter(
-          (e) =>
-            e.scrollHeight > e.clientHeight + 100 &&
-            e.querySelectorAll('a[href*="/in/"]').length > 2,
-        );
-        nodes.sort(
-          (a, b) =>
-            b.querySelectorAll('a[href*="/in/"]').length -
-            a.querySelectorAll('a[href*="/in/"]').length,
-        );
-        const list = nodes.find((e) =>
-          ["auto", "scroll"].includes(getComputedStyle(e).overflowY),
-        );
-        if (list) list.scrollBy(0, list.clientHeight * 0.85);
-        else window.scrollBy(0, innerHeight * 0.85);
-      });
-      await wait(1400);
+      if (stagnant >= 3) {
+        stopReason = "The visible list stopped loading additional profiles.";
+        break;
+      }
+      await scrollList(page);
+      await pause(1400);
     }
     await store.sourceProgress(
       pool,
@@ -98,7 +229,7 @@ async function discover(page, run, { pool, owner, log = () => {} }) {
       [],
       {
         discoveryFinished: true,
-        message: `Visible-list scan finished with ${run.data.queued} queued. The source stopped loading or reached this run’s page budget; this is not a claim that every profile was inspected.`,
+        message: `${stopReason} ${run.data.queued} of ${run.data.limit} new profiles queued; ${run.data.skipped} existing or excluded profiles skipped.`,
       },
       true,
     );
@@ -160,4 +291,4 @@ async function finish(pool, owner, job, result) {
     logs: result.logs || [],
   };
 }
-module.exports = { discover, finish, restriction };
+module.exports = { discover, finish, restriction, nextSearchPage };

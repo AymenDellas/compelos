@@ -40,7 +40,8 @@ let allowed = true,
   queries = 0,
   row,
   blocked = false,
-  recorded = 0;
+  recorded = 0,
+  listingRows = [];
 stub(path.join(root, "src/lib/worker-admin.ts"), {
   async requireWorkerAdmin() {
     if (!allowed) throw Error("Sign in first");
@@ -49,6 +50,9 @@ stub(path.join(root, "src/lib/worker-admin.ts"), {
 const client = {
   async query(sql, values = []) {
     queries++;
+    if (sql.includes("FROM case_study_prospects p"))
+      return { rows: structuredClone(listingRows) };
+    if (sql.includes("SELECT r.*")) return { rows: [] };
     if (sql.startsWith("SELECT * FROM case_study_prospects"))
       return { rows: values[0] === row.id ? [row] : [] };
     if (sql.startsWith("SELECT id FROM compel_linkedin_accounts"))
@@ -68,6 +72,12 @@ stub(path.join(root, "src/lib/coach-prospecting-store.cjs"), {
   transaction: async (_, fn) => fn(client),
   ensure: async () => {},
   activity: async () => {},
+  refreshRuns: async () => {},
+});
+require("../../src/lib/linkedin-workers.cjs").settings = async () => ({
+  accounts: [{ id: "account-a", label: "Fixture account", enabled: true }],
+  activeCount: 1,
+  supervisorOnline: true,
 });
 stub(path.join(root, "src/app/actions/linkedin-outreach-actions.ts"), {
   async markHunterProspectLinkedinDmSentAction() {
@@ -83,6 +93,7 @@ function reset() {
   queries = 0;
   blocked = false;
   recorded = 0;
+  listingRows = [];
   const data = b.blankCaseStudyProspect(
     "https://www.linkedin.com/in/test-coach/",
     "MANUAL",
@@ -113,6 +124,70 @@ test("all prospecting actions authenticate before queries or input handling", as
   ])
     await assert.rejects(work, /Sign in first/);
   assert.equal(queries, 0);
+});
+
+test("source and status filters combine before pagination, counts and exports", async () => {
+  reset();
+  for (let i = 0; i < 85; i++) {
+    const data = structuredClone(row.data);
+    data.name = "Fixture " + i;
+    data.prospecting = {
+      assessment: q.assessCoach({
+        url: data.linkedinUrl,
+        headline: "Career coach",
+        about:
+          "I am a career coach. I help professionals. Work with me through my coaching program.",
+        profileIdentityConfirmed: true,
+      }),
+      contact: {
+        accountId: "account-a",
+        connection: "NOT_CONNECTED",
+        openProfile: "YES",
+        checkedAt: new Date().toISOString(),
+      },
+      discoverySource: i % 2 ? "CONNECTION" : "SEARCH",
+    };
+    listingRows.push({
+      ...row,
+      id: "fixture-" + i,
+      created_at: new Date(i * 1000),
+      data,
+      suppressed: false,
+      previously_contacted: false,
+    });
+  }
+  const first = await a.loadCoachProspectingAction({
+    accountId: "account-a",
+    source: "SEARCH",
+    list: "READY",
+    page: 0,
+  });
+  assert.equal(first.total, 43);
+  assert.equal(first.rows.length, 40);
+  assert.equal(first.hasMore, true);
+  assert.equal(first.counts.READY, 43);
+  assert.equal(first.sourceCounts.CONNECTION, 42);
+  assert.ok(
+    first.rows.every((r) => r.data.prospecting.discoverySource === "SEARCH"),
+  );
+  const next = await a.loadCoachProspectingAction({
+    accountId: "account-a",
+    source: "SEARCH",
+    list: "READY",
+    page: 1,
+  });
+  assert.equal(next.rows.length, 3);
+  assert.equal(next.hasMore, false);
+  assert.equal(
+    new Set([...first.rows, ...next.rows].map((r) => r.id)).size,
+    43,
+  );
+  const before = queries;
+  await assert.rejects(
+    a.loadCoachProspectingAction({ source: "NOT_A_SOURCE" }),
+    /Invalid prospect filters/,
+  );
+  assert.equal(queries, before);
 });
 test("manual route verification is account-specific, requires a note and rejects stale saves", async () => {
   reset();

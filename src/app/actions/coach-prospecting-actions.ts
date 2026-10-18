@@ -13,6 +13,7 @@ import { validateCaseStudyProspect } from "@/lib/case-study-validation";
 import { markHunterProspectLinkedinDmSentAction } from "./linkedin-outreach-actions";
 import { z } from "zod/v4";
 import type { CoachContact, CoachRun } from "@/lib/coach-prospecting";
+import { COACH_SOURCES } from "@/lib/coach-prospecting";
 import type { CaseStudyProspectData } from "@/lib/case-study";
 
 const idSchema = z.string().uuid();
@@ -36,6 +37,7 @@ export async function loadCoachProspectingAction(
     accountId?: string;
     query?: string;
     list?: string;
+    source?: string;
     page?: number;
   } = {},
 ) {
@@ -43,7 +45,9 @@ export async function loadCoachProspectingAction(
   if (
     (options.query || "").length > 150 ||
     !Number.isInteger(options.page || 0) ||
-    (options.page || 0) < 0
+    (options.page || 0) < 0 ||
+    (options.source !== undefined &&
+      !Object.hasOwn(COACH_SOURCES, options.source))
   )
     throw Error("Invalid prospect filters.");
   await store.refreshRuns(pool);
@@ -78,13 +82,14 @@ export async function loadCoachProspectingAction(
     : accounts[0]?.id || "";
   const rows = await pool.query(
     `SELECT p.id,p.revision,p.created_at,p.updated_at,jsonb_build_object(
- 'name',p.data->'name','linkedinUrl',p.linkedin_url,'headline',p.data->'headline','website',p.data->'website','location',p.data->'location',
+ 'name',p.data->'name','linkedinUrl',p.linkedin_url,'headline',p.data->'headline','website',p.data->'website','location',p.data->'location','source',p.data->'source',
  'stage',p.data->'stage','lastContactedAt',p.data->'lastContactedAt','suggestedDm',p.data->'suggestedDm',
- 'prospecting',coalesce(p.data->'prospecting','{}'::jsonb)-'about'-'websiteSources',
+ 'prospecting',(coalesce(p.data->'prospecting','{}'::jsonb)-'about'-'websiteSources')||jsonb_build_object('discoverySource',COALESCE(p.data->'prospecting'->>'discoverySource',NULLIF(r.source,'RECHECK'),p.data->>'source','MANUAL')),
  'headlineQualification',p.data->'headlineQualification','scanStatus',p.data->'scanStatus','coachFit',p.data->'coachFit') AS data,
  EXISTS(SELECT 1 FROM leads l WHERE lower(regexp_replace(l.linkedin_url,'/+$',''))=lower(regexp_replace(p.linkedin_url,'/+$','')) AND l.do_not_contact IS TRUE) AS suppressed,
  EXISTS(SELECT 1 FROM leads l WHERE lower(regexp_replace(l.linkedin_url,'/+$',''))=lower(regexp_replace(p.linkedin_url,'/+$','')) AND l.contacted IS TRUE) AS previously_contacted
- FROM case_study_prospects p WHERE concat_ws(' ',p.data->>'name',p.data->>'headline',p.data->>'website') ILIKE $1`,
+ FROM case_study_prospects p LEFT JOIN compel_prospect_runs r ON r.id::text=p.data->'prospecting'->>'runId'
+ WHERE concat_ws(' ',p.data->>'name',p.data->>'headline',p.data->>'website') ILIKE $1`,
     ["%" + (options.query || "").trim() + "%"],
   );
   const classified = rows.rows
@@ -103,11 +108,22 @@ export async function loadCoachProspectingAction(
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime() ||
         a.id.localeCompare(b.id),
     );
-  const counts: Record<string, number> = { ALL: classified.length };
-  for (const row of classified)
+  const sourceCounts: Record<string, number> = { ALL: classified.length };
+  for (const row of classified) {
+    const source = row.data.prospecting.discoverySource;
+    sourceCounts[source] = (sourceCounts[source] || 0) + 1;
+  }
+  const sourced = classified.filter(
+    (row) =>
+      !options.source ||
+      options.source === "ALL" ||
+      row.data.prospecting.discoverySource === options.source,
+  );
+  const counts: Record<string, number> = { ALL: sourced.length };
+  for (const row of sourced)
     counts[row.classification.list] =
       (counts[row.classification.list] || 0) + 1;
-  const selected = classified.filter(
+  const selected = sourced.filter(
     (row) =>
       !options.list ||
       options.list === "ALL" ||
@@ -127,6 +143,7 @@ export async function loadCoachProspectingAction(
     accountId,
     accounts,
     counts,
+    sourceCounts,
     rows: selected.slice(page * 40, (page + 1) * 40).map((row) => ({
       id: String(row.id),
       revision: Number(row.revision),

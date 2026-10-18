@@ -9,7 +9,11 @@ import {
   saveCoachReviewAction,
   recordCoachMessageSentAction,
 } from "@/app/actions/coach-prospecting-actions";
-import { COACH_LISTS, type CoachContact } from "@/lib/coach-prospecting";
+import {
+  COACH_LISTS,
+  COACH_SOURCES,
+  type CoachContact,
+} from "@/lib/coach-prospecting";
 import { contactRoute, csvCell } from "@/lib/coach-prospecting.cjs";
 import { saveCaseStudyProspectAction } from "@/app/actions/case-study-actions";
 import type { CaseStudyProspect } from "@/lib/case-study";
@@ -37,6 +41,7 @@ export default function CoachProspectingWorkspace({
     [query, setQuery] = useState(""),
     [search, setSearch] = useState(""),
     [list, setList] = useState("ALL"),
+    [source, setSource] = useState("ALL"),
     [page, setPage] = useState(0);
   const [view, setView] = useState("list"),
     [selected, setSelected] = useState<Set<string>>(new Set()),
@@ -63,6 +68,7 @@ export default function CoachProspectingWorkspace({
           accountId,
           query: search,
           list,
+          source,
           page,
         });
         if (request === sequence.current) {
@@ -78,7 +84,7 @@ export default function CoachProspectingWorkspace({
         loading.current = false;
       }
     },
-    [accountId, search, list, page],
+    [accountId, search, list, source, page],
   );
   useEffect(() => {
     if (!active) return;
@@ -146,6 +152,7 @@ export default function CoachProspectingWorkspace({
           accountId: account,
           query: search,
           list,
+          source,
           page: nextPage++,
         });
         all.push(...result.rows);
@@ -160,6 +167,7 @@ export default function CoachProspectingWorkspace({
           "LinkedIn URL",
           "Headline",
           "Website",
+          "Discovery source",
           "Fit",
           "Priority score",
           "Contact route",
@@ -170,6 +178,10 @@ export default function CoachProspectingWorkspace({
           r.data.linkedinUrl,
           r.data.headline,
           r.data.website,
+          COACH_SOURCES[
+            (r.data.prospecting?.discoverySource ||
+              "MANUAL") as keyof typeof COACH_SOURCES
+          ] || "Other / manually added",
           r.data.prospecting?.assessment?.status || "Needs review",
           r.classification.score,
           r.classification.route.label,
@@ -454,6 +466,25 @@ export default function CoachProspectingWorkspace({
                     ))}
                   </select>
                 </label>
+                <label>
+                  Discovery source
+                  <select
+                    className="field"
+                    aria-label="Filter by discovery source"
+                    value={source}
+                    onChange={(e) => {
+                      setSource(e.target.value);
+                      setPage(0);
+                      setSelected(new Set());
+                    }}
+                  >
+                    {Object.entries(COACH_SOURCES).map(([id, title]) => (
+                      <option key={id} value={id}>
+                        {title} ({data.sourceCounts[id] || 0})
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   className="btn btn-outline"
                   disabled={busy || !data.total}
@@ -536,10 +567,25 @@ export default function CoachProspectingWorkspace({
                             />
                           </td>
                           <td>
-                            <strong>
+                            <a
+                              className="coach-profile-name"
+                              href={row.data.linkedinUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
                               {row.data.name || "Profile awaiting research"}
-                            </strong>
+                              <span className="sr-only">
+                                {" "}
+                                (opens LinkedIn in a new tab)
+                              </span>
+                            </a>
                             <p>{row.data.headline || row.data.linkedinUrl}</p>
+                            <small>
+                              {COACH_SOURCES[
+                                (row.data.prospecting?.discoverySource ||
+                                  "MANUAL") as keyof typeof COACH_SOURCES
+                              ] || "Other / manually added"}
+                            </small>
                             <small>
                               {row.data.prospecting?.assessment?.reason ||
                                 "Not assessed with the new evidence rules. Saved headlines were not discarded."}
@@ -719,9 +765,11 @@ function DiscoveryForm({
             </li>
           </ul>
           <p>
-            Discovery is bounded to 12 list passes. One discovery run and each
-            uncached profile reserve research-budget units. Limits or account
-            checks pause the run; there is no guarantee against restrictions.
+            People Search follows Next pages until your target, the end of
+            results, or a 50-page limit. Network lists use up to 12 scroll
+            passes. One discovery run and each uncached profile reserve
+            research-budget units. Limits or account checks pause the run; there
+            is no guarantee against restrictions.
           </p>
         </div>
         <button

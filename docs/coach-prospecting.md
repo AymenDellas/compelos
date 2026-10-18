@@ -11,6 +11,9 @@ records remain available.
 2. Use Discovery setup: connections, followers, profile viewers, a people-search
    URL configured on LinkedIn, or pasted profile URLs. Select up to 100 new
    profiles for one run. Optional exclusion phrases are literal, not regexes.
+   People Search follows LinkedIn's rendered Next control instead of repeatedly
+   scrolling the first ten results. It stops at the requested number of new
+   profiles, the end of results, an account check, or the search-page budget.
 3. The same account worker discovers visible candidates, then reviews each
    profile and linked business website. A missing or unconventional headline
    does not stop About or website research. Email is not a qualification gate.
@@ -18,6 +21,11 @@ records remain available.
    review. Each decision has source quotes, gaps, score and timestamp. Missing
    evidence is unknown, not negative evidence. Existing records can be selected
    for rechecking instead of duplicated.
+   Combine the prospect-list filter with **Discovery source**: My connections,
+   My followers, Profile viewers, LinkedIn People Search, or pasted/manual
+   profiles. Existing search results recover their source from their saved run;
+   rechecks retain that original source. CSV exports respect both filters.
+   Click a prospect's name to open their LinkedIn profile in a separate tab.
 5. Verify the route from the selected LinkedIn account. Save a message draft or
    a separate connection note (200 characters). Open LinkedIn, send manually,
    then record the appropriate event. Recording an invitation does not mark a
@@ -57,8 +65,11 @@ history remain attached to the existing Case Study record.
 Rechecks refresh the automated assessment without replacing an operator's
 recorded fit decision; only another manual review changes that decision.
 
-One discovery batch reserves one local budget unit and is bounded to 12 visible
-list passes. Uncached profile jobs reserve the existing profile budget. This
+One discovery batch reserves one local budget unit and is bounded to 50 rendered
+People Search pages, or 12 scroll passes for network lists. The search filters
+are preserved by following the page's own Next control. A saved search cursor
+lets an interrupted source pass resume without starting at page one. Uncached
+profile jobs reserve the existing profile budget. This
 budget does not represent LinkedIn's published or internal request limits.
 Visible-list stalls, partial research and page-budget coverage are reported
 explicitly; the UI never claims to have read every possible profile or route.

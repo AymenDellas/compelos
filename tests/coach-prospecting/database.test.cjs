@@ -144,6 +144,7 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
     ).rows[0];
     assert.equal(prospect.data.stage, "QUALIFIED");
     assert.equal(prospect.data.email, "");
+    assert.equal(prospect.data.prospecting.discoverySource, "CONNECTION");
     const revision = prospect.revision;
     await store.finishProfile(
       pool,
@@ -185,6 +186,11 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
       reason: "Operator review: a newer decision made during the run.",
       assessedAt: new Date(Date.now() + 1000).toISOString(),
     };
+    // Legacy records have only a run ID; rechecking must recover the original source.
+    await pool.query(
+      "UPDATE case_study_prospects SET data=data#-'{prospecting,discoverySource}' WHERE id=$1",
+      [saved.prospectId],
+    );
     await pool.query(
       "UPDATE case_study_prospects SET data=jsonb_set(data,'{prospecting,assessment}',$2::jsonb) WHERE id=$1",
       [saved.prospectId, JSON.stringify(manual)],
@@ -199,6 +205,14 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
       kept.assessment.status,
       "OUTSIDE",
       "a late worker cannot overwrite a newer manual fit review",
+    );
+    assert.equal(
+      (
+        await pool.query("SELECT data FROM case_study_prospects WHERE id=$1", [
+          saved.prospectId,
+        ])
+      ).rows[0].data.prospecting.discoverySource,
+      "CONNECTION",
     );
     await core.complete(pool, cached.job.jobId, "owner-two", {
       status: "PROSPECTED",

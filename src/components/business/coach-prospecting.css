@@ -148,6 +148,17 @@
 .coach-table strong {
   font-weight: 600;
 }
+.coach-profile-name {
+  font-weight: 600;
+  color: var(--signal);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+.coach-profile-name:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 3px;
+}
 .coach-table p {
   color: var(--text-dim);
   line-height: 1.6;

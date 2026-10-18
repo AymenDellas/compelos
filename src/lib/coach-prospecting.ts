@@ -24,6 +24,7 @@ export type CoachProspecting = {
   runId?: string;
   lastJobId?: string;
   accountId: string;
+  discoverySource?: string;
   researchStatus: string;
   websiteSources?: { url: string; title?: string }[];
   suppressed?: boolean;
@@ -59,4 +60,13 @@ export const COACH_LISTS = {
   CONTACTED: "Already contacted",
   OUTSIDE: "Outside criteria",
   SUPPRESSED: "Do not contact",
+};
+export const COACH_SOURCES = {
+  ALL: "All sources",
+  CONNECTION: "My connections",
+  FOLLOWER: "My followers",
+  PROFILE_VIEWER: "Profile viewers",
+  SEARCH: "LinkedIn People Search",
+  URLS: "Pasted profiles",
+  MANUAL: "Other / manually added",
 };
