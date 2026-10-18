@@ -41,6 +41,41 @@ test('a client authorization rejection is not mislabeled as an invalid key', asy
   }
 });
 
+test('model permission errors and unclassified forbidden responses do not claim the key is invalid', async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const failure of [
+      { error: { code: 'model_access_denied', message: 'Private account details' } },
+      { type: 'permission_error', message: 'You do not have access to this model' },
+    ]) {
+      globalThis.fetch = async () => Response.json(failure, { status: 403 });
+      await assert.rejects(createCompletion(config)('', '', new AbortController().signal), error => {
+        assert.match((error as Error).message, /denied access to the configured model/);
+        assert.doesNotMatch((error as Error).message, /Private account details|rejected the API key/);
+        return true;
+      });
+    }
+    globalThis.fetch = async () => new Response('Access forbidden by gateway', { status: 403 });
+    await assert.rejects(createCompletion(config)('', '', new AbortController().signal), /refused access.*does not establish/);
+    globalThis.fetch = async () => Response.json({ error: { message: 'Unauthorized' } }, { status: 401 });
+    await assert.rejects(createCompletion(config)('', '', new AbortController().signal), /could not authenticate.*key and provider endpoint/);
+  } finally { globalThis.fetch = original; }
+});
+
+test('explicit invalid credentials remain actionable without exposing the key or raw provider message', async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => Response.json({ error: { code: 'invalid_api_key', message: `Rejected ${config.apiKey}` } }, { status: 401 });
+    await assert.rejects(createCompletion(config)('', '', new AbortController().signal), error => {
+      assert.match((error as Error).message, /reports an invalid or expired API key/);
+      assert.doesNotMatch((error as Error).message, new RegExp(config.apiKey));
+      return true;
+    });
+    globalThis.fetch = async () => Response.json({ error: { type: 'unauthorized_client_error' } }, { status: 401 });
+    await assert.rejects(createCompletion(config)('', '', new AbortController().signal), /rejected the client integration/);
+  } finally { globalThis.fetch = original; }
+});
+
 test('short Groq retry hints in the response body receive the same bounded, cancellable retry as Retry-After', async () => {
   const original = globalThis.fetch;
   let calls = 0;

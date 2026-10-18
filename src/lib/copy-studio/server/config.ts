@@ -34,6 +34,7 @@ export function providerStatus() {
   return {
     status: 'ok',
     configured: Boolean(config.apiKey) && !/your.*key|placeholder/i.test(config.apiKey),
+    provider: new URL(config.baseUrl).hostname,
     model: config.model,
     version: '2.0.0',
   };

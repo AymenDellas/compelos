@@ -93,16 +93,21 @@ export function createCompletion(config: ProviderConfig): Completion {
     if (!response.ok) {
       const failure = (await response.json().catch(() => null)) as {
         type?: string;
-        error?: { message?: string };
+        code?: string;
+        message?: string;
+        error?: { message?: string; type?: string; code?: string };
       } | null;
+      // Classify the refusal without returning raw provider details or credentials.
+      const message = failure?.error?.message || failure?.message || '';
+      const codes = [failure?.type, failure?.code, failure?.error?.type, failure?.error?.code].filter(Boolean).join(' ');
       if (response.status === 413) {
         // The caller can rebuild source context once against this smaller allowance.
         complete.inputByteLimit = Math.min(complete.inputByteLimit!, Math.floor(Buffer.byteLength(system + prompt, 'utf8') * 0.6));
         throw new ProviderSizeError();
       }
       if (
-        failure?.type === 'unauthorized_client_error' ||
-        /unauthorized client/i.test(failure?.error?.message || '')
+        /unauthorized_client_error/i.test(codes) ||
+        /unauthorized client/i.test(message)
       ) {
         throw new AppError(
           502,
@@ -110,7 +115,6 @@ export function createCompletion(config: ProviderConfig): Completion {
         );
       }
       if (response.status === 429) {
-        const message = failure?.error?.message || '';
         const duration = message.match(/try again in ((?:\d+(?:\.\d+)?(?:ms|s|m|h|d))+)/i)?.[1];
         const retrySeconds = response.headers.get('retry-after');
         const wait = duration ? ` The provider suggests waiting ${duration}.`
@@ -119,15 +123,32 @@ export function createCompletion(config: ProviderConfig): Completion {
           throw new AppError(429, `The AI provider’s daily token allowance has been reached. Retry after its daily reset.${wait}`);
         throw new AppError(429, `The AI provider is busy or its temporary usage limit was reached.${wait || ' Wait a moment and retry.'}`);
       }
-      if (/overdue|insufficient|quota|balance|credits/i.test(failure?.error?.message || ''))
+      if (/overdue|insufficient (?:funds|credits|balance|quota)|quota|balance|credits/i.test(message))
         throw new AppError(
           502,
           'The AI provider reports an account balance or quota issue. Check your provider account before retrying.',
         );
-      if (response.status === 401 || response.status === 403)
+      if (/model_(?:access_denied|permission_denied)/i.test(codes) ||
+          /(?:access|permission).{0,50}model|model.{0,50}(?:not permitted|not allowed|access denied|no access)/i.test(message))
         throw new AppError(
           502,
-          'The AI provider rejected the API key. Check your Copy Studio key and model access in the dashboard environment.',
+          'The AI provider denied access to the configured model. Check COPY_STUDIO_MODEL and your account’s model permissions. This does not establish that the API key is invalid.',
+        );
+      if (/invalid_api_key|invalid_token|key_expired|key_revoked/i.test(codes) ||
+          /(?:invalid|incorrect|expired|revoked).{0,25}(?:api key|api token)|(?:api key|api token).{0,25}(?:invalid|incorrect|expired|revoked)/i.test(message))
+        throw new AppError(
+          502,
+          'The AI provider reports an invalid or expired API key. Check that COPY_STUDIO_API_KEY belongs to COPY_STUDIO_BASE_URL in the deployed dashboard environment.',
+        );
+      if (response.status === 401)
+        throw new AppError(
+          502,
+          'The AI provider could not authenticate this request. Check that the deployed Copy Studio key and provider endpoint belong together.',
+        );
+      if (response.status === 403)
+        throw new AppError(
+          502,
+          'The AI provider refused access to this request. Check model permissions and provider access restrictions. A forbidden response does not establish that the API key is invalid.',
         );
       if (response.status === 402)
         throw new AppError(
