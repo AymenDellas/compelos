@@ -31,7 +31,7 @@ export function AgreementPdfViewer({ url }: { url: string }) {
                 const context = canvas.getContext('2d');
                 if (!context) throw new Error('Canvas is unavailable.');
                 container.appendChild(canvas);
-                await page.render({ canvas, canvasContext: context, viewport }).promise;
+                await page.render({ canvasContext: context, viewport }).promise;
             }
             if (!cancelled) setState('ready');
         };
