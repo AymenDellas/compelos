@@ -23,8 +23,9 @@ const essentials = [
 ] as const;
 const contextFields: [ReviewKey, string][] = [['coachBio', 'Your story & experience'], ['differentiation', 'What makes your work different']];
 
-export function ClientOnboardingWizard({ initial, token, revision, save, briefReady = true }: {
+export function ClientOnboardingWizard({ initial, token, revision, save, briefReady = true, signing }: {
     initial: ClientOnboardingDraft; token: string; revision: number; save: (data: FormData) => Promise<SaveResult>; briefReady?: boolean;
+    signing?: { canSign: boolean; documentSha256: string; email: string };
 }) {
     const [step, setStep] = useState(() => {
         const job = journeyFor(initial);

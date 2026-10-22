@@ -37,6 +37,7 @@
     "lucide-react": "latest",
     "next": "latest",
     "papaparse": "^5.5.3",
+    "pdfjs-dist": "^4.10.38",
     "pg": "^8.23.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
