@@ -1,11 +1,12 @@
+import { isPracticeWide, type FunnelFocus } from '../../funnel-focus';
 import type { Brief, Draft, Issue, TemplateId } from './contracts';
 import { templates } from './templates';
 import { approvedTestimonials } from './evidence';
 
 export const PERSUASION_REVIEW_PREFIX = 'Persuasion review: ';
 
-export function mergeDraftIssues(draft: Draft, brief: Brief, previous: Issue[], changedIds: string[], incoming: Issue[] = []): Issue[] {
-  const issues = [...auditDraft(draft, brief),
+export function mergeDraftIssues(draft: Draft, brief: Brief, previous: Issue[], changedIds: string[], incoming: Issue[] = [], focus?: FunnelFocus): Issue[] {
+  const issues = [...auditDraft(draft, brief, focus),
     ...previous.filter(issue => issue.message.startsWith(PERSUASION_REVIEW_PREFIX) && !changedIds.includes(issue.sectionId)),
     ...incoming.filter(issue => changedIds.includes(issue.sectionId)),
   ];
@@ -37,7 +38,7 @@ export function validateStructure(draft: Draft, template: TemplateId, allowLegac
     throw new Error('The primary conversion section needs a CTA.');
 }
 
-export function auditDraft(draft: Draft, brief: Brief): Issue[] {
+export function auditDraft(draft: Draft, brief: Brief, focus?: FunnelFocus): Issue[] {
   const issues: Issue[] = [];
   const facts = Object.values(brief).join(' ').toLowerCase();
   const factNumbers = new Set(
@@ -51,6 +52,12 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
     const copy = [section.headline, section.body, ...section.bullets, section.cta].join(' ');
     const add = (message: string, severity: Issue['severity'] = 'review') =>
       issues.push({ sectionId: section.id, severity, message });
+    if (isPracticeWide(focus) && focus) {
+      const excluded = focus.services.filter(s => !s.included && copy.toLowerCase().includes(s.name.toLowerCase()));
+      if (excluded.length) add(`Remove excluded services from practice positioning: ${excluded.map(s => s.name).join(', ')}.`, 'warning');
+      if (/bundled package|combined package|all-in-one program|all services included/i.test(copy) && !/bundled package|combined package|all-in-one program|all services included/i.test(facts))
+        add('Practice-wide positioning must not invent a combined package or umbrella program.', 'warning');
+    }
     if (section.cta.trim() && primaryCta && section.cta.trim() !== primaryCta)
       add('Use the same approved primary CTA label throughout the page.', 'warning');
     const quoted = [...copy.matchAll(/[“"]([^“”"]{25,})[”"]/g)].map(match => match[1]);

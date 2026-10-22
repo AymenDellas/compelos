@@ -1,3 +1,4 @@
+import { clientFunnelFocus } from '@/lib/funnel-focus';
 import { createHash } from 'node:crypto';
 import { notFound } from 'next/navigation';
 import { ClientOnboardingWizard } from '@/components/business/ClientOnboardingWizard';
@@ -26,6 +27,7 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
     const documentSha256 = canSign ? createHash('sha256').update(Buffer.from(await agreementPdf(data).arrayBuffer())).digest('hex') : '';
     return <ClientOnboardingWizard token={token} revision={Number(result.rows[0].revision)} save={saveGuidedOnboardingAction} briefReady={clientBriefReady(data)} signing={{ canSign, documentSha256, email: data.email }} initial={{
         clientName: data.clientName, projectName: data.projectName, projectType: data.projectType, website: data.website,
+        funnelFocus: clientFunnelFocus(data.funnelFocus),
         form: data.form, journey: { ...journeyFor(data), briefPrepared: clientBriefReady(data), reference: null },
         scope: data.scope, access: data.access, overrides: data.overrides,
         agreement: { status: data.agreement.status, deliverables: data.agreement.deliverables },

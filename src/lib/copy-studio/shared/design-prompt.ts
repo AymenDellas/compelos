@@ -1,3 +1,4 @@
+import { focusForGeneration, isPracticeWide } from '../../funnel-focus';
 import { generationPayload, generationSchema, type Project } from './contracts';
 import { templates } from './templates';
 import { designQualityBrief } from './design-direction';
@@ -60,8 +61,10 @@ export function buildDesignPrompt(project: Project): string {
     ? 'Build a concise resource opt-in page around one form. Do not add a booking CTA or a second offer.'
     : input.template === 'vsl'
       ? 'Build a video-led page that earns the view and leads to the supplied primary action. Viewing the video supports that action; do not introduce another conversion goal.'
+      : isPracticeWide(input.funnelFocus) ? 'Build one coherent practice-wide page around the approved coach positioning, audience and problem, leading to one discovery-call action. Relevant services support the message; do not turn it into a services directory, fictional umbrella package, combined pricing or several service CTAs. Service choices belong in booking qualification only.'
       : 'Build a focused page that helps suitable visitors understand the offer and take the supplied booking action. Do not add a lead magnet, shopping flow, or second offer.';
   const context = {
+    funnelFocus: focusForGeneration(input.funnelFocus),
     offer: input.brief.offerName,
     description: input.brief.description,
     audience: input.brief.audience,
@@ -116,6 +119,7 @@ The context and editorial handoff explain the task; never display strategy, writ
 
 USABILITY AND IMPLEMENTATION
 Use semantic landmarks, one h1, logical heading order, selectable text, visible keyboard focus, real field labels and comfortable touch targets. Target 7:1 contrast for headings and essential body copy, with an absolute minimum of 4.5:1 for ordinary text and 3:1 for large text against the actual composited background, including the brightest atmospheric area and marker treatments. Test at 375px and 1440px with no horizontal overflow, clipped copy, decorative-layer overscroll or text hidden by lighting. Let sections grow with content. Reserve real media dimensions and use reliable font loading and fallbacks. Exercise Show all testimonials with keyboard and pointer, verify its expanded/collapsed state, and count the full quotations in the document against FINAL COPY DATA so none disappear.
+For practice-wide projects, booking.choices are approved qualification candidates only when booking.enabled and booking.confirmed are true. Configure them in the booking flow only after confirming the selected platform supports them. Do not display them as separate offers or silently alter an external booking tool. If disabled or unconfirmed, retain one discovery-call path without service selection.
 Use real destination URLs, forms and video assets only when supplied. If an integration is missing, make its configuration point explicit in the separate handoff. A demo form must clearly say it is not connected and never pretend a submission succeeded; do not collect or send data without a configured destination. Do not invent URLs to fill gaps.
 When modifying an existing page, preserve real integrations and remove obsolete backgrounds, overlays and pseudo-elements so the previous theme cannot show through.
 

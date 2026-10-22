@@ -4,12 +4,17 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, ArrowRight, Check, ChevronDown, ExternalLink, Loader2, Pencil } from 'lucide-react';
 import { CASE_STUDY_CONSENT_TEXT, CASE_STUDY_CONSENT_VERSION, CLIENT_AGREEMENT_LABELS, CLIENT_PAYMENT_LABELS, type OnboardingData } from '@/lib/business';
 import { ACCESS_NEEDS, essentialsPresent, introductionDraft, introductionMailto, journeyFor, needsWebsiteIntroduction, publishingReady, clientJourneyStep, storedJourneyStep } from '@/lib/onboarding-journey';
-import { proofPreview, reviewSummary, type ReviewKey } from '@/lib/onboarding-review';
+import { proofPreview, reviewSummary, sourceExcerpt, type ReviewKey } from '@/lib/onboarding-review';
 import { ClientAccessRequests } from './ClientAccessRequests';
 import { CompelLogo } from './CompelLogo';
 import './client-onboarding.css';
+import { AgreementSigningForm } from '@/app/portal/[token]/AgreementSigningForm';
+import { AgreementPdfViewer } from '@/app/portal/[token]/AgreementPdfViewer';
+import { isPracticeWide, practiceBookingReady, type ClientFunnelFocus } from '@/lib/funnel-focus';
+import { BookingChoicesEditor } from './BookingChoicesEditor';
 
 export type ClientOnboardingDraft = Pick<OnboardingData, 'clientName' | 'projectName' | 'projectType' | 'website' | 'form' | 'journey' | 'scope' | 'access' | 'overrides'> & {
+    funnelFocus?: ClientFunnelFocus;
     agreement: Pick<OnboardingData['agreement'], 'status' | 'deliverables'>;
     payment: Pick<OnboardingData['payment'], 'structure' | 'status' | 'price' | 'currency' | 'deposit' | 'balance' | 'link'>;
 };
@@ -30,7 +35,8 @@ export function ClientOnboardingWizard({ initial, token, revision, save, briefRe
     const [step, setStep] = useState(() => {
         const job = journeyFor(initial);
         const saved = clientJourneyStep(job.step, job.flowVersion);
-        return saved > 2 && needsWebsiteIntroduction(job) && !job.introductionSent && initial.form.status !== 'COMPLETE' ? 2 : saved;
+        return saved > 2 && initial.form.status !== 'COMPLETE'
+            && ((needsWebsiteIntroduction(job) && !job.introductionSent) || !practiceBookingReady(initial.funnelFocus)) ? 2 : saved;
     });
     const [draft, setDraft] = useState<ClientOnboardingDraft>(() => ({ ...initial, journey: { ...journeyFor(initial), flowVersion: 3, step: storedJourneyStep(step) } }));
     const [status, setStatus] = useState('Progress saved');
@@ -49,6 +55,8 @@ export function ClientOnboardingWizard({ initial, token, revision, save, briefRe
     const introduction = useRef<HTMLDetailsElement>(null);
     const previousStep = useRef(step);
     const j = journeyFor(draft);
+    const practice = isPracticeWide(draft.funnelFocus);
+    const practiceServices = draft.funnelFocus?.services ?? draft.funnelFocus?.booking.choices.map(c => ({ id: c.id, name: c.label, description: '' })) ?? [];
     const proof = useMemo(() => proofPreview(draft.form.proof || ''), [draft.form.proof]);
     const needsContact = needsWebsiteIntroduction(j);
     const verified = publishingReady(draft);
@@ -84,6 +92,7 @@ export function ClientOnboardingWizard({ initial, token, revision, save, briefRe
             for (const key of editable) if (snapshot.form[key] !== undefined) form.set(key, String(snapshot.form[key] || ''));
             const job = journeyFor(snapshot);
             form.set('journeyPatch', JSON.stringify({ step: job.step, flowVersion: job.flowVersion, reviewSummaries: job.reviewSummaries, websiteManager: job.websiteManager, publisher: job.publisher, contactName: job.contactName, contactEmail: job.contactEmail, introductionMessage: job.introductionMessage, introductionSent: job.introductionSent, requestedChanges: job.requestedChanges }));
+            if (isPracticeWide(snapshot.funnelFocus) && snapshot.funnelFocus) form.set('bookingChoices', JSON.stringify(snapshot.funnelFocus.booking));
             if (received.length) form.set('receivedAccessIds', JSON.stringify(received));
             if (options.confirmOffer) form.set('confirmOffer', 'yes');
             if (options.confirmScope) form.set('confirmScope', 'yes');
@@ -138,6 +147,11 @@ export function ClientOnboardingWizard({ initial, token, revision, save, briefRe
                 setError('Send the introduction email, then tick “I’ve sent the introduction” to continue.');
                 return;
             }
+            if (!practiceBookingReady(current.current.funnelFocus)) {
+                setError('Review your booking services and tick the confirmation below before continuing.');
+                document.getElementById('booking-choices-confirmation')?.focus();
+                return;
+            }
         }
         const confirming = step === 0 && next > step;
         const snapshot = { ...current.current, journey: { ...journeyFor(current.current), flowVersion: 3 as const, step: storedJourneyStep(next), ...(confirming ? { offerConfirmed: true, offerConfirmedAt: new Date().toISOString() } : {}) } };
@@ -149,6 +163,7 @@ export function ClientOnboardingWizard({ initial, token, revision, save, briefRe
     async function finish() {
         if (!essentialsPresent(current.current) || !j.offerConfirmed) { setError('Return to Your offer and confirm the details first.'); return; }
         if (needsWebsiteIntroduction(j) && !j.introductionSent) { setError('Go back to Going live and confirm that you’ve sent the introduction email.'); return; }
+        if (!practiceBookingReady(current.current.funnelFocus)) { setError('Go back to Going live and confirm your booking services before submitting.'); return; }
         if (!scopeAccepted) { setError('Confirm that you’ve reviewed the project scope before submitting.'); return; }
         if (draft.projectType === 'CASE_STUDY' && !draft.form.caseStudyConsent) { setError('Review and accept the case-study permission before submitting.'); return; }
         setBusy(true);
@@ -158,24 +173,53 @@ export function ClientOnboardingWizard({ initial, token, revision, save, briefRe
     function input(key: keyof OnboardingData['form'], label: string, hint?: string, multiline = true) {
         return <WizardField name={key} label={label} hint={hint} value={String(draft.form[key] || '')} multiline={multiline} onChange={v => field(key, v)} />;
     }
+    function practicePlan() {
+        if (!practice) return null;
+        return <section className="onboarding-practice-plan" role="note" aria-labelledby="practice-plan-title">
+            <p className="onboarding-plan-eyebrow">Important · Your page & booking plan</p>
+            <h2 id="practice-plan-title">{practiceServices.length > 1 ? 'We noticed you offer multiple services.' : 'Here’s how your page and booking will work.'}</h2>
+            <p>Your page will lead with the shared focus below. When visitors book a discovery call with you, they’ll choose from the services below.</p>
+            <dl><div><dt>The focus of your page</dt><dd className="onboarding-plan-focus">{sourceExcerpt(draft.form.offer, 42) || 'You’ll review the main outcome of your work in your brief.'}</dd></div>
+                <div><dt>Services they can choose when booking</dt><dd>{practiceServices.length ? <ul>{practiceServices.map(service => <li key={service.id}>{service.name}</li>)}</ul> : 'Add your service choices during Going live.'}</dd></div></dl>
+            <p className="onboarding-plan-next"><strong>P.S.</strong> You can edit these service choices in Step 3: Going live.</p>
+        </section>;
+    }
     function original(key: ReviewKey, label = 'View original details') {
         return draft.form[key]?.trim() ? <details className="onboarding-source"><summary>{label}<ChevronDown size={14} aria-hidden /></summary><div className="onboarding-original">{draft.form[key]}</div></details> : null;
     }
     const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(j.contactEmail);
     const accessItems = draft.access.filter(item => !item.nonBlocking && !['VERIFIED', 'NOT_NEEDED'].includes(item.status) && (!item.generated || j.publisher === 'COMPEL'));
 
+    function signingContent() {
+        if (!signing?.canSign || agreementDone) return null;
+        return <details className="onboarding-disclosure onboarding-signing" open={submitted || undefined}>
+            <summary>Read & sign your agreement<ChevronDown size={16} aria-hidden /></summary>
+            <AgreementPdfViewer url={`/portal/${token}/agreement`} />
+            <AgreementSigningForm token={token} clientName={draft.clientName} email={signing.email} documentSha256={signing.documentSha256}
+                onBeforeSign={async () => { setBusy(true); const saved = await persist(); if (!saved) setBusy(false); return saved; }}
+                onResult={result => {
+                    setBusy(false);
+                    if (!result.signed) return;
+                    if (result.revision !== undefined) rev.current = result.revision;
+                    const next = { ...current.current, agreement: { ...current.current.agreement, status: 'SIGNED_CLIENT' as const } };
+                    current.current = next; setDraft(next); setStatus('Agreement signed');
+                }} />
+        </details>;
+    }
     return <main className="client-onboarding" data-screen={!briefReady ? 'preparing' : submitted ? 'complete' : step < 0 ? 'welcome' : steps[step]}>
         <div className="onboarding-brand"><CompelLogo /></div>
         {!briefReady ? <section className="onboarding-welcome"><p className="onboarding-kicker">{draft.projectName}</p><h1>We’re preparing<br />your brief.</h1><p>We’ll send you a summary to review as soon as it’s ready.</p><a className="onboarding-text-link" href="mailto:aymen@getcompel.co">Get in touch <ArrowRight size={15} /></a></section>
-        : submitted ? <section className="onboarding-welcome onboarding-complete" aria-labelledby="complete-title"><span className="onboarding-complete-mark"><Check size={26} /></span><p className="onboarding-kicker">Brief submitted</p><h1 id="complete-title">You’re all set,<br />{draft.clientName.split(' ')[0]}.</h1><p>Your brief is with us. We’ll review the details and follow up on your publishing setup.</p>{!agreementDone && <p className="onboarding-completion-note">Your agreement is awaiting signature. Contact Aymen to arrange signing.</p>}<a className="btn btn-primary" href={`/portal/${token}/project`}>Open your project <ArrowRight size={17} /></a><button className="onboarding-text-link" onClick={() => { journey({ flowVersion: 3, step: storedJourneyStep(0) }); setStep(0); }}>Review my answers</button></section>
-        : step < 0 ? <section className="onboarding-welcome" aria-labelledby="welcome-title"><p className="onboarding-kicker">{draft.projectName}</p><h1 id="welcome-title">Welcome, {draft.clientName.split(' ')[0]}.<br />Let’s make this yours.</h1><p>We’ve prepared your brief. Check the details, arrange your launch, and confirm the plan.</p><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void go(0)}>{busy ? <Loader2 size={17} className="animate-spin" /> : null}Review my brief <ArrowRight size={17} /></button><span className="onboarding-welcome-note">4 short steps. Your progress saves as you go.</span>{error && <p className="onboarding-error" role="alert">{error}</p>}</section>
+        : submitted ? <section className="onboarding-welcome onboarding-complete" aria-labelledby="complete-title"><span className="onboarding-complete-mark"><Check size={26} /></span><p className="onboarding-kicker">Brief submitted</p><h1 id="complete-title">You’re all set,<br />{draft.clientName.split(' ')[0]}.</h1><p>Your brief is with us. We’ll review the details and follow up on your publishing setup.</p>{!agreementDone && <p className="onboarding-completion-note">{signing?.canSign ? 'Your agreement is ready to review and sign below.' : 'We’ll make your agreement available to sign once its terms are ready.'}</p>}{signingContent()}<a className="btn btn-primary" href={`/portal/${token}/project`}>Open your project <ArrowRight size={17} /></a><button className="onboarding-text-link" onClick={() => { journey({ flowVersion: 3, step: storedJourneyStep(0) }); setStep(0); }}>Review my answers</button></section>
+        : step < 0 ? <section className="onboarding-welcome" data-practice={practice} aria-labelledby="welcome-title"><p className="onboarding-kicker">{draft.projectName}</p><h1 id="welcome-title">Welcome, {draft.clientName.split(' ')[0]}.<br />Let’s make this yours.</h1><p>We’ve prepared your brief. Check the details, arrange your launch, and confirm the plan.</p><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void go(0)}>{busy ? <Loader2 size={17} className="animate-spin" /> : null}Review my brief <ArrowRight size={17} /></button>{practicePlan()}<span className="onboarding-welcome-note">4 short steps. Your progress saves as you go.</span>{error && <p className="onboarding-error" role="alert">{error}</p>}</section>
         : <section className="onboarding-shell" id="onboarding-form" aria-labelledby="journey-title">
-            <div className="onboarding-step-meta"><span>Step {step + 1} of {steps.length} <span className="onboarding-meta-separator">/</span> {steps[step]}</span><span className="onboarding-save-status" role="status" aria-live="polite" data-error={status === 'Not saved'}>{status === 'Saving…' ? <Loader2 size={12} className="animate-spin" /> : status === 'Progress saved' ? <Check size={12} /> : null}{status}</span></div>
+            <div className="onboarding-step-meta"><span>Step {step + 1} of {steps.length} <span className="onboarding-meta-separator">/</span> {step === 0 && practice ? 'Your practice' : steps[step]}</span><span className="onboarding-save-status" role="status" aria-live="polite" data-error={status === 'Not saved'}>{status === 'Saving…' ? <Loader2 size={12} className="animate-spin" /> : status === 'Progress saved' ? <Check size={12} /> : null}{status}</span></div>
             <div className="onboarding-step-track" role="progressbar" aria-label="Onboarding steps" aria-valuenow={step + 1} aria-valuemin={0} aria-valuemax={steps.length}>{steps.map((label, i) => <span key={label} data-complete={i <= step} />)}</div>
-            <header className="onboarding-step-heading"><h1 id="journey-title" ref={heading} tabIndex={-1}>{titles[step]}</h1><p>{descriptions[step]}</p></header>
+            <header className="onboarding-step-heading"><h1 id="journey-title" ref={heading} tabIndex={-1}>{step === 0 && practice ? 'Your practice, in your words.' : titles[step]}</h1><p>{step === 0 && practice ? 'Review the outcome of your work, who you help, and the details behind it.' : descriptions[step]}</p></header>
             {error && <div className="onboarding-error" role="alert"><p>{error}</p>{status === 'Not saved' && <div className="onboarding-inline-actions"><button className="onboarding-text-link" onClick={() => void persist()}>Retry save</button><button className="onboarding-text-link" onClick={async () => { try { await navigator.clipboard.writeText(JSON.stringify({ form: current.current.form, reviewSummaries: journeyFor(current.current).reviewSummaries, requestedChanges: journeyFor(current.current).requestedChanges }, null, 2)); setStatus('Answers copied'); } catch { setError('Copy is unavailable. Your answers are still on this page.'); } }}>Copy my answers</button></div>}</div>}
             <div className="onboarding-step-body" inert={busy}>
-                {step === 0 && <div className="onboarding-review-list">{essentials.map(([key, label]) => <ReviewItem key={key} name={key} label={label} value={draft.form[key]} required multiline={key !== 'offerName'} onChange={v => field(key, v)} />)}</div>}
+                {step === 0 && <>
+                    <div className="onboarding-review-list">{essentials.map(([key, label]) => <ReviewItem key={key} name={key} label={practice && key === 'offerName' ? 'Your practice or coach name' : practice && key === 'offer' ? 'How do you help your clients?' : label} value={draft.form[key]} required multiline={key !== 'offerName'} onChange={v => field(key, v)} />)}</div>
+                </>}
                 {step === 1 && <>
                     <div className="onboarding-review-list">{contextFields.map(([key, label]) => <ReviewItem key={key} name={`summary-${key}`} label={label} value={summary(key)} maxLength={2000} onChange={v => updateSummary(key, v)}>{original(key)}</ReviewItem>)}</div>
                     <ReviewItem name="summary-proof" label="Client experiences & results" value={summary('proof')} maxLength={2000} onChange={v => updateSummary('proof', v)} preview={j.reviewSummaries?.proof === undefined && proof.total > 0 ? <div className="onboarding-proof-preview">{proof.items.map((item, i) => <figure key={i}><blockquote>{item.excerpt}</blockquote>{item.attribution && <figcaption>{item.attribution}</figcaption>}</figure>)}{proof.total > 3 && <p className="onboarding-note">Showing 3 of {proof.total} accounts. All originals are retained.</p>}</div> : undefined}>{original('proof', 'View full testimonials')}</ReviewItem>
@@ -189,6 +233,7 @@ export function ClientOnboardingWizard({ initial, token, revision, save, briefRe
                     <div className="onboarding-contact-reveal" data-open={needsContact} inert={!needsContact} aria-hidden={!needsContact}><div className="onboarding-contact-clip"><div className="onboarding-contact"><h2>Your website contact</h2><div className="onboarding-contact-fields"><WizardField name="contactName" label="Their name" value={j.contactName} onChange={contactName => journey({ contactName, introductionMessage: '', introductionSent: false })} multiline={false} /><WizardField name="contactEmail" label="Their email" value={j.contactEmail} onChange={contactEmail => journey({ contactEmail, introductionSent: false })} multiline={false} type="email" /></div><details ref={introduction} className="onboarding-disclosure"><summary>View introduction <ChevronDown size={16} aria-hidden /></summary><div className="onboarding-fields"><WizardField name="introductionMessage" label="Your introduction" value={j.introductionMessage || introductionDraft(draft)} onChange={introductionMessage => journey({ introductionMessage })} /><div className="onboarding-inline-actions"><button type="button" className="btn btn-outline" onClick={async () => { try { await navigator.clipboard.writeText(j.introductionMessage || introductionDraft(draft)); setStatus('Introduction copied'); } catch { setError('Select and copy the introduction above.'); } }}>Copy message</button>{emailValid && <a className="btn btn-outline" href={introductionMailto(draft)}>Open in email <ExternalLink size={14} /></a>}</div><p className="onboarding-note">Check and send the message in your email app. Aymen is copied in.</p><label className="onboarding-check"><input type="checkbox" required={needsContact} checked={j.introductionSent} onChange={e => journey({ introductionSent: e.target.checked })} /><span>I’ve sent the introduction email and copied Aymen.</span></label></div></details></div></div></div></div>
                     {input('bookingUrl', 'Where can people book with you?', 'Your booking link, if you have one.', false)}
                     <details className="onboarding-disclosure"><summary>Booking questions & follow-up <span>Optional</span><ChevronDown size={16} aria-hidden /></summary><div className="onboarding-fields">{input('qualification', 'Questions people answer before booking')}{input('nurture', 'Emails or messages sent after booking')}</div></details>
+                    {practice && draft.funnelFocus && <section className="onboarding-booking-services" aria-labelledby="booking-services-title"><div className="onboarding-required-heading"><h2 id="booking-services-title">Your booking services</h2><span>Required</span></div><BookingChoicesEditor required value={draft.funnelFocus.booking} onChange={booking => change(old => ({ ...old, funnelFocus: { ...old.funnelFocus!, booking } }))} /></section>}
                     {j.publisher === 'COMPEL' && j.accessNeeds.length > 0 && <details className="onboarding-disclosure"><summary>Your website tools <span>Optional</span><ChevronDown size={16} aria-hidden /></summary><div className="onboarding-fields"><p className="onboarding-note">Share what you know. We can help with the rest.</p>{j.accessNeeds.map(need => { const key = ({ domain: 'domainProvider', website: 'websitePlatform', booking: 'bookingPlatform', email: 'emailPlatform', tracking: 'analyticsPlatform' } as const)[need]; return <div key={need}>{input(key, ({ domain: 'Web address provider', website: 'Website platform', booking: 'Booking tool', email: 'Email tool', tracking: 'Website analytics' } as const)[need], ACCESS_NEEDS[need], false)}</div>; })}</div></details>}
                     {accessItems.length > 0 && <details className="onboarding-disclosure"><summary>Access instructions <span>{accessItems.length}</span><ChevronDown size={16} aria-hidden /></summary><div><ClientAccessRequests items={accessItems} receiptControl={item => item.status !== 'RECEIVED' && <button type="button" className="btn btn-outline" onClick={() => { receipts.current.add(item.id); change(old => ({ ...old, access: old.access.map(a => a.id === item.id ? { ...a, status: 'RECEIVED' } : a) })); }}>I granted this access</button>} /></div></details>}
                     <p className="onboarding-note onboarding-assurance"><Check size={14} aria-hidden />{verified ? 'Publishing setup verified by Compel.' : 'Your page goes live after you approve it. We’ll confirm the setup with you.'}</p>
@@ -196,8 +241,9 @@ export function ClientOnboardingWizard({ initial, token, revision, save, briefRe
                 {step === 3 && <>
                     <section className="onboarding-scope"><h2>What’s included</h2><ScopeLines value={draft.scope.included || draft.agreement.deliverables} empty="We’ll confirm the deliverables with you." /><h2>Outside this scope</h2><ScopeLines value={draft.scope.excluded} empty="We’ll confirm any exclusions with you." /><dl className="onboarding-scope-facts"><div><dt>Target launch</dt><dd>{draft.scope.targetLaunchDate || 'To be agreed together'}</dd></div><div><dt>Approval owner</dt><dd>{draft.scope.approvalOwner || draft.clientName}</dd></div></dl>{draft.scope.revisionProcess && <details className="onboarding-disclosure"><summary>Revisions & approvals<ChevronDown size={16} aria-hidden /></summary><p>{draft.scope.revisionProcess}</p></details>}</section>
                     <section className="onboarding-agreement" id="agreement"><div><h2>Your agreement</h2><p>{draft.overrides.includes('agreement') ? 'Complete' : CLIENT_AGREEMENT_LABELS[draft.agreement.status]}</p></div><a className="btn btn-outline" href={`/portal/${token}/agreement`} target="_blank" rel="noreferrer">Open agreement PDF <ExternalLink size={14} /></a></section>
+                    {signingContent()}
                     {draft.projectType === 'PAID' && <section className="onboarding-payment" id="payment"><div><h2>Project payment</h2><p>{draft.payment.currency} {draft.payment.price ?? 'Price to be confirmed'}{draft.payment.structure === 'DEPOSIT' && draft.payment.deposit !== null ? ` · ${draft.payment.currency} ${draft.payment.deposit} deposit` : ''}</p><span className="onboarding-note">{CLIENT_PAYMENT_LABELS[draft.payment.status]}</span></div>{draft.payment.link && !paymentDone && <a className="btn btn-outline" href={draft.payment.link} target="_blank" rel="noreferrer">Open secure payment <ExternalLink size={14} /></a>}</section>}
-                    <div className="onboarding-consents"><label className="onboarding-check"><input type="checkbox" checked={scopeAccepted} onChange={e => setScopeAccepted(e.target.checked)} /><span>I’ve reviewed and confirm the project scope above.</span></label>{draft.projectType === 'CASE_STUDY' && <label className="onboarding-check"><input type="checkbox" checked={Boolean(draft.form.caseStudyConsent)} onChange={e => field('caseStudyConsent', e.target.checked)} /><span>{CASE_STUDY_CONSENT_TEXT}</span></label>}<p className="onboarding-note">Confirming the scope doesn’t sign your agreement.{!agreementDone ? ' We’ll arrange signing with you.' : ''}</p></div>
+                    <div className="onboarding-consents"><label className="onboarding-check"><input type="checkbox" checked={scopeAccepted} onChange={e => setScopeAccepted(e.target.checked)} /><span>I’ve reviewed and confirm the project scope above.</span></label>{draft.projectType === 'CASE_STUDY' && <label className="onboarding-check"><input type="checkbox" checked={Boolean(draft.form.caseStudyConsent)} onChange={e => field('caseStudyConsent', e.target.checked)} /><span>{CASE_STUDY_CONSENT_TEXT}</span></label>}<p className="onboarding-note">{agreementDone ? 'Your agreement signature has been saved.' : signing?.canSign ? 'The scope checkbox confirms your approval of the deliverables. Use the signing form above to sign your agreement.' : 'The scope checkbox confirms your approval of the deliverables. We’ll make your agreement available to sign once its terms are ready.'}</p></div>
                 </>}
             </div>
             <div className="onboarding-actions"><button type="button" className="onboarding-back" disabled={busy} onClick={() => void go(step - 1)}><ArrowLeft size={16} />Back</button><button type="button" className="btn btn-primary" disabled={busy} onClick={() => void (step === 3 ? finish() : go(step + 1))}>{busy && <Loader2 size={16} className="animate-spin" />}{step === 0 ? 'Looks right, continue' : step === 2 ? 'Continue to agreement' : step === 3 ? 'Confirm scope & submit' : 'Continue'}{step < 3 && <ArrowRight size={16} />}</button></div>

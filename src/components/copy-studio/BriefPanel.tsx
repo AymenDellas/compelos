@@ -1,3 +1,5 @@
+import { FunnelFocusControls } from '../business/FunnelFocusControls';
+import { isPracticeWide, newFunnelFocus, practiceLabels, type FunnelFocus } from '@/lib/funnel-focus';
 import {
   ArrowRight,
   Check,
@@ -74,7 +76,9 @@ export function BriefPanel({
   onboardingNote,
   onDetachOnboarding,
   onReferenceMode,
+  onFunnelFocus,
 }: {
+  onFunnelFocus: (value: FunnelFocus) => void;
   project: Project;
   disabled: boolean;
   attempted: boolean;
@@ -111,7 +115,7 @@ export function BriefPanel({
     return (
       <div className={`field ${invalid ? 'invalid' : ''}`} key={key}>
         <label htmlFor={props.id}>
-          {fieldLabels[key]}
+          {isPracticeWide(project.funnelFocus) && key in practiceLabels ? practiceLabels[key as keyof typeof practiceLabels] : fieldLabels[key]}
           {required && (
             <span className="required" aria-hidden="true">
               *
@@ -178,9 +182,10 @@ export function BriefPanel({
       </div>
       {onboardingNote && <p className="onboarding-status" role="status">{onboardingNote}</p>}
       {project.onboarding && <button className="text-button small onboarding-unlink" disabled={disabled} onClick={onDetachOnboarding}>Unlink client</button>}
+      <FunnelFocusControls value={project.funnelFocus} analysis={project.source?.focusAnalysis} disabled={disabled} onChange={onFunnelFocus} onApprove={() => onFunnelFocus({ ...(project.funnelFocus || newFunnelFocus('specific_offer', project.source?.focusAnalysis)), approvedAt: new Date().toISOString() })} />
       <fieldset disabled={disabled} className="offer-scope">
-        <legend className="eyebrow">WHAT ARE WE WRITING FOR?</legend>
-        <div className="offer-mode-options" role="radiogroup" aria-label="Offer focus">
+        <legend className="eyebrow">WRITING CONTEXT</legend>
+        <div className="offer-mode-options" role="radiogroup" aria-label="Writing context">
           {([
             ['current', project.onboarding ? 'The onboarding offer' : 'My current offer'],
             ['focused', 'One specific offer'],

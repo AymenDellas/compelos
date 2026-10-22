@@ -33,6 +33,28 @@
 .onboarding-step-heading p { margin-top: 12px; color: var(--text-dim); font-size: 14px; line-height: 1.7; }
 .onboarding-step-heading h1:focus { outline: none; }
 .onboarding-step-body { display: grid; gap: 28px; }
+.onboarding-practice-plan { border: 1px solid #e6b680; border-left: 4px solid #bd4d0d; background: #fff2e3; color: #653214; border-radius: 8px; padding: 24px; display: grid; gap: 14px; overflow-wrap: anywhere; }
+.onboarding-practice-plan .onboarding-plan-eyebrow { color: #963b08; font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+.onboarding-practice-plan h2 { color: #8c3609; font-size: 21px; font-weight: 600; line-height: 1.4; letter-spacing: -.025em; }
+.onboarding-practice-plan > p { font-size: 13px; line-height: 1.8; }
+.onboarding-practice-plan dl { display: grid; gap: 20px; border-top: 1px solid #e6bf98; padding-top: 18px; }
+.onboarding-practice-plan dt { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.onboarding-practice-plan dd { font-size: 13px; line-height: 1.8; }
+.onboarding-practice-plan .onboarding-plan-focus { color: #713009; font-size: 19px; line-height: 1.55; font-weight: 600; }
+.onboarding-practice-plan ul { display: grid; gap: 0; list-style: none; padding: 0; margin: 0; }
+.onboarding-practice-plan li { border-bottom: 1px solid #ebccb0; padding: 10px 0; color: #713009; font-size: 15px; font-weight: 600; line-height: 1.6; }
+.onboarding-practice-plan li:last-child { border-bottom: 0; padding-bottom: 0; }
+.onboarding-practice-plan .onboarding-plan-next { color: #754222; font-size: 12px; }
+.onboarding-welcome[data-practice='true'] { max-width: 680px; }
+.onboarding-welcome > .onboarding-practice-plan { margin-top: 24px; width: 100%; text-align: left; }
+.onboarding-booking-services { display: grid; gap: 16px; border-top: 1px solid var(--line); padding-top: 24px; }
+.onboarding-required-heading { display: flex; align-items: center; gap: 12px; }
+.onboarding-required-heading h2 { font-size: 16px; font-weight: 500; }
+.onboarding-required-heading > span, .booking-choice-toggle strong { font-size: 11px; color: #365742; font-weight: 600; }
+.client-onboarding .booking-choice-row input { background: #fff; border-color: var(--line-strong); min-height: 48px; font-size: 14px; }
+.client-onboarding .booking-choice-row button { min-height: 44px; padding: 6px; }
+.client-onboarding .booking-choice-toggle { border-top: 1px solid var(--line); padding-top: 18px; font-size: 13px; }
+.booking-choice-toggle strong { display: block; }
 .onboarding-review-list { display: grid; }
 .onboarding-review-item { padding: 21px 0; border-bottom: 1px solid var(--line); min-width: 0; }
 .onboarding-review-item:first-child { padding-top: 0; }
@@ -130,6 +152,9 @@
 .onboarding-complete-mark { width: 54px; height: 54px; border-radius: 50%; background: #e8efdf; color: #3e6137; display: grid; place-items: center; margin-bottom: 20px; }
 .onboarding-completion-note { color: #716546; font-size: 12px; max-width: 360px; margin-top: 18px !important; }
 @media (max-width: 600px) {
+  .onboarding-practice-plan { padding: 20px; }
+  .onboarding-practice-plan ul { grid-template-columns: 1fr; }
+  .client-onboarding .booking-choice-row input { font-size: 16px; }
   .client-onboarding { padding: 26px 22px 22px; }
   .onboarding-brand { margin-bottom: 40px; }
   .onboarding-shell { padding-bottom: 25px; }
@@ -157,3 +182,6 @@
   .onboarding-field input, .onboarding-field textarea { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .client-onboarding *, .client-onboarding *::before, .client-onboarding *::after { transition: none !important; scroll-behavior: auto !important; } }
+
+.client-onboarding .onboarding-signing { width: 100%; text-align: left; }
+.client-onboarding .onboarding-signing .field { background: transparent; color: inherit; border: 1px solid var(--line); padding: 10px 12px; border-radius: 6px; }

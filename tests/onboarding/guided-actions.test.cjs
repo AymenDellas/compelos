@@ -222,3 +222,67 @@ test('both website-contact branches require a sent introduction before leaving G
         assert.equal(record.data.onboarding.form.status, 'COMPLETE');
     }
 });
+
+
+test('practice booking answers share the ordered revision save and cannot modify operator strategy or agreement', async () => {
+    const form = guided();
+    const { newFunnelFocus } = require('../../src/lib/funnel-focus.ts');
+    const focus = { ...newFunnelFocus('practice_wide'), approvedAt: '2026-10-22T10:00:00Z',
+        recommendation: { mode: 'practice_wide', rationale: 'Internal strategy note', confidence: 'high', uncertainties: [] },
+        services: [{ id: 'career', name: 'Career Coaching', description: 'Career decisions', included: true, evidence: [{ quote: 'Source career coaching.', url: 'https://example.com/career' }] }],
+        booking: { enabled: false, confirmed: false, choices: [{ id: 'career-choice', label: 'Career Coaching', serviceId: 'career' }] } };
+    record.data.onboarding.funnelFocus = focus;
+    const agreement = JSON.stringify(record.data.onboarding.agreement);
+    form.set('funnelFocus', JSON.stringify({ mode: 'specific_offer', approvedAt: '' }));
+    form.set('bookingChoices', JSON.stringify({ enabled: true, confirmed: true, choices: [{ id: 'career-choice', label: 'Career decisions', serviceId: 'career' }, { id: 'other', label: 'Not sure yet' }] }));
+    form.set('offer', 'Corrected practice positioning.');
+    const saved = await actions.saveGuidedOnboardingAction(form);
+    assert.equal(saved.ok, true); assert.equal(saved.revision, 1);
+    assert.equal(record.data.onboarding.funnelFocus.mode, 'practice_wide');
+    assert.equal(record.data.onboarding.funnelFocus.recommendation.rationale, 'Internal strategy note');
+    assert.equal(record.data.onboarding.funnelFocus.booking.choices[0].label, 'Career decisions');
+    assert.equal(record.data.onboarding.form.offer, 'Corrected practice positioning.');
+    assert.equal(JSON.stringify(record.data.onboarding.agreement), agreement);
+    const before = JSON.stringify(record.data);
+    assert.equal((await actions.saveGuidedOnboardingAction(form)).ok, false);
+    assert.equal(JSON.stringify(record.data), before);
+    form.set('revision', '1');
+    form.set('bookingChoices', JSON.stringify({ enabled: true, confirmed: true, choices: [{ id: 'secret', label: 'Hidden service', serviceId: 'not-approved' }] }));
+    assert.equal((await actions.saveGuidedOnboardingAction(form)).ok, false);
+    assert.equal(JSON.stringify(record.data), before);
+});
+test('single-offer clients cannot submit practice booking changes or silently choose a strategy', async () => {
+    const form = guided();
+    form.set('bookingChoices', JSON.stringify({ enabled: true, confirmed: true, choices: [{ id: 'new', label: 'New service' }] }));
+    assert.equal((await actions.saveGuidedOnboardingAction(form)).ok, false);
+    assert.equal(record.data.onboarding.funnelFocus, undefined);
+    form.delete('bookingChoices');
+    assert.equal((await actions.saveGuidedOnboardingAction(form)).ok, true);
+    assert.equal(record.data.onboarding.funnelFocus, undefined);
+});
+
+test('practice-wide clients must confirm visible booking services before agreement or submission, with unfinished drafts still allowed', async () => {
+    for (const complete of [false, true]) {
+        const form = guided();
+        const { newFunnelFocus } = require('../../src/lib/funnel-focus.ts');
+        const booking = { enabled: true, confirmed: false, choices: [{ id: 'career', label: 'Career decisions' }] };
+        record.data.onboarding.funnelFocus = { ...newFunnelFocus('practice_wide'), approvedAt: '2026-10-22T10:00:00Z', booking };
+        form.set('journeyPatch', JSON.stringify({ flowVersion: 3, step: 3, websiteManager: 'SELF', publisher: 'COMPEL' }));
+        assert.equal((await actions.saveGuidedOnboardingAction(form)).ok, true, 'An unconfirmed draft can save');
+        form.set('revision', '1'); form.set('confirmOffer', 'yes'); form.set('confirmScope', 'yes');
+        form.set('caseStudyConsentPresent', 'yes'); form.set('caseStudyConsent', 'accepted'); form.set('caseStudyConsentVersion', b.CASE_STUDY_CONSENT_VERSION);
+        form.set('journeyPatch', JSON.stringify({ flowVersion: 3, step: 4, websiteManager: 'SELF', publisher: 'COMPEL' }));
+        form.set('intent', complete ? 'complete' : 'save');
+        const before = JSON.stringify(record.data);
+        const blocked = await actions.saveGuidedOnboardingAction(form);
+        assert.equal(blocked.ok, false); assert.match(blocked.error, /booking services/);
+        assert.equal(JSON.stringify(record.data), before, 'Omitting booking changes cannot bypass confirmation');
+        form.set('bookingChoices', JSON.stringify({ ...booking, enabled: false, confirmed: true }));
+        assert.equal((await actions.saveGuidedOnboardingAction(form)).ok, false, 'Disabling service choices cannot bypass confirmation');
+        form.set('bookingChoices', JSON.stringify({ ...booking, confirmed: true }));
+        assert.equal((await actions.saveGuidedOnboardingAction(form)).ok, true);
+        assert.equal(record.data.onboarding.funnelFocus.booking.confirmed, true);
+        assert.equal(record.data.onboarding.journey.step, 4);
+        assert.equal(record.data.onboarding.form.status, complete ? 'COMPLETE' : 'IN_PROGRESS');
+    }
+});

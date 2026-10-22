@@ -1,4 +1,6 @@
 'use client';
+import { isPracticeWide } from '@/lib/funnel-focus';
+import { BookingChoicesEditor } from './BookingChoicesEditor';
 import { ACCESS_NEEDS, journeyFor, publishingReady, type AccessNeed } from '@/lib/onboarding-journey';
 import { reconcileOnboardingAccess, type OnboardingData } from '@/lib/business';
 import { Field } from './BusinessUi';
@@ -11,6 +13,7 @@ export function PublishingSetup({ data, update }: { data: OnboardingData; update
     });
     const unverified = data.access.filter(a => a.required && !a.nonBlocking && !['VERIFIED', 'NOT_NEEDED'].includes(a.status));
     return <div className="onboarding-prep">
+        {isPracticeWide(data.funnelFocus) && data.funnelFocus && <BookingChoicesEditor internal required value={data.funnelFocus.booking} onChange={booking => update(old => ({ ...old, funnelFocus: { ...old.funnelFocus!, booking } }))} />}
         <div><h3 className="font-medium">Publishing handoff</h3><p className="text-sm text-[var(--text-dim)] mt-2">Arrange this during onboarding. Publishing happens after client approval. A developer’s contact or an introduction does not confirm the handoff.</p></div>
         <fieldset className="space-y-2"><legend className="field-label">Access this project actually needs</legend>{Object.entries(ACCESS_NEEDS).map(([key, label]) => <label className="flex gap-2 text-sm" key={key}><input type="checkbox" checked={j.accessNeeds.includes(key as AccessNeed)} onChange={e => change({ accessNeeds: e.target.checked ? [...j.accessNeeds, key as AccessNeed] : j.accessNeeds.filter(k => k !== key) })} />{label}</label>)}</fieldset>
         <p className="text-sm text-[var(--text-dim)]">A booking link alone needs no calendar account access. Enable booking access only when changing questions, reminders, or integrations.</p>

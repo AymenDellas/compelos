@@ -1,4 +1,5 @@
 'use client';
+import { isPracticeWide } from '@/lib/funnel-focus';
 
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -235,7 +236,7 @@ export default function CopyStudio() {
         return {
           ...p,
           history: snapshot(p),
-          result: { draft, issues: mergeDraftIssues(draft, p.brief, p.result.issues, [sectionId], result.issues) },
+          result: { draft, issues: mergeDraftIssues(draft, p.brief, p.result.issues, [sectionId], result.issues, p.funnelFocus) },
         };
       }, captured.id);
       setToast('Section updated. Use Undo to restore the previous version.');
@@ -270,7 +271,7 @@ export default function CopyStudio() {
     update((p) => ({
       ...p,
       history: snapshot(p),
-      result: { draft, issues: mergeDraftIssues(draft, p.brief, p.result?.issues || [], []) },
+      result: { draft, issues: mergeDraftIssues(draft, p.brief, p.result?.issues || [], [], [], p.funnelFocus) },
     }));
     setToast('Section saved.');
     return true;
@@ -577,6 +578,7 @@ export default function CopyStudio() {
               onOnboarding={() => { setOnboardingOpen(true); refreshOnboardings(); }}
               onboardingNote={onboardingNote}
               onDetachOnboarding={() => update((p) => ({ ...p, onboarding: null }))}
+              onFunnelFocus={(funnelFocus) => update(p => ({ ...p, funnelFocus }))}
               onContext={(context) => update((p) => changeOfferContext(p, context))}
               onReferenceMode={(referenceMode) => update((p) => ({ ...p, referenceMode }))}
             />
@@ -616,7 +618,8 @@ export default function CopyStudio() {
         <ImportDialog
           current={project.brief}
           initial={project.source}
-          targetOffer={project.context?.mode === 'focused' ? project.brief.offerName.slice(0, 200) : ''}
+          funnelFocus={project.funnelFocus}
+          targetOffer={!isPracticeWide(project.funnelFocus) && project.context?.mode === 'focused' ? project.brief.offerName.slice(0, 200) : ''}
           initialUrl={linkedOnboarding?.landingPageUrl || linkedOnboarding?.website || ''}
           projectLimitReached={projects.length >= 100}
           onClose={() => setImportOpen(false)}
@@ -626,7 +629,7 @@ export default function CopyStudio() {
               const brief = briefSchema.parse({ voice: project.brief.voice });
               for (const key of keys) brief[key] = source.extraction.fields[key] || '';
               const next: Project = {
-                ...newProject(), brief, source, onboarding: project.onboarding,
+                ...newProject(), brief, source, funnelFocus: source.funnelFocus, onboarding: project.onboarding,
                 template: project.template, formula: project.formula,
                 context: { ...copyContextSchema.parse(project.context || {}), mode: 'focused' },
                 name: brief.offerName || source.selectedOffer || 'Untitled project',
@@ -643,6 +646,7 @@ export default function CopyStudio() {
               const next: Project = {
                 ...p,
                 brief,
+                ...(keys.length && source.funnelFocus ? { funnelFocus: source.funnelFocus } : {}),
                 source,
                 referenceMode: p.referenceMode === 'rework_voice' ? 'rework_voice' : 'preserve_voice',
                 name: p.name === 'Untitled project' && brief.offerName ? brief.offerName : p.name,
@@ -665,7 +669,7 @@ export default function CopyStudio() {
       {onboardingOpen && <OnboardingDialog
         project={project} records={onboardings} loading={onboardingLoading} error={onboardingError}
         onRefresh={refreshOnboardings} onClose={() => setOnboardingOpen(false)}
-        onApply={(record, fields, useTemplate, useConstraints, useReference) => {
+        onApply={(record, fields, useTemplate, useConstraints, useReference, useFocus) => {
           update((p) => {
             const brief = { ...p.brief };
             const differentClient = Boolean(p.onboarding && p.onboarding.id !== record.id);
@@ -673,6 +677,7 @@ export default function CopyStudio() {
             for (const key of fields) brief[key] = record.brief[key];
             return {
               ...p, brief,
+              ...(useFocus && record.funnelFocus ? { funnelFocus: record.funnelFocus } : {}),
               source: useReference && record.source ? record.source : p.source,
               offerBriefs: differentClient && p.offerBriefs ? {
                 current: p.offerBriefs.current && { ...p.offerBriefs.current, coachBio: '' },

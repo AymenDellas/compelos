@@ -18,8 +18,11 @@ export function normalizeFrame(frame) {
   return frame + '\n\n';
 }
 
-/** @param {ReadableStream<Uint8Array>} body @returns {ReadableStream<Uint8Array>} */
-export function normalizeStream(body) {
+/** @param {ReadableStream<Uint8Array>} body
+ * @param {(event: unknown) => boolean} [onEvent] Return true after a terminal event.
+ * @returns {ReadableStream<Uint8Array>}
+ */
+export function normalizeStream(body, onEvent) {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = '';
@@ -30,9 +33,18 @@ export function normalizeStream(body) {
         if (buffer.length > 2_000_000) throw new Error('The provider returned an oversized event.');
         let end;
         while ((end = buffer.indexOf('\n\n')) !== -1) {
-          const normalized = normalizeFrame(buffer.slice(0, end));
+          const frame = buffer.slice(0, end);
+          const normalized = normalizeFrame(frame);
           buffer = buffer.slice(end + 2);
           if (normalized) controller.enqueue(encoder.encode(normalized));
+          if (onEvent) {
+            const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
+            let event;
+            try { event = JSON.parse(data); } catch { continue; }
+            // Native Responses streams may remain open after their terminal event.
+            // Forward that event first, then close and cancel the upstream reader.
+            if (onEvent(event)) { controller.terminate(); return; }
+          }
         }
       },
       flush(controller) {

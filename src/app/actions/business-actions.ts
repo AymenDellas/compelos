@@ -1,16 +1,10 @@
 'use server';
 
+import { requireAdmin } from '@/lib/dashboard-auth';
 import { randomUUID } from 'node:crypto';
-import { revalidatePath } from 'next/cache';
 import {
-    CASE_STUDY_CONSENT_VERSION,
     blankOpportunity,
     buildProject,
-    generateAccessChecklist,
-    onboardingAccessChecklist,
-    reconcileOnboardingAccess,
-    mergeAccessChecklist,
-    normalizeOnboarding,
     type OfferProfile,
     type OpportunityData,
     type ProjectData,
@@ -23,13 +17,15 @@ import {
     recordActivity,
 } from '@/lib/business-store';
 import { validateOffer, validateOpportunity, validateProject } from '@/lib/business-validation';
-import { CLIENT_JOURNEY_FIELDS, clientBriefReady, essentialsPresent, journeyFor, needsWebsiteIntroduction, newOnboardingJourney } from '@/lib/onboarding-journey';
+import { newOnboardingJourney } from '@/lib/onboarding-journey';
 
 export async function loadBusinessAction() {
+    await requireAdmin();
     return readBusinessSnapshot();
 }
 
 export async function saveOfferAction(profile: OfferProfile, expectedVersion: number) {
+    await requireAdmin();
     validateOffer(profile);
     return businessTransaction(async (client) => {
         await client.query('SELECT pg_advisory_xact_lock(83472102)');
@@ -58,6 +54,7 @@ export type CreateOnboardingInput = {
 
 /** Start a client workflow even when the accepted deal was not previously tracked in Sales. */
 export async function createOnboardingAction(input: CreateOnboardingInput) {
+    await requireAdmin();
     const opportunity: OpportunityData = {
         ...blankOpportunity(),
         name: input.clientName.trim(),
@@ -102,6 +99,7 @@ export async function createOnboardingAction(input: CreateOnboardingInput) {
 }
 
 export async function saveClientProjectAction(id: string, data: ProjectData, expectedRevision: number) {
+    await requireAdmin();
     validateProject(data);
     return businessTransaction(async (client) => {
         const result = await client.query(
@@ -117,156 +115,5 @@ export async function saveClientProjectAction(id: string, data: ProjectData, exp
         );
         return mapProject(result.rows[0]);
     });
-}
-
-const PORTAL_FORM_FIELDS = [
-    'offerName', 'offer', 'audience', 'customerProblem', 'desiredOutcome', 'differentiation', 'unsuitableClients', 'trafficSources',
-    'landingPageUrl', 'bookingUrl', 'qualification', 'nurture', 'traffic', 'bookings', 'showRate',
-    'closeRate', 'bookingPlatform', 'crm', 'emailPlatform', 'analyticsPlatform', 'hostingPlatform',
-    'domainProvider', 'websitePlatform', 'repositoryProvider', 'assets', 'mustStay', 'avoid',
-    'importantContext', 'coachBio', 'proof', 'preferences',
-] as const;
-
-function portalValue(formData: FormData, key: string) {
-    const value = formData.get(key);
-    return typeof value === 'string' ? value.trim().slice(0, 20_000) : '';
-}
-
-/** Client-portal writes are deliberately limited to the client's own onboarding fields. */
-export async function saveClientPortalFormAction(formData: FormData) {
-    const token = portalValue(formData, 'token');
-    if (!/^[0-9a-f-]{36}$/i.test(token)) throw new Error('This portal link is invalid.');
-    const guided = formData.get('guidedVersion') === '1';
-    const savedRevision = await businessTransaction(async (client) => {
-        const result = await client.query(
-            `SELECT p.*,o.data AS opportunity,v.profile
-             FROM business_projects p
-             JOIN business_opportunities o ON o.id=p.opportunity_id
-             JOIN business_offer_versions v ON v.version=p.offer_version
-             WHERE p.data->'onboarding'->>'portalToken'=$1 FOR UPDATE OF p`,
-            [token],
-        );
-        if (!result.rows[0]) throw new Error('This portal link is no longer available.');
-        const project = result.rows[0].data as ProjectData;
-        const onboarding = normalizeOnboarding(project, result.rows[0].opportunity, result.rows[0].profile);
-        if (onboarding.journey && !guided) throw new Error('This onboarding now uses the guided brief. Reload this page before saving.');
-        if (guided && Number(formData.get('revision')) !== Number(result.rows[0].revision))
-            throw new Error('This onboarding changed in another window. Reload to see the latest answers before saving.');
-        if (guided && !clientBriefReady(onboarding))
-            throw new Error('Compel is still preparing your offer summary. Please return when your brief is ready.');
-        const nextForm = { ...onboarding.form };
-        for (const key of PORTAL_FORM_FIELDS) {
-            if (!formData.has(key)) continue;
-            const raw = formData.get(key);
-            nextForm[key] = typeof raw === 'string' ? raw.trim().slice(0, key === 'proof' ? 480000 : 20000) : '';
-        }
-        let journey = onboarding.journey;
-        const complete = portalValue(formData, 'intent') === 'complete';
-        if (guided) {
-            journey = { ...journeyFor(onboarding), briefPrepared: clientBriefReady(onboarding) };
-            const patch = JSON.parse(String(formData.get('journeyPatch') || '{}'));
-            for (const key of CLIENT_JOURNEY_FIELDS) if (Object.hasOwn(patch, key)) Object.assign(journey, { [key]: patch[key] });
-            const essentialChanged = ['offerName', 'offer', 'audience', 'customerProblem', 'desiredOutcome'].some(key => nextForm[key as keyof typeof nextForm] !== onboarding.form[key as keyof typeof nextForm]);
-            if (essentialChanged) { journey.offerConfirmed = false; journey.offerConfirmedAt = ''; }
-            if (formData.get('confirmOffer') === 'yes') {
-                if (!essentialsPresent({ ...onboarding, form: nextForm })) throw new Error('Please complete the five offer facts before confirming this summary.');
-                journey.offerConfirmed = true; journey.offerConfirmedAt = new Date().toISOString();
-            }
-            const old = journeyFor(onboarding);
-            if (['websiteManager', 'publisher', 'contactName', 'contactEmail'].some(key => journey![key as keyof typeof journey] !== old[key as keyof typeof old]) ||
-                ['domainProvider', 'websitePlatform', 'bookingPlatform', 'emailPlatform', 'analyticsPlatform'].some(key => nextForm[key as keyof typeof nextForm] !== onboarding.form[key as keyof typeof nextForm])) {
-                journey.responsibilityConfirmed = false; journey.verifiedAt = '';
-            }
-            if (complete && (!journey.offerConfirmed || !journey.websiteManager || !journey.publisher)) throw new Error('Confirm your offer and choose how your page will be published before finishing.');
-            if (complete && (journey.websiteManager === 'OTHER' || journey.publisher === 'DEVELOPER') && (!journey.contactName.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(journey.contactEmail))) throw new Error('Add a valid name and email for the person who helps with your website.');
-            if ((complete || (journey.flowVersion && journey.step >= 4)) && needsWebsiteIntroduction(journey) && !journey.introductionSent)
-                throw new Error('Send the introduction email and confirm “I’ve sent the introduction” before continuing.');
-            if (complete && journey.flowVersion && !onboarding.scope.confirmed && !onboarding.overrides.includes('scope') && formData.get('confirmScope') !== 'yes')
-                throw new Error('Review and confirm the project scope before submitting.');
-        }
-        if (!guided || formData.has('caseStudyConsentPresent')) {
-            nextForm.caseStudyConsent = onboarding.projectType === 'CASE_STUDY' && formData.get('caseStudyConsent') === 'accepted';
-            nextForm.testimonialCommitment = nextForm.caseStudyConsent && (formData.get('caseStudyConsentVersion') === CASE_STUDY_CONSENT_VERSION || formData.get('testimonialCommitment') === 'accepted');
-        }
-        if (!guided || formData.has('deploymentAccessConsent')) nextForm.deploymentAccessConsent = formData.get('deploymentAccessConsent') === 'accepted';
-        nextForm.status = complete ? 'COMPLETE' : guided && onboarding.form.status === 'COMPLETE' && journey?.offerConfirmed ? 'COMPLETE' : 'IN_PROGRESS';
-        const withForm = { ...onboarding, form: nextForm, ...(journey ? { journey } : {}) };
-        const generated = guided || nextForm.status === 'COMPLETE' ? onboardingAccessChecklist(withForm) : [];
-        let access = guided ? reconcileOnboardingAccess(withForm) : mergeAccessChecklist(onboarding.access, generated);
-        if (guided && formData.has('receivedAccessIds')) {
-            const received: unknown = JSON.parse(String(formData.get('receivedAccessIds')));
-            if (!Array.isArray(received) || received.some(id => typeof id !== 'string' || !access.some(item => item.id === id))) throw new Error('This access request is no longer available. Reload before trying again.');
-            access = access.map(item => received.includes(item.id) && !['VERIFIED', 'NOT_NEEDED'].includes(item.status) ? { ...item, status: 'RECEIVED' as const } : item);
-        }
-        const scope = guided && complete && formData.get('confirmScope') === 'yes'
-            ? { ...onboarding.scope, confirmed: true, confirmedAt: onboarding.scope.confirmedAt || new Date().toISOString() }
-            : onboarding.scope;
-        const next = { ...project, onboarding: { ...withForm, scope, access } };
-        validateProject(next);
-        await client.query(
-            'UPDATE business_projects SET data=$2,revision=revision+1,updated_at=NOW() WHERE id=$1',
-            [result.rows[0].id, JSON.stringify(next)],
-        );
-        if (!guided || complete) await recordActivity(client, result.rows[0].opportunity_id, 'ONBOARDING', complete ? 'Client completed the onboarding form' : 'Client saved onboarding form progress');
-        return Number(result.rows[0].revision || 0) + 1;
-    });
-    if (!guided || formData.get('intent') === 'complete') revalidatePath(`/portal/${token}`);
-    return { revision: savedRevision };
-}
-
-export async function saveGuidedOnboardingAction(formData: FormData) {
-    try { return { ok: true as const, ...await saveClientPortalFormAction(formData) }; }
-    catch (error) { return { ok: false as const, error: error instanceof Error ? error.message : 'Your answers could not be saved. Please retry.' }; }
-}
-
-export async function confirmClientScopeAction(formData: FormData) {
-    const token = portalValue(formData, 'token');
-    if (!/^[0-9a-f-]{36}$/i.test(token)) throw new Error('This portal link is invalid.');
-    await businessTransaction(async (client) => {
-        const result = await client.query(
-            `SELECT p.*,o.data AS opportunity,v.profile FROM business_projects p
-             JOIN business_opportunities o ON o.id=p.opportunity_id
-             JOIN business_offer_versions v ON v.version=p.offer_version
-             WHERE p.data->'onboarding'->>'portalToken'=$1 FOR UPDATE OF p`,
-            [token],
-        );
-        if (!result.rows[0]) throw new Error('This portal link is no longer available.');
-        const project = result.rows[0].data as ProjectData;
-        if (!project.onboarding) throw new Error('Onboarding has not been prepared.');
-        const onboarding = normalizeOnboarding(project, result.rows[0].opportunity, result.rows[0].profile);
-        const next = {
-            ...project,
-            onboarding: {
-                ...onboarding,
-                scope: { ...onboarding.scope, confirmed: true, confirmedAt: new Date().toISOString() },
-            },
-        };
-        validateProject(next);
-        await client.query('UPDATE business_projects SET data=$2,revision=revision+1,updated_at=NOW() WHERE id=$1', [result.rows[0].id, JSON.stringify(next)]);
-        await recordActivity(client, result.rows[0].opportunity_id, 'ONBOARDING', 'Client confirmed the project scope');
-    });
-    revalidatePath(`/portal/${token}`);
-}
-
-export async function markPortalAccessReceivedAction(formData: FormData) {
-    const token = portalValue(formData, 'token');
-    const itemId = portalValue(formData, 'itemId');
-    if (!/^[0-9a-f-]{36}$/i.test(token) || !itemId) throw new Error('This access request is invalid.');
-    await businessTransaction(async (client) => {
-        const result = await client.query(
-            `SELECT * FROM business_projects WHERE data->'onboarding'->>'portalToken'=$1 FOR UPDATE`,
-            [token],
-        );
-        if (!result.rows[0]) throw new Error('This portal link is no longer available.');
-        const project = result.rows[0].data as ProjectData;
-        if (!project.onboarding) throw new Error('Onboarding has not been prepared.');
-        const access = project.onboarding.access.map((item) => item.id === itemId ? { ...item, status: 'RECEIVED' as const } : item);
-        if (!access.some((item) => item.id === itemId)) throw new Error('Access request not found.');
-        const next = { ...project, onboarding: { ...project.onboarding, access } };
-        validateProject(next);
-        await client.query('UPDATE business_projects SET data=$2,revision=revision+1,updated_at=NOW() WHERE id=$1', [result.rows[0].id, JSON.stringify(next)]);
-        await recordActivity(client, result.rows[0].opportunity_id, 'ONBOARDING', 'Client marked an access request received');
-    });
-    revalidatePath(`/portal/${token}`);
 }
 

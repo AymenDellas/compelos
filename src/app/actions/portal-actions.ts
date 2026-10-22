@@ -6,6 +6,7 @@ import { agreementPdf } from '@/lib/agreement-pdf';
 import { CASE_STUDY_CONSENT_VERSION, generateAccessChecklist, onboardingAccessChecklist, reconcileOnboardingAccess, mergeAccessChecklist, normalizeOnboarding, type ProjectData } from '@/lib/business';
 import { businessTransaction, recordActivity } from '@/lib/business-store';
 import { validateProject } from '@/lib/business-validation';
+import { applyClientBooking, practiceBookingReady } from '@/lib/funnel-focus';
 import { CLIENT_JOURNEY_FIELDS, clientBriefReady, essentialsPresent, journeyFor, needsWebsiteIntroduction } from '@/lib/onboarding-journey';
 
 const PORTAL_FORM_FIELDS = [
@@ -180,7 +181,11 @@ export async function saveClientPortalFormAction(formData: FormData) {
         }
         if (!guided || formData.has('deploymentAccessConsent')) nextForm.deploymentAccessConsent = formData.get('deploymentAccessConsent') === 'accepted';
         nextForm.status = complete ? 'COMPLETE' : guided && onboarding.form.status === 'COMPLETE' && journey?.offerConfirmed ? 'COMPLETE' : 'IN_PROGRESS';
-        const withForm = { ...onboarding, form: nextForm, ...(journey ? { journey } : {}) };
+        const funnelFocus = formData.has('bookingChoices')
+            ? applyClientBooking(onboarding.funnelFocus, JSON.parse(String(formData.get('bookingChoices')))) : onboarding.funnelFocus;
+        if ((complete || (guided && journey?.flowVersion && journey.step >= 4)) && !practiceBookingReady(funnelFocus))
+            throw new Error('Review your booking services and tick the confirmation in Going live before continuing.');
+        const withForm = { ...onboarding, ...(funnelFocus ? { funnelFocus } : {}), form: nextForm, ...(journey ? { journey } : {}) };
         const generated = guided || nextForm.status === 'COMPLETE' ? onboardingAccessChecklist(withForm) : [];
         let access = guided ? reconcileOnboardingAccess(withForm) : mergeAccessChecklist(onboarding.access, generated);
         if (guided && formData.has('receivedAccessIds')) {

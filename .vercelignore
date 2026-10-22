@@ -1,0 +1,11 @@
+.git/
+.next/
+node_modules/
+tmp/
+output/
+data/
+queue/
+queue-results/
+.browser-profiles/
+.env*
+docs/agentrouter-access-diagnostic.md

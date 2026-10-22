@@ -1,3 +1,4 @@
+import { agentRouterError } from './agentrouter-error';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -62,56 +63,23 @@ export function clientResult(output: string): string {
       502,
       'The AI response requested an unsupported tool. No draft was saved. Please retry.',
     );
-  if (result.is_error) {
-    const message = result.error?.message || '';
-    if (/aliyun_waf|cf-chl-|challenge-platform|security challenge/i.test(message))
-      throw new AppError(
-        502,
-        'AgentRouter’s security gateway blocked the hosted request. The API key may still be valid. Ask AgentRouter to allow server-side access from this deployment, or configure a provider that supports it.',
-      );
-    if (/non-SSE response[\s\S]*(?:text\/html|<!doctype)|content.type.{0,10}text\/html/i.test(message))
-      throw new AppError(
-        502,
-        'AgentRouter returned an HTML page instead of AI data. Check its API endpoint and server-access policy. This does not establish that the API key is invalid.',
-      );
-    if (/quota|overdue|balance|credits|insufficient/i.test(message))
-      throw new AppError(
-        502,
-        'AgentRouter reports an account balance or quota issue. Check your account before retrying.',
-      );
-    if (/unauthorized.client/i.test(message))
-      throw new AppError(
-        502,
-        'AgentRouter rejected the client request. Please retry or check AgentRouter service status.',
-      );
-    if (/invalid.*(?:key|token)|authentication/i.test(message))
-      throw new AppError(
-        502,
-        'AgentRouter rejected the credentials. Check the Copy Studio token in the dashboard environment.',
-      );
-    if (/\b401\b/.test(message))
-      throw new AppError(
-        502,
-        'AgentRouter could not authenticate this request. Check that the deployed API key belongs to the configured AgentRouter endpoint.',
-      );
-    if (/429|rate.limit/i.test(message))
-      throw new AppError(
-        429,
-        'AgentRouter is busy or rate limited. Please wait a moment and retry.',
-      );
-    if (/timed?.?out|deadline|wall.clock|wall.time/i.test(message))
-      throw new AppError(
-        504,
-        'The AI request timed out. Your previous draft is safe. Please retry.',
-      );
-    throw new AppError(
-      502,
-      'AgentRouter could not finish this response. Your previous draft is safe. Please retry.',
-    );
-  }
+  if (result.is_error) throw agentRouterError(result.error?.message || '');
   if (!result.result?.trim())
     throw new AppError(502, 'AgentRouter returned an empty response. Please retry.');
   return result.result;
+}
+
+/** A CLI failure on stderr must not be mistaken for malformed model output. */
+export function clientProcessResult(output: string, stderr: string, exitCode: number | null, exitSignal: string | null): string {
+  if (exitCode === 55 || /FatalBudgetExceededError|wall.clock budget|wall.time exceeded/i.test(stderr))
+    throw agentRouterError('FatalBudgetExceededError');
+  if (exitCode !== 0 || exitSignal) {
+    try { clientResult(output); } catch (error) {
+      if (!(error instanceof ClientOutputError)) throw error;
+    }
+    throw new AppError(502, 'The AI client stopped before completing the request. Check the server connection and retry. Your saved work is unchanged.');
+  }
+  return clientResult(output);
 }
 
 /** Use AgentRouter's documented client, preserving its real authentication headers.
@@ -124,11 +92,17 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
         503,
         'Configure COPY_STUDIO_API_KEY in .env.local, then restart the dashboard.',
       );
-    const combinedSignal = AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]);
-    combinedSignal.throwIfAborted();
-    const workspace = await mkdtemp(join(tmpdir(), 'copy-studio-ai-'));
+    signal.throwIfAborted();
+    const controller = new AbortController();
+    const cancel = () => controller.abort(signal.reason);
+    signal.addEventListener('abort', cancel, { once: true });
+    const deadline = setTimeout(() => controller.abort(new DOMException('The AI request exceeded its time limit.', 'TimeoutError')), config.timeoutMs);
+    const combinedSignal = controller.signal;
+    let workspace: string | undefined;
     let closeRelay: (() => Promise<void>) | undefined;
     try {
+      workspace = await mkdtemp(join(tmpdir(), 'copy-studio-ai-'));
+      combinedSignal.throwIfAborted();
       const relay = await startAgentRouterRelay(config, combinedSignal, maxTokens);
       closeRelay = relay.close;
       const args = [
@@ -137,7 +111,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
         '--bare',
         '--safe-mode',
         '--auth-type',
-        'openai',
+        config.apiFormat === 'responses' ? 'openai-responses' : 'openai',
         '--output-format',
         'json',
         '--chat-recording=false',
@@ -152,7 +126,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
         '--system-prompt',
         system,
       ];
-      return await retryClientOutput(() => new Promise<string>((resolve, reject) => {
+      const attempt = retryClientOutput(() => new Promise<string>((resolve, reject) => {
         const child = spawn(process.execPath, args, {
           cwd: workspace,
           windowsHide: true,
@@ -181,8 +155,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
         });
         // Drain diagnostics, but never expose the CLI's environment or provider internals.
         child.stderr.on('data', (chunk: Buffer) => {
-          if (process.env.COPY_STUDIO_DIAGNOSTIC === '1')
-            diagnosticStderr = (diagnosticStderr + chunk.toString('utf8')).slice(-5000);
+          diagnosticStderr = (diagnosticStderr + chunk.toString('utf8')).slice(-16_000);
         });
         child.stdin.on('error', () => {
           /* The close event reports early process failures. */
@@ -204,47 +177,25 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
               new AppError(502, 'The AI response exceeded the size limit. No draft was saved.'),
             );
           try {
-            resolve(clientResult(output));
+            resolve(clientProcessResult(output, diagnosticStderr, exitCode, exitSignal));
           } catch (error) {
-            if (process.env.COPY_STUDIO_DIAGNOSTIC === '1') {
-              try {
-                const messages = JSON.parse(output);
-                const failure = Array.isArray(messages)
-                  ? messages.filter((message) => message?.type === 'result').at(-1)
-                  : null;
-                console.error(
-                  'AgentRouter diagnostic:',
-                  JSON.stringify({ subtype: failure?.subtype, error: failure?.error })
-                    .replaceAll(config.apiKey, '[redacted]')
-                    .replaceAll(relay.localToken, '[redacted]')
-                    .slice(0, 1500),
-                );
-              } catch {
-                console.error(
-                  'AgentRouter diagnostic:',
-                  JSON.stringify({
-                    exitCode,
-                    exitSignal,
-                    outputLength: output.length,
-                    prefix: output.slice(0, 500),
-                    suffix: output.slice(-500),
-                    stderr: diagnosticStderr,
-                  })
-                    .replaceAll(config.apiKey, '[redacted]')
-                    .replaceAll(relay.localToken, '[redacted]'),
-                );
-              }
-            }
+            if (process.env.COPY_STUDIO_DIAGNOSTIC === '1') console.error('AgentRouter client diagnostic:', JSON.stringify({
+              exitCode, exitSignal, outputLength: output.length, stderrLength: diagnosticStderr.length,
+              message: error instanceof AppError ? error.message : 'Invalid client output',
+            }));
             reject(error);
           }
         });
         // Source fields are JSON data. Escape @ to prevent the CLI's file-mention expansion.
         child.stdin.end(prompt.replaceAll('@', '\\u0040'));
       }), combinedSignal);
+      return await Promise.race([attempt, relay.failure.then(error => { controller.abort(error); throw error; })]);
     } finally {
+      clearTimeout(deadline);
+      signal.removeEventListener('abort', cancel);
       await closeRelay?.();
       // Remove only the empty directory we created. Never recursively delete unexpected files.
-      await rmdir(workspace).catch(() => {});
+      if (workspace) await rmdir(workspace).catch(() => {});
     }
   };
 }

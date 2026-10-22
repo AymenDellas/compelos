@@ -41,6 +41,7 @@ new Function('require', 'module', 'exports', compiled)(
       businessTransaction: (fn) => fn(client),
       recordActivity: (_client, _opportunityId, _kind, note) => { activity = note; },
     };
+    if (name === '@/lib/onboarding-journey' || name === '@/lib/funnel-focus') return {};
     if (name === '@/lib/business-validation') return { validateProject() {} };
     throw new Error(`Unexpected import: ${name}`);
   },
@@ -56,7 +57,7 @@ async function main() {
   form.set('signatureConsent', 'accepted');
   form.set('documentSha256', createHash('sha256').update('%PDF-1.4\nOriginal\n').digest('hex'));
   const result = await mod.exports.signClientAgreementAction({ error: '', signed: false }, form);
-  assert.deepEqual(result, { error: '', signed: true });
+  assert.deepEqual(result, { error: '', signed: true, revision: 1 });
   assert.equal(project.onboarding.agreement.status, 'SIGNED_CLIENT');
   assert.equal(project.onboarding.agreement.clientSignature.name, 'Sample Client');
   assert.match(project.onboarding.agreement.clientSignature.documentSha256, /^[0-9a-f]{64}$/);

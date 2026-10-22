@@ -137,7 +137,7 @@ export async function handleCopyStudio(
         ? { title: 'Pasted page copy', url: '', text: input.text, headings: [] }
         : readSource(input.url!, signal);
     }
-    const complete = completeOverride || createCompletion(providerConfig());
+    const complete = completeOverride || createCompletion(providerConfig(operation === 'import' ? 'extraction' : 'writing'));
     if (operation === 'generate')
       return generate(complete, generationSchema.parse(body), signal, progress);
     if (operation === 'revise') return revise(complete, revisionSchema.parse(body), signal);

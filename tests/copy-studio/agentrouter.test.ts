@@ -6,12 +6,14 @@ import {
 } from '../../src/lib/copy-studio/server/agentrouter-stream.mjs';
 import {
   clientResult,
+  clientProcessResult,
   createAgentRouterCompletion,
   retryClientOutput,
 } from '../../src/lib/copy-studio/server/agentrouter-client';
 import { startAgentRouterRelay } from '../../src/lib/copy-studio/server/agentrouter-relay';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { agentRouterError } from '../../src/lib/copy-studio/server/agentrouter-error';
 
 test('AgentRouter null and billing frames are removed, while completion and error frames survive', () => {
   assert.equal(normalizeFrame('data: null'), '');
@@ -236,5 +238,119 @@ test('private relay preserves genuine client identity and normalizes only provid
     await relay.close();
     upstream.closeAllConnections();
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});
+
+test('the reported no-channel refusal aborts the real client after one upstream request', { timeout: 30000 }, async () => {
+  let calls = 0;
+  const upstream = createServer(async (req, res) => {
+    for await (const _chunk of req) { /* Drain request. */ }
+    calls++;
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { type: 'new_api_error', message: '当前分组 default 下对于模型 deepseek-v4-flash 无可用渠道 (request id: private-request-id)' } }));
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  try {
+    const complete = createAgentRouterCompletion({ apiKey: 'fixture-only-token', model: 'unavailable-model', timeoutMs: 20000, baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1` });
+    const started = Date.now();
+    await assert.rejects(complete('Return JSON only.', 'Read the fixture.', new AbortController().signal), error => {
+      assert.match((error as Error).message, /model has no available route/);
+      assert.doesNotMatch((error as Error).message, /unreadable|private-request-id|fixture-only-token/);
+      return true;
+    });
+    assert.equal(calls, 1, 'Do not allow SDK retries or envelope retries to hide a provider configuration error');
+    assert.ok(Date.now() - started < 15000);
+  } finally { upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())); }
+});
+
+test('stderr-only client budget failures are timeouts and never trigger envelope recovery', async () => {
+  let calls = 0;
+  await assert.rejects(retryClientOutput(async () => {
+    calls++;
+    return clientProcessResult('', 'SAFE MODE\n{"error":{"type":"FatalBudgetExceededError","message":"wall-clock budget of 90s exceeded","code":55}}', 55, null);
+  }, new AbortController().signal), error => {
+    assert.match((error as Error).message, /timed out/);
+    assert.doesNotMatch((error as Error).message, /unreadable/);
+    return true;
+  });
+  assert.equal(calls, 1);
+  assert.throws(() => clientProcessResult('[{"type":"result","is_error":false,"result":"partial"}]', '', 1, null), /stopped before completing/);
+});
+
+test('model protocol refusals, unavailable routes and temporary outages have safe distinct errors', () => {
+  assert.match(agentRouterError('<title>405</title>Sorry, your request has been blocked as it may cause potential threats to the server security.', 405).message, /security gateway blocked/);
+  assert.match(agentRouterError('Model gpt-example does not support /v1/chat/completions, please use /v1/responses instead.', 400).message, /requires the Responses API/);
+  assert.match(agentRouterError('No available channels for model private-model (request id: secret)', 503).message, /no available route/);
+  assert.doesNotMatch(agentRouterError('private-account@example.com', 503).message, /private-account/);
+  assert.equal(agentRouterError('private-provider-body', 503).status, 503);
+  assert.match(agentRouterError('', 503).message, /temporarily unavailable/);
+});
+
+test('native Responses transport preserves a large complete Unicode result through the actual client', { timeout: 30000 }, async () => {
+  const content = JSON.stringify({ fields: { coachBio: 'Illustrative QA testimony. Café ✓. '.repeat(2200) }, warnings: [] });
+  let calls = 0;
+  const upstream = createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw);
+    calls++;
+    assert.equal(req.url, '/v1/responses');
+    assert.match(req.headers['user-agent'] || '', /^QwenCode\//);
+    assert.equal(req.headers.authorization, 'Bearer fixture-only-token');
+    assert.equal(body.max_output_tokens, 25000, 'Reasoning must not consume the visible JSON allowance');
+    assert.equal(body.max_tokens, undefined);
+    assert.equal(body.tools, undefined);
+    assert.equal(body.tool_choice, undefined);
+    assert.equal(body.store, false);
+    assert.equal(body.reasoning.effort, 'low');
+    assert.ok(body.input.length > 0);
+    const item = { id: 'msg_fixture', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: content, annotations: [] }] };
+    const response = { id: 'resp_fixture', object: 'response', created_at: 1, model: 'fixture-model', status: 'completed', output: [item], usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } };
+    const events = [
+      { type: 'response.created', response: { ...response, status: 'in_progress', output: [] } },
+      { type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress', content: [] } },
+      { type: 'response.content_part.added', item_id: item.id, output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } },
+      { type: 'response.output_text.delta', item_id: item.id, output_index: 0, content_index: 0, delta: content },
+      { type: 'response.output_text.done', item_id: item.id, output_index: 0, content_index: 0, text: content },
+      { type: 'response.content_part.done', item_id: item.id, output_index: 0, content_index: 0, part: item.content[0] },
+      { type: 'response.output_item.done', output_index: 0, item },
+      { type: 'response.completed', response },
+    ];
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    // Some gateways keep streaming billing/keepalive data after completion.
+    res.write(events.map((event, index) => `event: ${event.type}\ndata: ${JSON.stringify({ ...event, sequence_number: index })}\n\n`).join(''));
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  try {
+    const complete = createAgentRouterCompletion({ apiKey: 'fixture-only-token', model: 'fixture-model', apiFormat: 'responses', reasoningEffort: 'low', timeoutMs: 20000, baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1` });
+    assert.equal(await complete('Return the supplied JSON only. No tools.', 'Return the fixture.', new AbortController().signal), content);
+    assert.equal(calls, 1);
+  } finally { upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())); }
+});
+
+test('Responses errors and incomplete events stop the real client even when the gateway keeps the stream open', { timeout: 30000 }, async () => {
+  for (const event of [
+    { type: 'error', code: 'rate_limit_exceeded', message: 'private-org exceeded its token rate limit' },
+    { type: 'response.failed', response: { error: { code: 'server_error', message: 'private upstream failed' } } },
+    { type: 'response.incomplete', response: { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } } },
+  ]) {
+    let calls = 0;
+    const upstream = createServer(async (req, res) => {
+      for await (const _chunk of req) { /* Drain request. */ }
+      calls++;
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    try {
+      const complete = createAgentRouterCompletion({ apiKey: 'fixture-only-token', model: 'fixture-model', apiFormat: 'responses', timeoutMs: 20000, baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1` });
+      const start = Date.now();
+      await assert.rejects(complete('Return JSON.', 'Read the fixture.', new AbortController().signal), error => {
+        assert.match((error as Error).message, event.type === 'error' ? /rate limited/ : event.type === 'response.failed' ? /temporarily unavailable/ : /cut short/);
+        assert.doesNotMatch((error as Error).message, /unreadable|private/);
+        return true;
+      });
+      assert.equal(calls, 1);
+      assert.ok(Date.now() - start < 15000);
+    } finally { upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())); }
   }
 });

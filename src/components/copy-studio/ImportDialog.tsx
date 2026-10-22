@@ -1,3 +1,5 @@
+import { FunnelFocusControls } from '../business/FunnelFocusControls';
+import { isPracticeWide, newFunnelFocus, practiceLabels, type FunnelFocus } from '@/lib/funnel-focus';
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, FileText, Link2, LoaderCircle, ShieldCheck, X } from 'lucide-react';
 import {
@@ -21,7 +23,9 @@ export function ImportDialog({
   targetOffer = '',
   initialUrl = '',
   projectLimitReached = false,
+  funnelFocus,
 }: {
+  funnelFocus?: FunnelFocus;
   current: Brief;
   initial: ImportResult | null;
   onClose: () => void;
@@ -39,12 +43,13 @@ export function ImportDialog({
   const [text, setText] = useState(initial?.source.url ? '' : initial?.source.text.slice(0, MAX_SOURCE_CHARACTERS) || '');
   const [offerFocus, setOfferFocus] = useState(targetOffer);
   const [result, setResult] = useState<ImportResult | null>(reusable);
+  const [focus, setFocus] = useState<FunnelFocus>(funnelFocus || initial?.funnelFocus || newFunnelFocus('specific_offer', initial?.focusAnalysis));
   const [chosenOffer, setChosenOffer] = useState(reusable?.selectedOffer || '');
   const [selected, setSelected] = useState<BriefKey[]>([]);
   const [busy, setBusy] = useState(false);
   const [readingReference, setReadingReference] = useState(false);
   const [error, setError] = useState('');
-  const differentOffer = Boolean(result?.selectedOffer && current.offerName.trim() && result.selectedOffer.toLowerCase().trim() !== current.offerName.toLowerCase().trim());
+  const differentOffer = Boolean((isPracticeWide(focus) && (funnelFocus || initial?.funnelFocus)?.mode !== 'practice_wide' && current.offerName.trim()) || (result?.selectedOffer && current.offerName.trim() && result.selectedOffer.toLowerCase().trim() !== current.offerName.toLowerCase().trim()));
   useEffect(() => {
     dialog.current?.showModal();
     return () => {
@@ -64,7 +69,13 @@ export function ImportDialog({
       const extracted = await importSource(input, request.signal);
       request.signal.throwIfAborted();
       if (original) extracted.source = original;
+      if (isPracticeWide(focus) && !input.targetOffer) {
+        const positioning = extracted.focusAnalysis?.positioning;
+        extracted.extraction = { ...extracted.extraction, fields: { ...positioning?.fields }, evidence: (positioning?.evidence || []).filter(e => e.field in fieldLabels) as ImportResult['extraction']['evidence'] };
+        extracted.selectedOffer = undefined;
+      }
       setResult(extracted);
+      setFocus(newFunnelFocus(input.targetOffer ? 'specific_offer' : focus.mode, extracted.focusAnalysis));
       setChosenOffer(extracted.selectedOffer ?? input.targetOffer ?? '');
       setSelected(
         (Object.keys(extracted.extraction.fields) as BriefKey[]).filter(
@@ -105,7 +116,25 @@ export function ImportDialog({
     }
   };
   const chooseOffer = (name: string) => result && void runExtraction({ text: result.source.text.slice(0, MAX_SOURCE_CHARACTERS), targetOffer: name }, result.source);
-  const choosing = Boolean(result && (result.extraction.offers?.length || 0) > 1 && !chosenOffer);
+  const choosing = Boolean(result && !isPracticeWide(focus) && (result.extraction.offers?.length || 0) > 0 && !chosenOffer && !Object.keys(result.extraction.fields).length);
+  function chooseFocus(next: FunnelFocus) {
+    const changed = next.mode !== focus.mode;
+    setFocus(next);
+    if (!result || !changed) return;
+    if (isPracticeWide(next)) {
+      const positioning = result.focusAnalysis?.positioning;
+      setResult({ ...result, selectedOffer: undefined, extraction: { ...result.extraction,
+        fields: { ...positioning?.fields }, evidence: (positioning?.evidence || []).filter(e => e.field in fieldLabels) as ImportResult['extraction']['evidence'],
+        warnings: [...result.extraction.warnings.filter(w => !w.includes('Choose one offer')), 'Review the practice positioning and only include relevant services and evidence. Missing facts remain editable.'] } });
+      setChosenOffer('');
+      setSelected(Object.keys(positioning?.fields || {}) as BriefKey[]);
+    } else {
+      setResult({ ...result, selectedOffer: undefined, extraction: { ...result.extraction, fields: {}, evidence: [] } });
+      setChosenOffer(''); setSelected([]);
+    }
+  }
+  const approve = () => result && onApply({ ...result, funnelFocus: { ...focus, approvedAt: new Date().toISOString() } }, selected, differentOffer);
+
   return (
     <dialog
       ref={dialog}
@@ -127,7 +156,10 @@ export function ImportDialog({
           <X size={20} />
         </button>
       </div>
-      {result && <SourceCoverage source={result.source} />}
+      {result && <><SourceCoverage source={result.source} />
+        <FunnelFocusControls value={focus} analysis={result.focusAnalysis} onChange={chooseFocus} disabled={busy} />
+        {!result.focusAnalysis && <button className="text-button" disabled={busy} onClick={() => void runExtraction({ text: result.source.text })}>Check funnel focus from saved capture</button>}
+      </>}
       {!result ? (
         <form ref={form} onSubmit={(event) => {
           event.preventDefault();
@@ -137,6 +169,7 @@ export function ImportDialog({
             We’ll read the page and propose answers to the five essentials for you to review.
             The full original copy also stays attached for its voice and context. Existing answers change only when you select replacements.
           </p>
+          {initial?.source.text && !reusable && <div className="notice"><p>Refresh the analysis from your saved page capture. Your existing answers stay unchanged until you apply the result.</p><button type="button" className="button secondary" disabled={busy} onClick={() => void runExtraction({ text: initial.source.text, ...(offerFocus ? { targetOffer: offerFocus } : {}) }, initial.source)}>Refresh analysis from saved capture</button></div>}
           <div className="segmented import-tabs">
             <button
               type="button"
@@ -271,7 +304,7 @@ export function ImportDialog({
           {chosenOffer && <div className="selected-offer-note"><span>Selected offer: <strong>{chosenOffer}</strong></span>
             {(result.extraction.offers?.length || 0) > 1 && <button className="text-button" disabled={busy} onClick={() => setChosenOffer('')}>Choose another offer</button>}
           </div>}
-          {differentOffer && <p className="notice warning">Applying this offer starts a separate copy project. Select its offer name and the facts to use. Previous pricing, proof, and terms are left out. Your existing project stays saved.</p>}
+          {differentOffer && <p className="notice warning">Applying this offer starts a separate copy project. Select its name and the facts to use. Previous pricing, proof, and terms are left out. Your existing project stays saved.</p>}
           {differentOffer && projectLimitReached && <p className="notice error">Export and remove an older project before adding another offer. This browser has reached 100 projects.</p>}
           <div className="selection-actions">
             <button
@@ -300,12 +333,13 @@ export function ImportDialog({
                       }
                     />
                     <span>
-                      <strong>{fieldLabels[key]}</strong>
+                      <strong>{isPracticeWide(focus) && key in practiceLabels ? practiceLabels[key as keyof typeof practiceLabels] : fieldLabels[key]}</strong>
                       {current[key] && <small>Replaces your existing value</small>}
-                      <p>{key === 'proof' && approvedTestimonials(value).length > 3
-                        ? `${approvedTestimonials(value).length} complete testimonials retained. Review the full social proof below; no quotes have been shortened.` : value}</p>
+                      {isPracticeWide(focus) && key !== 'proof' ? null : <p>{key === 'proof' && approvedTestimonials(value).length > 3
+                        ? `${approvedTestimonials(value).length} complete testimonials retained. Review the full social proof below; no quotes have been shortened.` : value}</p>}
                     </span>
                   </label>
+                  {isPracticeWide(focus) && key !== 'proof' && <textarea aria-label={`Proposed ${fieldLabels[key]}`} value={value} rows={3} maxLength={6000} onChange={e => setResult(old => old ? { ...old, extraction: { ...old.extraction, fields: { ...old.extraction.fields, [key]: e.target.value } } } : old)} />}
                   <details>
                     <summary>{key === 'proof' && approvedTestimonials(value).length > 3 ? 'Show all collected social proof' : 'Source evidence'}</summary>
                     {key === 'proof' && approvedTestimonials(value).length > 3 ? <p className="full-proof-review">{value}</p> : result.extraction.evidence
@@ -348,7 +382,7 @@ export function ImportDialog({
             <button
               className="button primary"
               disabled={!selected.length || (differentOffer && (!selected.includes('offerName') || projectLimitReached))}
-              onClick={() => onApply(result, selected, differentOffer)}
+              onClick={approve}
             >
               <Check size={16} />
               Apply {selected.length} field{selected.length === 1 ? '' : 's'}
