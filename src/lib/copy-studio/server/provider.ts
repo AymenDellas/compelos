@@ -11,6 +11,32 @@ export type Completion = ((
 ) => Promise<string>) & { inputByteLimit?: number };
 export type ProviderConfig = { apiKey: string; baseUrl: string; model: string; timeoutMs: number; inputByteLimit?: number };
 
+/** Bound an optional multi-call stage without aborting the enclosing generation. */
+export function completionDeadline(complete: Completion, deadline: number): Completion {
+  const bounded: Completion = async (system, prompt, signal, maxTokens) => {
+    signal.throwIfAborted();
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new DOMException('Editorial review time budget exhausted', 'TimeoutError');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new DOMException('Editorial review time budget exhausted', 'TimeoutError')), remaining);
+    const cancel = () => controller.abort(signal.reason);
+    signal.addEventListener('abort', cancel, { once: true });
+    try {
+      const result = await complete(system, prompt, controller.signal, maxTokens);
+      controller.signal.throwIfAborted();
+      if (Date.now() >= deadline) throw new DOMException('Editorial review time budget exhausted', 'TimeoutError');
+      return result;
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', cancel);
+    }
+  };
+  Object.defineProperty(bounded, 'inputByteLimit', {
+    get: () => complete.inputByteLimit, set: value => { complete.inputByteLimit = value; },
+  });
+  return bounded;
+}
+
 export class ProviderSizeError extends AppError {
   constructor() {
     super(502, 'The source exceeds the AI provider’s request limit. Use a more specific page or pasted excerpt, or increase the provider’s input allowance. Retrying the same request will not resolve it.');

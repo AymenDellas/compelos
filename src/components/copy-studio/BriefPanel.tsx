@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import {
   fieldLabels,
+  MAX_PROOF_CHARACTERS,
   requiredKeys,
   type BriefKey,
   type Project,
@@ -99,7 +100,7 @@ export function BriefPanel({
     const props = {
       id: `brief-${key}`,
       value: project.brief[key] ?? '',
-      maxLength: 6000,
+      maxLength: key === 'proof' ? MAX_PROOF_CHARACTERS : 6000,
       onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
         onBrief(key, e.target.value),
       placeholder: key === 'cta' ? templates[project.template].action : placeholders[key],
@@ -130,7 +131,7 @@ export function BriefPanel({
         )}
         {key === 'proof' && (
           <small className="field-hint">
-            No proof yet? Leave this empty. We’ll omit the proof block.
+            Keep complete testimonials with their attributions. The strongest accounts are featured and the rest stay under Show all testimonials. No proof yet? Leave this empty.
             {!project.brief.proof.trim() && project.source && project.referenceMode !== 'off' && project.context?.mode !== 'new' && <>
               {' '}<button type="button" className="text-button" disabled={disabled} onClick={onReviewEvidence}>Check page for client evidence</button>
             </>}
@@ -153,12 +154,12 @@ export function BriefPanel({
     );
   };
   return (
-    <section className="brief-panel" aria-labelledby="brief-heading">
+    <section className="brief-panel" id="copy-brief" aria-labelledby="brief-heading">
       <div className="panel-heading">
-        <div className="panel-number">01</div>
+        <div className="panel-number" aria-hidden="true"><FileText size={16} /></div>
         <div>
           <h2 id="brief-heading">Shape the brief</h2>
-          <p>Good copy starts with a clear offer.</p>
+          <p>Offer details, source material, and writing preferences.</p>
         </div>
       </div>
       <div className="prefill-options" role="group" aria-label="Prefill the five essentials">

@@ -16,23 +16,43 @@ const resultSchema = z.object({
   stats: z.object({ tools: z.object({ totalCalls: z.number() }).optional() }).optional(),
 });
 
+/** Only a broken client envelope is retryable; provider refusals remain actionable errors. */
+export class ClientOutputError extends AppError {}
+
+export async function retryClientOutput(
+  run: () => Promise<string>,
+  signal: AbortSignal,
+): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
+    try {
+      const response = await run();
+      signal.throwIfAborted();
+      return response;
+    } catch (error) {
+      signal.throwIfAborted();
+      if (!(error instanceof ClientOutputError) || attempt >= 1) throw error;
+    }
+  }
+}
+
 export function clientResult(output: string): string {
   let messages: unknown;
   try {
     messages = JSON.parse(output);
   } catch {
-    throw new AppError(
+    throw new ClientOutputError(
       502,
       'The AI client returned an unreadable response. Your previous draft is safe. Please retry.',
     );
   }
   if (!Array.isArray(messages))
-    throw new AppError(502, 'The AI client returned an unexpected response. Please retry.');
+    throw new ClientOutputError(502, 'The AI client returned an unexpected response. Please retry.');
   const parsed = resultSchema.safeParse(
     messages.filter((message) => message?.type === 'result').at(-1),
   );
   if (!parsed.success)
-    throw new AppError(
+    throw new ClientOutputError(
       502,
       'The AI client ended before returning a complete response. Please retry.',
     );
@@ -132,7 +152,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
         '--system-prompt',
         system,
       ];
-      return await new Promise<string>((resolve, reject) => {
+      return await retryClientOutput(() => new Promise<string>((resolve, reject) => {
         const child = spawn(process.execPath, args, {
           cwd: workspace,
           windowsHide: true,
@@ -140,11 +160,6 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
           signal: combinedSignal,
           env: {
             ...process.env,
-            // Serverless hosts may report a home directory that does not exist.
-            // Keep the client's settings and state inside this request's temporary directory.
-            HOME: workspace,
-            USERPROFILE: workspace,
-            QWEN_HOME: join(workspace, '.qwen'),
             OPENAI_API_KEY: relay.localToken,
             OPENAI_BASE_URL: relay.baseUrl,
             OPENAI_MODEL: config.model,
@@ -191,7 +206,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
           try {
             resolve(clientResult(output));
           } catch (error) {
-            if (process.env.COPY_STUDIO_DIAGNOSTIC === '1' || process.env.VERCEL === '1') {
+            if (process.env.COPY_STUDIO_DIAGNOSTIC === '1') {
               try {
                 const messages = JSON.parse(output);
                 const failure = Array.isArray(messages)
@@ -211,11 +226,9 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
                     exitCode,
                     exitSignal,
                     outputLength: output.length,
-                    ...(process.env.COPY_STUDIO_DIAGNOSTIC === '1' ? {
-                      prefix: output.slice(0, 500),
-                      suffix: output.slice(-500),
-                      stderr: diagnosticStderr,
-                    } : {}),
+                    prefix: output.slice(0, 500),
+                    suffix: output.slice(-500),
+                    stderr: diagnosticStderr,
                   })
                     .replaceAll(config.apiKey, '[redacted]')
                     .replaceAll(relay.localToken, '[redacted]'),
@@ -227,7 +240,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
         });
         // Source fields are JSON data. Escape @ to prevent the CLI's file-mention expansion.
         child.stdin.end(prompt.replaceAll('@', '\\u0040'));
-      });
+      }), combinedSignal);
     } finally {
       await closeRelay?.();
       // Remove only the empty directory we created. Never recursively delete unexpected files.

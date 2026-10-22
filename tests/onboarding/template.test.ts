@@ -69,7 +69,7 @@ test('client blockers retain the same start gate with client-facing actions and 
     const client = onboardingBlockers(data, 'client');
     assert.deepEqual(client.map(item => item.key), internal.map(item => item.key));
     assert.doesNotMatch(JSON.stringify(client), /manual override|Collect the structured|Record the full payment|The client needs/i);
-    assert.match(client.find(item => item.key === 'form')!.detail, /Complete the business questions/);
+    assert.match(client.find(item => item.key === 'form')!.detail, /prefilled summary/);
     data.agreement.status = 'SIGNED_CLIENT';
     assert.equal(onboardingBlockers(data, 'client').find(item => item.key === 'agreement')!.label, 'Waiting for Compel to sign');
     data.overrides = ['agreement'];

@@ -18,7 +18,7 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
   const schema = "compel_prospect_test_" + randomUUID().replaceAll("-", "");
   assert.match(schema, /^compel_prospect_test_[a-f0-9]{32}$/);
   const names =
-    "compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs|case_study_prospects|case_study_activities|leads";
+    "compel_worker_events|compel_worker_config|compel_linkedin_accounts|compel_worker_usage|compel_worker_profile_usage|compel_worker_sessions|compel_worker_jobs|compel_research_budget|compel_prospect_runs|case_study_prospects|case_study_activities|leads";
   const qualify = (sql) =>
     sql.replace(new RegExp("\\b(" + names + ")\\b", "g"), `"${schema}".$1`);
   const pool = {
@@ -51,7 +51,8 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
         dailyLimit: 4,
       })),
     });
-    await core.acquireSession(pool, "legacy-0", "owner-one");
+    await pool.query("UPDATE compel_linkedin_accounts SET processing_enabled=TRUE,processing_until=NOW()+interval '2 hours',connected_at=NOW()");
+  await core.acquireSession(pool, "legacy-0", "owner-one");
     await core.acquireSession(pool, "legacy-1", "owner-two");
     const runId = await store.createRun(pool, {
       accountId: "legacy-0",

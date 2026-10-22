@@ -11,6 +11,7 @@ import {
 } from '@/lib/copy-studio/shared/contracts';
 import { importSource, readReference } from './api';
 import { SourceCoverage } from './SourceCoverage';
+import { approvedTestimonials } from '@/lib/copy-studio/shared/evidence';
 
 export function ImportDialog({
   current,
@@ -61,6 +62,7 @@ export function ImportDialog({
     );
     try {
       const extracted = await importSource(input, request.signal);
+      request.signal.throwIfAborted();
       if (original) extracted.source = original;
       setResult(extracted);
       setChosenOffer(extracted.selectedOffer ?? input.targetOffer ?? '');
@@ -300,12 +302,13 @@ export function ImportDialog({
                     <span>
                       <strong>{fieldLabels[key]}</strong>
                       {current[key] && <small>Replaces your existing value</small>}
-                      <p>{value}</p>
+                      <p>{key === 'proof' && approvedTestimonials(value).length > 3
+                        ? `${approvedTestimonials(value).length} complete testimonials retained. Review the full social proof below; no quotes have been shortened.` : value}</p>
                     </span>
                   </label>
                   <details>
-                    <summary>Source evidence</summary>
-                    {result.extraction.evidence
+                    <summary>{key === 'proof' && approvedTestimonials(value).length > 3 ? 'Show all collected social proof' : 'Source evidence'}</summary>
+                    {key === 'proof' && approvedTestimonials(value).length > 3 ? <p className="full-proof-review">{value}</p> : result.extraction.evidence
                       .filter((e) => e.field === key)
                       .map((e, i) => (
                         <blockquote key={i}>{e.quote}</blockquote>

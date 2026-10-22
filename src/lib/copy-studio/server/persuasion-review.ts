@@ -4,6 +4,7 @@ import { resolveFramework, sectionReviewRole } from '../shared/persuasion';
 import { PERSUASION_REVIEW_PREFIX } from '../shared/quality';
 import { structured, type Completion } from './provider';
 import { byteSize } from './source-context';
+import { proofForModel } from './approved-proof';
 
 export const PERSUASION_EDITOR = 'PERSUASION_EDITOR';
 const reviewSchema = z.object({ findings: z.array(z.object({
@@ -38,7 +39,7 @@ Judge only what the approved facts allow. If nextStep explicitly confirms a call
 Return only {"findings":[{"sectionId":"an allowed focus ID","quote":"exact contiguous phrase from that section's actual editable copy","problem":"specific failure and why it matters here","change":"concrete editorial correction using approved facts only"}]}. At most 3 strongest findings. Return [] when the copy adequately performs its role. Every finding MUST cite the actual problematic copy, not the plan, brief, notes or text from another section.`;
   const framework = resolveFramework(input);
   const prompt = `REVIEW DATA: ${JSON.stringify({
-    brief: input.brief, creativeDirection: input.context, framework,
+    brief: { ...input.brief, proof: proofForModel(input, Math.min(12_000, Math.floor((complete.inputByteLimit || 80_000) * 0.18))) }, creativeDirection: input.context, framework,
     plan: draft.strategy.frameworkPlan, notes: draft.notes,
     focusIds, roles: focusIds.map(id => {
       const { instruction, ...role } = sectionReviewRole(input, id);

@@ -18,6 +18,19 @@ const items = [
 ];
 const proof = testimonialProof(items);
 const withProof = { ...input, brief: { ...input.brief, proof } };
+
+test('inline attributed feedback is found without a testimonials route and unrelated template quotes stay excluded', () => {
+  const title = 'Relationship Coaching by Josie Smith | Coaching & Courses';
+  const quote = '“Josie has a way of hearing people and guiding them toward patterns they had not seen. Our work together gave me the courage to continue a deeper journey within myself.”';
+  const unrelated = '“Hannah helped me work through the Empower program and I would recommend that course to anyone.”';
+  const source = { title, url: 'https://coach.example/', headings: [], text: `SOURCE PAGE: https://coach.example/\nTITLE: ${title}\n\nPrivate coaching for relationships.\n\nAnonymous\n\n${quote}\n\nTaylor Green\n\n${unrelated}` };
+  const result = findTestimonials(source, 'Private coaching');
+  assert.equal(result.length, 1);
+  assert.equal(result[0].attribution, 'Anonymous');
+  assert.equal(result[0].quote, quote);
+  assert.equal(result[0].page, source.url);
+  assert.equal(findTestimonials({ ...source, title: 'Pasted page copy' }, 'Private coaching').length, 1, 'Offer selection retains provider identity in the captured homepage title');
+});
 const framed = () => {
   const next = structuredClone(draft);
   Object.assign(next.sections.find(section => section.id === 'proof')!, {
@@ -60,7 +73,7 @@ test('legacy approved proof gains source category without importing any unapprov
   assert.equal(approvedTestimonials(proof)[1].category, 'Professional recommendation');
 });
 
-test('explicit headline limits do not accidentally shorten testimonials; testimonial caps use whole sentences', () => {
+test('older excerpt requests cannot remove or abbreviate the complete social-proof archive', () => {
   assert.equal(testimonialWordLimit({ ...withProof, context: { mode: 'current', direction: '', background: '', mustKeep: 'Headline at most 12 words.', avoid: '' } }), undefined);
   const capped = { ...withProof, context: { mode: 'current' as const, direction: '', background: '', mustKeep: 'Use one testimonial excerpt of at most 24 words.', avoid: '' } };
   assert.equal(testimonialWordLimit(capped), 24);
@@ -69,8 +82,8 @@ test('explicit headline limits do not accidentally shorten testimonials; testimo
   assert.match(excerpt, /^[A-Z].*[.!?]$/);
   assert.ok(excerpt.split(/\s+/).length <= 24);
   const result = restoreApprovedProof(framed(), capped);
-  assert.ok(result.notes.some(note => /remove that note for fuller social proof/.test(note)));
-  assert.doesNotMatch(result.sections.find(section => section.id === 'proof')!.body, /Pat L.,/);
+  assert.ok(result.sections.find(section => section.id === 'proof')!.body.includes(clientQuote));
+  assert.match(result.sections.find(section => section.id === 'proof')!.body, /Pat L.,/);
 });
 
 test('catalog keeps multiple paragraphs together and distinguishes training from professional recommendations', () => {
@@ -81,7 +94,7 @@ test('catalog keeps multiple paragraphs together and distinguishes training from
   const career = findTestimonials(source, 'Career Coaching');
   assert.equal(career.find(item => item.attribution === 'Sam R., Bristol')?.quote, first + '\n\n' + second);
   assert.equal(career.find(item => item.attribution === 'Pat L., Operations Manager')?.category, 'Professional recommendation');
-  assert.ok(career.every(item => !item.attribution.includes('Training Attendee')));
+  assert.ok(career.some(item => item.attribution.includes('Training Attendee') && item.category === 'Training feedback'));
   assert.ok(findTestimonials(source, 'Workplace training').some(item => item.category === 'Training feedback'));
   const indexed = extractionContext(source, 12_000, 'Career Coaching');
   assert.ok(byteSize(JSON.stringify(indexed.value)) <= 12_000);

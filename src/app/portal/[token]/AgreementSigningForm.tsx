@@ -5,13 +5,20 @@ import { signClientAgreementAction, type SignAgreementState } from '@/app/action
 
 const initialState: SignAgreementState = { error: '', signed: false };
 
-export function AgreementSigningForm({ token, clientName, email, documentSha256 }: {
+export function AgreementSigningForm({ token, clientName, email, documentSha256, onBeforeSign, onResult }: {
     token: string;
     clientName: string;
     email: string;
     documentSha256: string;
+    onBeforeSign?: () => Promise<boolean>;
+    onResult?: (state: SignAgreementState) => void;
 }) {
-    const [state, action, pending] = useActionState(signClientAgreementAction, initialState);
+    const [state, action, pending] = useActionState(async (previous: SignAgreementState, data: FormData) => {
+        if (onBeforeSign && !await onBeforeSign()) return { error: 'Save your brief successfully before signing. Please retry.', signed: false };
+        const result = await signClientAgreementAction(previous, data);
+        onResult?.(result);
+        return result;
+    }, initialState);
     if (state.signed) return <p className="mark mark-ok">Your signature was saved. A copy is now available above.</p>;
 
     return (

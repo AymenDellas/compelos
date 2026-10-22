@@ -206,11 +206,10 @@ export default function CoachProspectingWorkspace({
     <div className="coach-workspace">
       <div className="coach-intro">
         <div>
-          <p className="label-micro">DISCOVER → REVIEW → CONNECT</p>
-          <h2>A better list of coaches to approach.</h2>
+          <p className="label-micro">LinkedIn prospecting</p>
+          <h2>Coach prospects</h2>
           <p>
-            Business evidence decides fit. Your chosen account decides the
-            contact route. You review and send on LinkedIn.
+            Review your coaches, check the evidence, and choose how to reach them.
           </p>
         </div>
         <button className="btn btn-primary" onClick={() => setView("discover")}>

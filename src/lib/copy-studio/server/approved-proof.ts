@@ -1,6 +1,7 @@
-import type { Draft, GenerationInput } from '../shared/contracts';
+import type { Brief, Draft, GenerationInput } from '../shared/contracts';
 import { approvedTestimonials } from '../shared/evidence';
 import { findTestimonials } from './testimonials';
+import { AppError } from './errors';
 
 export function approvedProofEntries(input: GenerationInput) {
   const captured = input.reference ? findTestimonials(input.reference, input.brief.offerName) : [];
@@ -8,7 +9,33 @@ export function approvedProofEntries(input: GenerationInput) {
     ...item, id: `E${index + 1}`,
     category: item.category || captured.find(candidate => candidate.attribution === item.attribution
       && candidate.quote === item.quote)?.category || 'Client experience',
-  })).sort((a, b) => Number(a.category !== 'Client experience') - Number(b.category !== 'Client experience'));
+  })).sort((a, b) => Number(a.category === 'Training feedback') - Number(b.category === 'Training feedback')
+    || evidenceStrength(b.quote, input.brief) + Number(b.category === 'Client experience') * 2
+      - evidenceStrength(a.quote, input.brief) - Number(a.category === 'Client experience') * 2);
+}
+
+function evidenceStrength(quote: string, brief: Brief): number {
+  const terms = [...new Set(`${brief.offerName} ${brief.problem} ${brief.outcome}`.toLowerCase().match(/[\p{L}]{4,}/gu) || [])]
+    .filter(term => !/^(?:with|that|this|their|your|from|have|they|what|into|than|more|coaching|coach|service|offer)$/.test(term));
+  const copy = quote.toLowerCase();
+  return terms.filter(term => copy.includes(term)).length * 3
+    + (/\b(?:chose|decided|secured|landed|promoted|launched|achieved|changed|started|was able|have been able)\b/i.test(quote) ? 6 : 0)
+    + (/\b(?:before|when|initially|uncertain|struggl|transition|did not know)\b/i.test(quote) ? 3 : 0)
+    + (/helped|support|worked with|coaching/i.test(quote) ? 2 : 0);
+}
+
+/** Whole quotes fit the writing context or stay in the archive; never make excerpts. */
+export function proofForModel(input: GenerationInput, budget = 12_000): string {
+  if (Buffer.byteLength(input.brief.proof, 'utf8') <= budget) return input.brief.proof;
+  const entries = approvedProofEntries(input);
+  if (!entries.length) throw new AppError(400, 'This unstructured proof exceeds the writing allowance. Split it into complete Quote / Attribution records rather than shortening testimony.');
+  const extra = input.brief.proof.replace(/(?:^|\n)Quote:\n[\s\S]*?\nAttribution: [^\n]+(?:\nSource: [^\n]+)?(?:\nCategory: [^\n]+)?/g, '').trim();
+  const parts = [extra, `ARCHIVE CONTEXT (not public copy): ${entries.length} complete approved testimonials are retained and inserted by the server. Only whole accounts that fit this writing context are repeated below. Do not infer that omitted accounts lack evidence, rewrite them, or invent their contents.`].filter(Boolean);
+  for (const entry of entries.slice(0, 3)) {
+    const block = `${entry.id}\nQuote:\n${entry.quote}\nAttribution: ${entry.attribution}\nCategory: ${entry.category}`;
+    if (Buffer.byteLength([...parts, block].join('\n\n'), 'utf8') <= budget) parts.push(block);
+  }
+  return parts.join('\n\n');
 }
 
 export function testimonialWordLimit(input: GenerationInput): number | undefined {
@@ -43,24 +70,19 @@ export function exactExcerpt(quote: string, topic: string, limit: number): strin
 export function restoreApprovedProof(draft: Draft, input: GenerationInput): Draft {
   const items = approvedProofEntries(input);
   if (!items.length) return draft;
-  const limit = testimonialWordLimit(input);
-  const count = /\b(?:one|1)\b.{0,24}testimonial/i.test(input.context?.mustKeep || '') ? 1 : items.length;
-  const topic = [input.brief.offerName, input.brief.outcome].join(' ');
   const extraProof = input.brief.proof.replace(/(?:^|\n)Quote:\n[\s\S]*?\nAttribution: [^\n]+(?:\nSource: [^\n]+)?(?:\nCategory: [^\n]+)?/g, '').trim();
   const notes = draft.notes.filter(note => !/testimonial excerpt (?:used|trimmed)|excerpt.*\b\d+ words\b/i.test(note));
-  if (limit && limit < 40) notes.push(`The brief requests testimonial excerpts of at most ${limit} words. This can remove useful context; remove that note for fuller social proof. Complete sentences are preserved even if a cap is too short.`);
   const sections = draft.sections.map(section => {
     if (section.id !== 'proof') return section;
     const parts = section.proofFraming?.introduction.trim() ? [section.proofFraming.introduction.trim()] : [];
-    for (const item of items.slice(0, count)) {
+    for (const item of items) {
       const heading = section.proofFraming?.items.find(frame => frame.id === item.id)?.heading.trim();
       const label = item.category === 'Professional recommendation'
         ? heading && !/professional recommendation/i.test(heading) ? `Professional recommendation: ${heading}` : heading || item.category
         : heading || item.category;
-      const quote = limit ? exactExcerpt(item.quote, topic, limit) : item.quote.replace(/^[“"]|[”"]$/g, '').trim();
+      const quote = item.quote.replace(/^[“"]|[”"]$/g, '').trim();
       const block = `${label}\n\n“${quote}”\n${item.attribution}`;
-      if ([...parts, block, extraProof].filter(Boolean).join('\n\n').length <= 6000) parts.push(block);
-      else notes.push(`The complete testimonial attributed to ${item.attribution} did not fit this section's size limit. It remains in the approved brief; select fewer testimonials or request a complete-sentence excerpt.`);
+      parts.push(block);
     }
     if (extraProof) parts.push(extraProof);
     return { ...section, body: parts.join('\n\n'), bullets: [], cta: '' };

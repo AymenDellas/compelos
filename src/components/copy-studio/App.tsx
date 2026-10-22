@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import {
   fingerprint,
+  MAX_PROOF_CHARACTERS,
   projectSchema,
   requiredKeys,
   sectionSchema,
@@ -247,7 +248,7 @@ export default function CopyStudio() {
     });
     if (!parsed.success) {
       setError(
-        'Keep this section within 8 bullets, 800 characters per bullet, and 6,000 characters of body copy.',
+        `Keep this section within 8 bullets, 800 characters per bullet, and ${(section.id === 'proof' ? MAX_PROOF_CHARACTERS : 6000).toLocaleString('en-US')} characters of body copy.`,
       );
       return false;
     }
@@ -331,7 +332,7 @@ export default function CopyStudio() {
   return (
     <div className="copy-studio">
       <div className="copy-workspace">
-        <div className="copy-project-toolbar panel">
+        <div className="copy-project-toolbar">
           <label className="copy-project-picker">
             <span className="label-micro">Project</span>
             <select
@@ -413,9 +414,7 @@ export default function CopyStudio() {
         <div className="copy-main-content">
           <div className="page-header">
             <div>
-              <div className="eyebrow">
-                <span className="tiny-star">✳</span> YOUR NEXT GREAT LANDING PAGE
-              </div>
+              <div className="project-context">Landing page workspace</div>
               <input
                 className="project-title"
                 aria-label="Project name"
@@ -427,7 +426,7 @@ export default function CopyStudio() {
                   if (!project.name.trim()) update((p) => ({ ...p, name: 'Untitled project' }));
                 }}
               />
-              <p>A thoughtful brief. Persuasive copy. One clear next step.</p>
+              <p>Manage the brief, review your copy, and prepare the design handoff.</p>
             </div>
             <div className="page-header-actions">
               <button className="button secondary" onClick={backup}>
@@ -548,6 +547,7 @@ export default function CopyStudio() {
               </button>
             </section>
           )}
+          <nav className="copy-mobile-sections" aria-label="Copy editor sections"><a href="#copy-brief">Edit brief</a><a href="#copy-draft">Review draft ↓</a></nav>
           <div className="editor-grid">
             <BriefPanel
               project={project}
@@ -604,13 +604,6 @@ export default function CopyStudio() {
               onExample={() => add(true)}
             />
           </div>
-          <footer className="workspace-footer">
-            <span>
-              <ShieldIcon />
-              Made for clear offers and considered decisions.
-            </span>
-            <span>Your facts. Your voice. Your final call.</span>
-          </footer>
         </div>
       </div>
       {toast && (
@@ -672,7 +665,7 @@ export default function CopyStudio() {
       {onboardingOpen && <OnboardingDialog
         project={project} records={onboardings} loading={onboardingLoading} error={onboardingError}
         onRefresh={refreshOnboardings} onClose={() => setOnboardingOpen(false)}
-        onApply={(record, fields, useTemplate, useConstraints) => {
+        onApply={(record, fields, useTemplate, useConstraints, useReference) => {
           update((p) => {
             const brief = { ...p.brief };
             const differentClient = Boolean(p.onboarding && p.onboarding.id !== record.id);
@@ -680,6 +673,7 @@ export default function CopyStudio() {
             for (const key of fields) brief[key] = record.brief[key];
             return {
               ...p, brief,
+              source: useReference && record.source ? record.source : p.source,
               offerBriefs: differentClient && p.offerBriefs ? {
                 current: p.offerBriefs.current && { ...p.offerBriefs.current, coachBio: '' },
                 focused: p.offerBriefs.focused && { ...p.offerBriefs.focused, coachBio: '' },
@@ -714,7 +708,4 @@ function slug(value: string) {
       .replace(/^-|-$/g, '')
       .slice(0, 80) || 'copy-studio'
   );
-}
-function ShieldIcon() {
-  return <Sparkles size={13} />;
 }

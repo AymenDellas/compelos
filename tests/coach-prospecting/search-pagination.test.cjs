@@ -81,6 +81,8 @@ function searchPage({
     });
   return {
     calls,
+    mouse:{move:async()=>{},wheel:async()=>{hydrated=true;}},
+    $$:async selector=>document.querySelectorAll(selector).map(node=>({evaluate:async fn=>fn(node),click:async()=>node.click(),hover:async()=>{},dispose:async()=>{}})),
     on: (event, fn) => handlers.set(event, fn),
     off: (event) => handlers.delete(event),
     goto: async (url) => {
@@ -105,7 +107,7 @@ function searchPage({
 }
 async function scan(
   page,
-  { limit = 100, existing = 0, active = true, cursorUrl } = {},
+  { limit = 100, existing = 0, active = true, cursorUrl, beforeCheck } = {},
 ) {
   const saved = {
     progress: store.sourceProgress,
@@ -163,6 +165,7 @@ async function scan(
       pool: {},
       owner: "fixture-owner",
       pause: async () => {},
+      beforeCheck,
     });
     return { result, last, paused, captured };
   } finally {
@@ -172,8 +175,10 @@ async function scan(
   }
 }
 test("100 requested profiles are collected across ten People Search pages, preserving search filters", async () => {
+  const checks=[];
   const p = searchPage(),
-    r = await scan(p);
+    r = await scan(p,{beforeCheck:async kind=>checks.push(kind)});
+  assert.deepEqual(checks,Array(19).fill('discovery'));
   assert.equal(r.captured.size, 100);
   assert.equal(p.calls.clicks, 9);
   assert.equal(r.last.data.pages, 10);

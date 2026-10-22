@@ -83,35 +83,10 @@ test("discovery passes all visible candidates to evidence research and stops imm
     store.sourceProgress = original;
   }
 });
-test("the actual worker browser-fetch guard is sticky after a rate limit; no further request is made", async () => {
-  const source = fs.readFileSync(require.resolve("../../worker.cjs"), "utf8");
-  const start = source.indexOf("async function voyagerFetch("),
-    end = source.indexOf("function requireLinkedInResponse(", start);
-  const context = vm.createContext({
-    prospectingContext: true,
-    prospectingFailure: null,
-    AbortSignal,
-  });
-  const fetch = vm.runInContext(
-    source.slice(start, end) + ";voyagerFetch",
-    context,
-  );
-  let calls = 0;
-  const p = {
-    evaluate: async () => {
-      calls++;
-      return { status: 429 };
-    },
-  };
-  await assert.rejects(
-    fetch(p, "/fixture"),
-    (e) => e.failure.code === "LINKEDIN_RATE_LIMIT",
-  );
-  await assert.rejects(
-    fetch(p, "/another-fixture"),
-    (e) => e.failure.code === "LINKEDIN_RATE_LIMIT",
-  );
-  assert.equal(calls, 1);
+test("active worker paths contain no private API replay or session-cookie reads",()=>{
+ for(const name of ['../../worker.cjs','../../src/lib/linkedin-browser-page.cjs','../../src/lib/linkedin-activity-page.cjs','../../src/lib/coach-prospecting-worker.cjs']) {
+  const code=fs.readFileSync(require.resolve(name),'utf8');assert.ok(!code.includes('/voyager/api/'),name);assert.ok(!code.includes('document.cookie'),name);
+ }
 });
 
 test("history normalization preserves LinkedIn prospecting outcomes without applying the email qualification gate", () => {
@@ -139,48 +114,14 @@ test("history normalization preserves LinkedIn prospecting outcomes without appl
   assert.equal(normalize(result), result);
 });
 
-test("a forbidden optional profile request still stops the profile job instead of being swallowed by a fallback", async () => {
-  const source = fs.readFileSync(require.resolve("../../worker.cjs"), "utf8");
-  const fetchStart = source.indexOf("async function voyagerFetch("),
-    fetchEnd = source.indexOf("function requireLinkedInResponse(", fetchStart);
-  const scrapeStart = source.indexOf("async function scrapeProfile("),
-    scrapeEnd = source.indexOf(
-      "async function enrichAndFinalize(",
-      scrapeStart,
-    );
-  const context = vm.createContext({
-    prospectingContext: true,
-    prospectingFailure: null,
-    ACCOUNT_ID: "fixture-account",
-    AbortSignal,
-    requireLinkedInResponse: () => {},
-    extractProfileContactInfo: () => ({}),
-    extractMatchingProfile: () => ({
-      firstName: "Fixture",
-      headline: "Career coach",
-    }),
-    extractProfileLocation: () => "",
-    profileContactEvidence: () => ({}),
-    publishedProfileWebsites: () => [],
-    jitter: async () => {},
-    sleep: async () => {},
-    failureOf: () => assert.fail("Keep the structured restriction reason."),
-  });
-  const scrape = vm.runInContext(
-    source.slice(fetchStart, fetchEnd) +
-      source.slice(scrapeStart, scrapeEnd) +
-      ";scrapeProfile",
-    context,
-  );
-  let calls = 0;
-  const p = {
-    evaluate: async () => ({ status: ++calls === 3 ? 403 : 200, data: {} }),
-  };
-  const result = await scrape(p, "https://www.linkedin.com/in/fixture/", null);
-  assert.equal(result.status, "ERROR");
-  assert.equal(result.failure.code, "LINKEDIN_AUTH");
-  assert.equal(calls, 3);
+test("a restriction in the page reader propagates through qualification without another fallback",async()=>{
+ const source=fs.readFileSync(require.resolve('../../worker.cjs'),'utf8'),start=source.indexOf('async function scrapeProfile('),end=source.indexOf('async function enrichAndFinalize(',start);
+ let calls=0;
+ const failure={stage:'linkedin',code:'LINKEDIN_AUTH',reason:'Fixture restriction',retryable:false};
+ const scrape=vm.runInNewContext(source.slice(start,end)+';scrapeProfile',{ACCOUNT_ID:'fixture',linkedinStop:null,recordLinkedInCheck:()=>{},checkLinkedInAccess:()=>{},pageReader:{captureProfile:async()=>{calls++;throw Object.assign(Error('restricted'),{failure});}}});
+ const result=await scrape({},'https://www.linkedin.com/in/fixture/',null);assert.equal(result.status,'ERROR');assert.equal(result.failure,failure);assert.equal(calls,1);
 });
+
 test("source URLs reject unrelated hosts, credentials, non-HTTPS and non-people search pages", () => {
   assert.equal(
     store.sourceUrl(

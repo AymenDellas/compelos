@@ -11,13 +11,14 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
   error: string;
   onRefresh: () => void;
   onClose: () => void;
-  onApply: (record: OnboardingBrief, fields: BriefKey[], useTemplate: boolean, useConstraints: boolean) => void;
+  onApply: (record: OnboardingBrief, fields: BriefKey[], useTemplate: boolean, useConstraints: boolean, useReference: boolean) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState(project.onboarding?.id || '');
   const [fields, setFields] = useState<BriefKey[]>([]);
   const [useTemplate, setUseTemplate] = useState(!project.result);
+  const [useReference, setUseReference] = useState(!project.source);
   const [useConstraints, setUseConstraints] = useState(!project.context?.mustKeep && !project.context?.avoid && !project.context?.background);
   const matches = matchOnboardings(records, query || project.source?.source.url || '');
   const selected = records.find((record) => record.id === selectedId);
@@ -74,6 +75,7 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
           ))}
         </div>
         <label className="onboarding-check"><input type="checkbox" checked={useTemplate} onChange={(event) => setUseTemplate(event.target.checked)} />Use the onboarding page goal: {templates[selected.template].name}</label>
+        {selected.source && <label className="onboarding-check"><input type="checkbox" checked={useReference} onChange={event => setUseReference(event.target.checked)} />Attach the original website capture used to prepare this onboarding as a voice and context reference{project.source ? ' (replaces your current reference)' : ''}</label>}
         {(selected.context.mustKeep || selected.context.avoid || selected.context.background) && <div>
           <label className="onboarding-check"><input type="checkbox" checked={useConstraints} onChange={(event) => setUseConstraints(event.target.checked)} />Apply the client’s context, must-keep and avoid notes</label>
           <p className="muted onboarding-client-notes">{[selected.context.background, selected.context.mustKeep && `Keep: ${selected.context.mustKeep}`, selected.context.avoid && `Avoid: ${selected.context.avoid}`].filter(Boolean).join('\n\n')}</p>
@@ -81,7 +83,7 @@ export function OnboardingDialog({ project, records, loading, error, onRefresh, 
       </div>}
       <div className="dialog-footer">
         <button className="button secondary" onClick={onRefresh} disabled={loading}>Refresh onboarding</button>
-        <button className="button primary" disabled={!selected || loading} onClick={() => selected && onApply(selected, fields, useTemplate, useConstraints)}><Check size={16} />Use this onboarding</button>
+        <button className="button primary" disabled={!selected || loading} onClick={() => selected && onApply(selected, fields, useTemplate, useConstraints, useReference)}><Check size={16} />Use this onboarding</button>
       </div>
     </dialog>
   );

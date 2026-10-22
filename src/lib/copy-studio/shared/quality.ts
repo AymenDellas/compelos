@@ -64,8 +64,13 @@ export function auditDraft(draft: Draft, brief: Brief): Issue[] {
         add('The testimonial source does not establish a colleague or partner relationship. Use the actual attribution and evidence category.', 'warning');
       if (/life[-‑ ]changing|real impact|incredible|remarkable|powerful results/i.test([section.proofFraming?.introduction, ...(section.proofFraming?.items.map(item => item.heading) || [])].join(' ')))
         add('Frame this testimony with its concrete situation and experience; remove promotional labels such as life-changing or real impact from the framing.', 'warning');
-      const supported = quoted.some(quote => testimonials.some(item => normalizeQuote(item.quote).includes(normalizeQuote(quote)) && copy.includes(item.attribution)));
-      if (!supported) add('Include an exact approved testimonial or exact excerpt with its original attribution. Do not replace the evidence with a summary.', 'warning');
+      const proofBody = normalizeQuote(section.body);
+      const missing = testimonials.filter(item => {
+        const quote = normalizeQuote(item.quote.replace(/^[“"]|[”"]$/g, '').trim());
+        const author = normalizeQuote(item.attribution);
+        return ![`${quote}” ${author}`, `${quote}" ${author}`, `${quote} ${author}`].some(pair => proofBody.includes(pair));
+      });
+      if (missing.length) add(`${missing.length} approved testimonial${missing.length === 1 ? ' is' : 's are'} missing or abbreviated, or paired with a different attribution. Keep every full quotation with its original author; feature the strongest and put the rest under Show all testimonials.`, 'warning');
       if (quoted.some(quote => !testimonials.some(item => normalizeQuote(item.quote).includes(normalizeQuote(quote)))))
         add('A testimonial quotation was changed or invented. Copy its wording from the approved evidence.', 'warning');
     }

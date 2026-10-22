@@ -2,7 +2,8 @@ import { z } from 'zod/v4';
 import { OFFER_ESSENTIAL_KEYS, OFFER_ESSENTIAL_LABELS } from '../../offer-essentials';
 
 export const MAX_SOURCE_CHARACTERS = 240_000;
-export const EXTRACTION_VERSION = 2;
+export const MAX_PROOF_CHARACTERS = MAX_SOURCE_CHARACTERS * 2;
+export const EXTRACTION_VERSION = 3;
 
 const text = z.string().trim().max(6000);
 export const briefSchema = z.object({
@@ -13,7 +14,7 @@ export const briefSchema = z.object({
   outcome: text.default(''),
   mechanism: text.default(''),
   deliverables: text.default(''),
-  proof: text.default(''),
+  proof: z.string().trim().max(MAX_PROOF_CHARACTERS).default(''),
   coachBio: text.default(''),
   objections: text.default(''),
   price: text.default(''),
@@ -85,13 +86,16 @@ export type GenerationInput = z.infer<typeof generationSchema>;
 export const sectionSchema = z.object({
   id: z.string().min(1).max(80),
   headline: z.string().max(250),
-  body: z.string().max(6000),
+  body: z.string().max(MAX_PROOF_CHARACTERS),
   bullets: z.array(z.string().max(800)).max(8),
   cta: z.string().max(120),
   proofFraming: z.object({
     introduction: z.string().max(500),
     items: z.array(z.object({ id: z.string().max(20), heading: z.string().max(150) })).max(8),
   }).optional(),
+}).superRefine((section, ctx) => {
+  if (section.id !== 'proof' && section.body.length > 6000)
+    ctx.addIssue({ code: 'custom', path: ['body'], message: 'Keep ordinary section copy within 6,000 characters. Only full social proof has the larger allowance.' });
 });
 export type Section = z.infer<typeof sectionSchema>;
 export const strategySchema = z.object({
@@ -130,7 +134,11 @@ export const extractionSchema = z.object({
     summary: z.string().max(1200),
     quote: z.string().min(1).max(1200),
   })).max(12).optional(),
-  fields: z.partialRecord(z.enum(Object.keys(fieldLabels) as [BriefKey, ...BriefKey[]]), text),
+  fields: z.partialRecord(z.enum(Object.keys(fieldLabels) as [BriefKey, ...BriefKey[]]), z.string().trim().max(MAX_PROOF_CHARACTERS))
+    .superRefine((fields, ctx) => {
+      for (const [key, value] of Object.entries(fields)) if (key !== 'proof' && value && value.length > 6000)
+        ctx.addIssue({ code: 'custom', path: [key], message: 'Keep ordinary brief fields within 6,000 characters.' });
+    }),
   evidence: z
     .array(
       z.object({

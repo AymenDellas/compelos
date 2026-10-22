@@ -3,16 +3,17 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { agreementPdf } from '@/lib/agreement-pdf';
-import { CASE_STUDY_CONSENT_VERSION, generateAccessChecklist, mergeAccessChecklist, normalizeOnboarding, type ProjectData } from '@/lib/business';
+import { CASE_STUDY_CONSENT_VERSION, generateAccessChecklist, onboardingAccessChecklist, reconcileOnboardingAccess, mergeAccessChecklist, normalizeOnboarding, type ProjectData } from '@/lib/business';
 import { businessTransaction, recordActivity } from '@/lib/business-store';
 import { validateProject } from '@/lib/business-validation';
+import { CLIENT_JOURNEY_FIELDS, clientBriefReady, essentialsPresent, journeyFor, needsWebsiteIntroduction } from '@/lib/onboarding-journey';
 
 const PORTAL_FORM_FIELDS = [
     'offerName', 'offer', 'audience', 'customerProblem', 'desiredOutcome', 'differentiation', 'unsuitableClients', 'trafficSources',
     'landingPageUrl', 'bookingUrl', 'qualification', 'nurture', 'traffic', 'bookings', 'showRate',
     'closeRate', 'bookingPlatform', 'crm', 'emailPlatform', 'analyticsPlatform', 'hostingPlatform',
     'domainProvider', 'websitePlatform', 'repositoryProvider', 'assets', 'mustStay', 'avoid',
-    'importantContext',
+    'importantContext', 'coachBio', 'proof', 'preferences',
 ] as const;
 
 function portalValue(formData: FormData, key: string) {
@@ -24,7 +25,7 @@ function validPortalToken(token: string) {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
 }
 
-export type SignAgreementState = { error: string; signed: boolean };
+export type SignAgreementState = { error: string; signed: boolean; revision?: number };
 
 export async function signClientAgreementAction(
     _previous: SignAgreementState,
@@ -43,8 +44,9 @@ export async function signClientAgreementAction(
     if (!/^[0-9a-f]{64}$/.test(reviewedHash))
         return { error: 'Reload the agreement and review it before signing.', signed: false };
 
+    let signedRevision: number | undefined;
     try {
-        await businessTransaction(async (client) => {
+        signedRevision = await businessTransaction(async (client) => {
             const result = await client.query(
                 `SELECT p.*,o.data AS opportunity,v.profile
                  FROM business_projects p
@@ -106,6 +108,7 @@ export async function signClientAgreementAction(
                 [result.rows[0].id, JSON.stringify(next)],
             );
             await recordActivity(client, result.rows[0].opportunity_id, 'ONBOARDING', 'Client electronically signed the agreement; Compel signature pending');
+            return Number(result.rows[0].revision || 0) + 1;
         });
     } catch (error) {
         if (error instanceof Error && [
@@ -117,13 +120,14 @@ export async function signClientAgreementAction(
         return { error: 'We could not save your signature. Please try again or contact Compel.', signed: false };
     }
     revalidatePath(`/portal/${token}`);
-    return { error: '', signed: true };
+    return { error: '', signed: true, revision: signedRevision };
 }
 
 export async function saveClientPortalFormAction(formData: FormData) {
     const token = portalValue(formData, 'token');
-    if (!validPortalToken(token)) throw new Error('This portal link is invalid.');
-    await businessTransaction(async (client) => {
+    if (!/^[0-9a-f-]{36}$/i.test(token)) throw new Error('This portal link is invalid.');
+    const guided = formData.get('guidedVersion') === '1';
+    const savedRevision = await businessTransaction(async (client) => {
         const result = await client.query(
             `SELECT p.*,o.data AS opportunity,v.profile
              FROM business_projects p
@@ -135,30 +139,74 @@ export async function saveClientPortalFormAction(formData: FormData) {
         if (!result.rows[0]) throw new Error('This portal link is no longer available.');
         const project = result.rows[0].data as ProjectData;
         const onboarding = normalizeOnboarding(project, result.rows[0].opportunity, result.rows[0].profile);
+        if (onboarding.journey && !guided) throw new Error('This onboarding now uses the guided brief. Reload this page before saving.');
+        if (guided && Number(formData.get('revision')) !== Number(result.rows[0].revision))
+            throw new Error('This onboarding changed in another window. Reload to see the latest answers before saving.');
+        if (guided && !clientBriefReady(onboarding))
+            throw new Error('Compel is still preparing your offer summary. Please return when your brief is ready.');
         const nextForm = { ...onboarding.form };
         for (const key of PORTAL_FORM_FIELDS) {
-            // Older open forms must not erase answers to the newly added questions.
-            if (['offerName', 'differentiation', 'unsuitableClients'].includes(key) && !formData.has(key)) continue;
-            nextForm[key] = portalValue(formData, key);
+            if (!formData.has(key)) continue;
+            const raw = formData.get(key);
+            nextForm[key] = typeof raw === 'string' ? raw.trim().slice(0, key === 'proof' ? 480000 : 20000) : '';
         }
-        nextForm.caseStudyConsent = onboarding.projectType === 'CASE_STUDY' && formData.get('caseStudyConsent') === 'accepted';
-        nextForm.testimonialCommitment = nextForm.caseStudyConsent && (
-            formData.get('caseStudyConsentVersion') === CASE_STUDY_CONSENT_VERSION ||
-            formData.get('testimonialCommitment') === 'accepted'
-        );
-        nextForm.deploymentAccessConsent = formData.get('deploymentAccessConsent') === 'accepted';
-        nextForm.status = portalValue(formData, 'intent') === 'complete' ? 'COMPLETE' : 'IN_PROGRESS';
-        const generated = nextForm.status === 'COMPLETE' ? generateAccessChecklist(nextForm) : [];
-        const access = mergeAccessChecklist(onboarding.access, generated);
-        const next = { ...project, onboarding: { ...onboarding, form: nextForm, access } };
+        let journey = onboarding.journey;
+        const complete = portalValue(formData, 'intent') === 'complete';
+        if (guided) {
+            journey = { ...journeyFor(onboarding), briefPrepared: clientBriefReady(onboarding) };
+            const patch = JSON.parse(String(formData.get('journeyPatch') || '{}'));
+            for (const key of CLIENT_JOURNEY_FIELDS) if (Object.hasOwn(patch, key)) Object.assign(journey, { [key]: patch[key] });
+            const essentialChanged = ['offerName', 'offer', 'audience', 'customerProblem', 'desiredOutcome'].some(key => nextForm[key as keyof typeof nextForm] !== onboarding.form[key as keyof typeof nextForm]);
+            if (essentialChanged) { journey.offerConfirmed = false; journey.offerConfirmedAt = ''; }
+            if (formData.get('confirmOffer') === 'yes') {
+                if (!essentialsPresent({ ...onboarding, form: nextForm })) throw new Error('Please complete the five offer facts before confirming this summary.');
+                journey.offerConfirmed = true; journey.offerConfirmedAt = new Date().toISOString();
+            }
+            const old = journeyFor(onboarding);
+            if (['websiteManager', 'publisher', 'contactName', 'contactEmail'].some(key => journey![key as keyof typeof journey] !== old[key as keyof typeof old]) ||
+                ['domainProvider', 'websitePlatform', 'bookingPlatform', 'emailPlatform', 'analyticsPlatform'].some(key => nextForm[key as keyof typeof nextForm] !== onboarding.form[key as keyof typeof nextForm])) {
+                journey.responsibilityConfirmed = false; journey.verifiedAt = '';
+            }
+            if (complete && (!journey.offerConfirmed || !journey.websiteManager || !journey.publisher)) throw new Error('Confirm your offer and choose how your page will be published before finishing.');
+            if (complete && (journey.websiteManager === 'OTHER' || journey.publisher === 'DEVELOPER') && (!journey.contactName.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(journey.contactEmail))) throw new Error('Add a valid name and email for the person who helps with your website.');
+            if ((complete || (journey.flowVersion && journey.step >= 4)) && needsWebsiteIntroduction(journey) && !journey.introductionSent)
+                throw new Error('Send the introduction email and confirm “I’ve sent the introduction” before continuing.');
+            if (complete && journey.flowVersion && !onboarding.scope.confirmed && !onboarding.overrides.includes('scope') && formData.get('confirmScope') !== 'yes')
+                throw new Error('Review and confirm the project scope before submitting.');
+        }
+        if (!guided || formData.has('caseStudyConsentPresent')) {
+            nextForm.caseStudyConsent = onboarding.projectType === 'CASE_STUDY' && formData.get('caseStudyConsent') === 'accepted';
+            nextForm.testimonialCommitment = nextForm.caseStudyConsent && (formData.get('caseStudyConsentVersion') === CASE_STUDY_CONSENT_VERSION || formData.get('testimonialCommitment') === 'accepted');
+        }
+        if (!guided || formData.has('deploymentAccessConsent')) nextForm.deploymentAccessConsent = formData.get('deploymentAccessConsent') === 'accepted';
+        nextForm.status = complete ? 'COMPLETE' : guided && onboarding.form.status === 'COMPLETE' && journey?.offerConfirmed ? 'COMPLETE' : 'IN_PROGRESS';
+        const withForm = { ...onboarding, form: nextForm, ...(journey ? { journey } : {}) };
+        const generated = guided || nextForm.status === 'COMPLETE' ? onboardingAccessChecklist(withForm) : [];
+        let access = guided ? reconcileOnboardingAccess(withForm) : mergeAccessChecklist(onboarding.access, generated);
+        if (guided && formData.has('receivedAccessIds')) {
+            const received: unknown = JSON.parse(String(formData.get('receivedAccessIds')));
+            if (!Array.isArray(received) || received.some(id => typeof id !== 'string' || !access.some(item => item.id === id))) throw new Error('This access request is no longer available. Reload before trying again.');
+            access = access.map(item => received.includes(item.id) && !['VERIFIED', 'NOT_NEEDED'].includes(item.status) ? { ...item, status: 'RECEIVED' as const } : item);
+        }
+        const scope = guided && complete && formData.get('confirmScope') === 'yes'
+            ? { ...onboarding.scope, confirmed: true, confirmedAt: onboarding.scope.confirmedAt || new Date().toISOString() }
+            : onboarding.scope;
+        const next = { ...project, onboarding: { ...withForm, scope, access } };
         validateProject(next);
         await client.query(
             'UPDATE business_projects SET data=$2,revision=revision+1,updated_at=NOW() WHERE id=$1',
             [result.rows[0].id, JSON.stringify(next)],
         );
-        await recordActivity(client, result.rows[0].opportunity_id, 'ONBOARDING', nextForm.status === 'COMPLETE' ? 'Client completed the onboarding form' : 'Client saved onboarding form progress');
+        if (!guided || complete) await recordActivity(client, result.rows[0].opportunity_id, 'ONBOARDING', complete ? 'Client completed the onboarding form' : 'Client saved onboarding form progress');
+        return Number(result.rows[0].revision || 0) + 1;
     });
-    revalidatePath(`/portal/${token}`);
+    if (!guided || formData.get('intent') === 'complete') revalidatePath(`/portal/${token}`);
+    return { revision: savedRevision };
+}
+
+export async function saveGuidedOnboardingAction(formData: FormData) {
+    try { return { ok: true as const, ...await saveClientPortalFormAction(formData) }; }
+    catch (error) { return { ok: false as const, error: error instanceof Error ? error.message : 'Your answers could not be saved. Please retry.' }; }
 }
 
 export async function confirmClientScopeAction(formData: FormData) {

@@ -1,5 +1,6 @@
 "use strict";
 const store = require("./coach-prospecting-store.cjs");
+const {firstControl}=require("./linkedin-browser-page.cjs");
 const { researchProspect } = require("./prospect-research.cjs");
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function readDiscoveryState(page) {
@@ -12,58 +13,22 @@ async function readDiscoveryState(page) {
   }));
 }
 async function scrollList(page) {
-  await page.evaluate(() => {
-    const nodes = [
-      ...document.querySelectorAll("main,main section,main ul,main div"),
-    ].filter(
-      (e) =>
-        e.scrollHeight > e.clientHeight + 100 &&
-        e.querySelectorAll('a[href*="/in/"]').length > 2,
-    );
-    nodes.sort(
-      (a, b) =>
-        b.querySelectorAll('a[href*="/in/"]').length -
-        a.querySelectorAll('a[href*="/in/"]').length,
-    );
-    const list = nodes.find((e) =>
-      ["auto", "scroll"].includes(getComputedStyle(e).overflowY),
-    );
-    if (list) list.scrollBy(0, list.clientHeight * 0.85);
-    else window.scrollBy(0, innerHeight * 0.85);
-  });
+  const lists=await page.$$('main,main section,main ul,main div');
+  let hovered=false;
+  try {
+    for(const list of lists) {
+      const scrollable=await list.evaluate(n=>n.getClientRects().length&&n.scrollHeight>n.clientHeight+100&&['auto','scroll'].includes(getComputedStyle(n).overflowY)&&n.querySelectorAll('a[href*="/in/"]').length>2);
+      if(scrollable){await list.hover();hovered=true;break;}
+    }
+    if(!hovered)await page.mouse.move(600,500);
+    await page.mouse.wheel({deltaY:650});
+  } finally {await Promise.all(lists.map(n=>n.dispose()));}
 }
-async function nextSearchPage(page, urls) {
-  const clicked = await page.evaluate(() => {
-    const next = [
-      ...document.querySelectorAll(
-        "main button,main a,.artdeco-pagination button,.artdeco-pagination a",
-      ),
-    ].find((el) => {
-      if (
-        !el.getClientRects().length ||
-        el.disabled ||
-        el.getAttribute("aria-disabled") === "true"
-      )
-        return false;
-      const name = (
-        el.getAttribute("aria-label") ||
-        el.getAttribute("title") ||
-        el.innerText ||
-        ""
-      )
-        .replace(/\s+/g, " ")
-        .trim();
-      return (
-        /^next(?:\s+page)?$/i.test(name) ||
-        el.classList.contains("artdeco-pagination__button--next")
-      );
-    });
-    if (!next) return false;
-    next.scrollIntoView({ block: "center" });
-    next.click();
-    return true;
-  });
-  if (!clicked) return "END";
+async function nextSearchPage(page, urls, beforeCheck) {
+  const next=await firstControl(page,'main button,main a,.artdeco-pagination button,.artdeco-pagination a',n=>/^next(?:\s+page)?$/i.test(n.label.replace(/\s+/g,' ').trim()));
+  if(!next)return 'END';
+  try {await beforeCheck?.('discovery');await next.click();}
+  finally {await next.dispose();}
   try {
     const changed = await page.waitForFunction(
       (previous) => {
@@ -114,7 +79,7 @@ function restriction(status, url, text = "") {
 async function discover(
   page,
   run,
-  { pool, owner, log = () => {}, pause = wait },
+  { pool, owner, log = () => {}, pause = wait, beforeCheck },
 ) {
   let blocked = "";
   const watch = (response) => {
@@ -125,6 +90,7 @@ async function discover(
   };
   page.on("response", watch);
   try {
+    await beforeCheck?.('discovery');
     const response = await page.goto(
       store.sourceUrl(
         run.source,
@@ -174,6 +140,7 @@ async function discover(
       if (run.status !== "RUNNING") return { done: true };
       if (search) {
         if (pass === 49) break;
+        await beforeCheck?.('discovery');
         await scrollList(page);
         await pause(1400);
         if (!(await store.runIsActive(pool, run.id))) return { stopped: true };
@@ -199,7 +166,7 @@ async function discover(
           state = settled;
           if (run.status !== "RUNNING") return { done: true };
         }
-        const advanced = await nextSearchPage(page, state.urls);
+        const advanced = await nextSearchPage(page, state.urls, beforeCheck);
         if (blocked) {
           await store.pauseAccount(pool, run.account_id, blocked);
           return { paused: blocked };
@@ -219,6 +186,7 @@ async function discover(
         stopReason = "The visible list stopped loading additional profiles.";
         break;
       }
+      await beforeCheck?.('discovery');
       await scrollList(page);
       await pause(1400);
     }
@@ -235,6 +203,7 @@ async function discover(
     );
     return { done: true };
   } catch (error) {
+    if(error.failure?.code==='WORKER_PAUSED'){await store.pauseAccount(pool,run.account_id,error.failure.reason);return {stopped:true};}
     if (blocked) {
       await store.pauseAccount(pool, run.account_id, blocked);
       return { paused: blocked };

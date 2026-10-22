@@ -1,15 +1,9 @@
 import Dashboard from "@/components/Dashboard";
-import { adminSession } from '@/lib/dashboard-auth';
-import { redirect } from 'next/navigation';
 
-export const dynamic = 'force-dynamic';
-export const maxDuration = 300;
-
-export default async function Home() {
-    if (!await adminSession()) redirect('/login');
+export default function Home() {
     return (
-        <main className="min-h-screen p-4 md:p-8">
+        <div className="app-page">
             <Dashboard />
-        </main>
+        </div>
     );
 }

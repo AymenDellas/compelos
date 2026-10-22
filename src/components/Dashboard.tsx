@@ -1,5 +1,4 @@
 "use client";
-import { LogoutButton } from './LogoutButton';
 
 import dynamic from "next/dynamic";
 import React, { useState, useEffect, useCallback } from "react";
@@ -32,6 +31,9 @@ import {
     WandSparkles,
     PenLine,
     MessagesSquare,
+    Menu,
+    ChevronRight,
+    ArrowUpRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { failureOf } from "@/lib/worker-failure.cjs";
@@ -41,6 +43,7 @@ import CaseStudyHunter from "./business/CaseStudyHunter";
 import DiscoveryCallsWorkspace from "./business/DiscoveryCallsWorkspace";
 import FunnelAnalyzer from "./FunnelAnalyzer";
 import ContentCreate from "./content-create/ContentCreate";
+import WorkspaceCommandMenu from './WorkspaceCommandMenu';
 const CopyStudio = dynamic(() => import("./copy-studio/App"), { ssr: false, loading: () => <div className="panel panel-body text-dim">Loading Copy Studio…</div> });
 
 import type { BusinessView } from '@/lib/business';
@@ -86,6 +89,7 @@ async function processLeadViaWorker(linkedinUrl: string): Promise<Lead> {
                 websites: r.websites || [],
                 emails: r.emails || [],
                 logs: r.logs || [],
+                prospectQualification: r.prospectQualification,
             };
         }
         if (data.status === 'not_found' || data.status === 'error') {
@@ -136,17 +140,20 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
 function ConfirmDialog({ open, message, onConfirm, onCancel }: {
     open: boolean; message: string; onConfirm: () => void; onCancel: () => void;
 }) {
+    const dialog = React.useRef<HTMLDialogElement>(null);
+    const messageId = React.useId();
+    useEffect(() => { if (open) dialog.current?.showModal(); }, [open]);
     if (!open) return null;
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">
-            <div className="panel p-5 max-w-sm w-full shadow-[0_24px_60px_rgba(0,0,0,0.7)]">
-                <p className="text-[var(--text)] text-sm leading-relaxed mb-5">{message}</p>
+        <dialog ref={dialog} onCancel={onCancel} role="alertdialog" aria-label="Confirm deletion" aria-describedby={messageId} className="m-auto w-[min(384px,calc(100vw-32px))] p-0 border-0 bg-transparent text-[var(--text)] backdrop:bg-black/70">
+            <div className="panel p-5 w-full shadow-[0_24px_60px_rgba(0,0,0,0.7)]">
+                <p id={messageId} className="text-[var(--text)] text-sm leading-relaxed mb-5">{message}</p>
                 <div className="flex gap-2 justify-end">
                     <button onClick={onCancel} className="btn btn-outline">Cancel</button>
                     <button onClick={onConfirm} className="btn btn-danger">Delete</button>
                 </div>
             </div>
-        </div>
+        </dialog>
     );
 }
 
@@ -158,14 +165,17 @@ function ConfirmDialog({ open, message, onConfirm, onCancel }: {
  */
 const LEAD_STATUS: Record<string, { label: string; mark: string }> = {
     QUALIFIED: { label: 'Qualified', mark: 'mark-ok' },
+    INVESTIGATE: { label: 'Not qualified', mark: 'mark-idle' },
+    NURTURE: { label: 'Not qualified', mark: 'mark-idle' },
     REJECTED: { label: 'Not qualified', mark: 'mark-idle' },
-    ACTIVITY_FAILED: { label: 'Not posting', mark: 'mark-warn' },
+    ACTIVITY_FAILED: { label: 'Activity unknown', mark: 'mark-warn' },
+    ACTIVE_NO_CONTACT: { label: 'Contact needs review', mark: 'mark-warn' },
     SCANNING: { label: 'Scanning', mark: 'mark-info' },
     PENDING: { label: 'Waiting', mark: 'mark-idle' },
     ERROR: { label: 'Failed', mark: 'mark-bad' },
 };
 
-function LeadStatusMark({ status }: { status: string }) {
+function LeadStatusMark({ status, researched }: { status: string; researched: boolean }) {
     const s = LEAD_STATUS[status] ?? { label: status, mark: 'mark-idle' };
     return <span className={cn("mark", s.mark)}>{s.label}</span>;
 }
@@ -224,7 +234,7 @@ function describeLead(l: any): string {
             ? `${who} — qualified, ${emails[0]}${emails.length > 1 ? ` and ${emails.length - 1} more` : ''}`
             : `${who} — qualified, no address found`;
     }
-    if (l.status === 'ACTIVITY_FAILED') return `${who} — skipped, no recent posts`;
+    if (l.status === 'ACTIVITY_FAILED') return `${who} — activity unknown; business research needed`;
     if (l.status === 'ERROR') return `${who} — ${failureOf(l).reason}`;
     if (l.status === 'REJECTED' && l.prospectQualification?.nextAction) return `${who} — ${l.prospectQualification.nextAction}`;
     return `${who} — ${String(status).toLowerCase()}`;
@@ -239,28 +249,33 @@ type NavItem = { id: TabId; label: string; icon: typeof Radar; signal?: boolean 
  * travels — find it, scrape it, work it. Tools are the one-off utilities that
  * happen to live in the same app and were previously indistinguishable from it.
  */
-const NAV_SECTIONS: { workspace: NavItem[]; pipeline: NavItem[]; tools: NavItem[] } = {
-    workspace: [
+const NAV_GROUPS: { label: string; collapsible?: boolean; items: NavItem[] }[] = [
+    { label: 'Workspace', items: [
         { id: 'today', label: 'Overview', icon: CalendarDays },
+    ] },
+    { label: 'Acquisition', items: [
         { id: 'case-study', label: 'Case Study Hunter', icon: ScanSearch, signal: true },
-        { id: 'discovery', label: 'Discovery Calls', icon: MessagesSquare },
-        { id: 'onboarding', label: 'Onboarding', icon: ClipboardCheck },
-        { id: 'projects', label: 'Projects', icon: FolderOpen },
-        { id: 'content-create', label: 'Create', icon: WandSparkles },
-        { id: 'copy-studio', label: 'Copy Studio', icon: PenLine },
-    ],
-    pipeline: [
         { id: 'finder', label: 'Finder', icon: Radar },
         { id: 'engine', label: 'Engine', icon: Zap },
         { id: 'crm', label: 'Leads', icon: Database, signal: true },
-    ],
-    tools: [
+    ] },
+    { label: 'Client work', items: [
+        { id: 'discovery', label: 'Discovery Calls', icon: MessagesSquare },
+        { id: 'onboarding', label: 'Onboarding', icon: ClipboardCheck },
+        { id: 'projects', label: 'Projects', icon: FolderOpen },
+    ] },
+    { label: 'Studio', items: [
+        { id: 'copy-studio', label: 'Copy Studio', icon: PenLine },
+        { id: 'content-create', label: 'Create', icon: WandSparkles },
+    ] },
+    { label: 'Utilities', collapsible: true, items: [
         { id: 'funnel', label: 'Funnel Analyzer', icon: ScanSearch },
         { id: 'unbouncer', label: 'Verify email', icon: ShieldCheck },
         { id: 'hunter', label: 'Find email', icon: Globe },
         { id: 'cleaner', label: 'Clean URLs', icon: FileText },
-    ],
-};
+    ] },
+];
+const WORKSPACE_DESTINATIONS = NAV_GROUPS.flatMap(group => group.items.map(item => ({ ...item, group: group.label })));
 
 /** What each screen is called, and one line on what it does. */
 const SCREENS: Record<TabId, { title: string; sub: string }> = {
@@ -282,10 +297,57 @@ const SCREENS: Record<TabId, { title: string; sub: string }> = {
 
 export default function Dashboard() {
     const [activeTab, commitActiveTab] = useState<TabId>('today');
+    const [navigationOpen, setNavigationOpen] = useState(false);
+    const [commandOpen, setCommandOpen] = useState(false);
+    const [utilitiesOpen, setUtilitiesOpen] = useState(false);
+    const navigationButton = React.useRef<HTMLButtonElement>(null);
+    const navigationRail = React.useRef<HTMLElement>(null);
     const setActiveTab = (next: TabId) => {
-        if (next !== activeTab && !window.dispatchEvent(new Event('compel:before-navigation', { cancelable: true }))) return;
+        if (next !== activeTab && !window.dispatchEvent(new Event('compel:before-navigation', { cancelable: true }))) return false;
         commitActiveTab(next);
+        setNavigationOpen(false);
+        setCommandOpen(false);
+        if (NAV_GROUPS.find(group => group.collapsible)?.items.some(item => item.id === next)) setUtilitiesOpen(true);
+        return true;
     };
+    useEffect(() => {
+        const keydown = (event: KeyboardEvent) => {
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+                if (document.querySelector('dialog[open]')) return;
+                event.preventDefault(); setNavigationOpen(false); setCommandOpen(value => !value);
+            }
+        };
+        document.addEventListener('keydown', keydown);
+        return () => document.removeEventListener('keydown', keydown);
+    }, []);
+
+    useEffect(() => {
+        window.scrollTo({ top: 0, behavior: 'instant' });
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (!navigationOpen && !commandOpen) return;
+        const previous = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => { document.body.style.overflow = previous; };
+    }, [navigationOpen, commandOpen]);
+    useEffect(() => {
+        if (!navigationOpen) return;
+        navigationRail.current?.querySelector<HTMLButtonElement>('button')?.focus();
+        const keydown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') { event.preventDefault(); setNavigationOpen(false); }
+            if (event.key === 'Tab') {
+                const controls = Array.from(navigationRail.current?.querySelectorAll<HTMLElement>('button, summary') || []).filter(element => element.offsetParent !== null);
+                const first = controls[0], last = controls.at(-1);
+                if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+                else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+            }
+        };
+        const media = window.matchMedia('(min-width: 1024px)');
+        const resized = () => { if (media.matches) setNavigationOpen(false); };
+        document.addEventListener('keydown', keydown); media.addEventListener('change', resized);
+        return () => { document.removeEventListener('keydown', keydown); media.removeEventListener('change', resized); navigationButton.current?.focus(); };
+    }, [navigationOpen]);
     const [onboardingProjectId, setOnboardingProjectId] = useState<string | undefined>();
     const [copyStudioOpened, setCopyStudioOpened] = useState(false);
     useEffect(() => { if (activeTab === 'copy-studio') setCopyStudioOpened(true); }, [activeTab]);
@@ -312,6 +374,8 @@ export default function Dashboard() {
     const [sheetsExporting, setSheetsExporting] = useState(false);
     const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
     const [showHistory, setShowHistory] = useState(false);
+    const historyDialog = React.useRef<HTMLDialogElement>(null);
+    useEffect(() => { if (showHistory) historyDialog.current?.showModal(); }, [showHistory]);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; message: string; onConfirm: () => void }>({ open: false, message: '', onConfirm: () => { } });
 
@@ -748,15 +812,14 @@ export default function Dashboard() {
     const screen = SCREENS[activeTab];
 
     // ── Worker readout ──
-    // Today's counters come from the worker's own heartbeat when it is alive and
-    // from the queue API's daily stats when it isn't, so the numbers don't drop
-    // to zero the moment the worker restarts.
+    // The API combines the saved daily budget with persisted CRM decisions.
     const doneToday = workerStatus?.dailyCount ?? dailyStats.count ?? 0;
     const dailyLimit = workerStatus?.dailyLimit || dailyStats.limit || 0;
     const qualifiedToday = workerStatus?.dailyQualified ?? 0;
     const rejectedToday = workerStatus?.dailyRejected ?? 0;
     const failedToday = workerStatus?.dailyErrors ?? 0;
-    const judgedToday = workerStatus?.dailyCompleted ?? qualifiedToday + rejectedToday + failedToday;
+    const reviewedToday = (workerStatus?.dailyReview ?? 0) + (workerStatus?.dailyNurture ?? 0);
+    const judgedToday = workerStatus?.dailyCompleted ?? qualifiedToday + rejectedToday + reviewedToday + failedToday;
     const passRate = judgedToday > 0 ? Math.round((qualifiedToday / judgedToday) * 100) : null;
     const budgetPct = dailyLimit > 0 ? Math.min(100, Math.round(((workerStatus?.dailyBudgetCount ?? doneToday) / dailyLimit) * 100)) : 0;
     const perHour = workerStatus?.ratePerHour ?? (workerStatus?.avgJobDurationMs
@@ -1111,112 +1174,56 @@ export default function Dashboard() {
     };
 
     return (
-        <>
-            <div className="flex min-h-screen">
-                <aside className="sidebar w-[236px] flex-none hidden lg:flex flex-col sticky top-0 h-screen">
-                    <div className="flex items-center gap-3 px-5 h-[76px] border-b border-[#2b3d5b] flex-none">
-                        <span className="w-9 h-9 rounded-xl bg-[#5373e8] text-white flex items-center justify-center text-lg font-bold shadow-[0_5px_12px_rgba(4,12,29,0.28)]" aria-hidden>C</span>
-                        <span className="min-w-0">
-                            <span className="block text-[16px] leading-tight font-semibold tracking-tight text-white">Compel</span>
-                            <span className="block text-[11px] text-[#afbfda] mt-0.5">Workspace</span>
-                        </span>
+        <div className="dashboard-app">
+            <a className="workspace-skip-link" href="#workspace-main">Skip to workspace</a>
+            <WorkspaceCommandMenu open={commandOpen} items={WORKSPACE_DESTINATIONS} onClose={() => setCommandOpen(false)} onSelect={id => { if (setActiveTab(id as TabId) && id === 'case-study') setCaseStudyEntryView('PROSPECTING'); }} />
+            <div className="workspace-shell">
+                {navigationOpen && <button className="workspace-nav-backdrop" aria-label="Close navigation" onClick={() => setNavigationOpen(false)} />}
+                <aside className="sidebar workspace-sidebar" ref={navigationRail} id="workspace-navigation" data-open={navigationOpen} role={navigationOpen ? 'dialog' : undefined} aria-modal={navigationOpen ? true : undefined} aria-label="Workspace navigation" inert={commandOpen}>
+                    <div className="workspace-brand-row">
+                        <button className="workspace-brand" onClick={() => setActiveTab('today')} aria-label="Compel overview">
+                            <span className="workspace-wordmark">compel<span>.</span></span>
+                            <span className="workspace-brand-caption">Your business workspace</span>
+                        </button>
+                        <button className="workspace-icon-button workspace-mobile-only" onClick={() => setNavigationOpen(false)} aria-label="Close navigation"><X size={19} /></button>
                     </div>
-
-                    <nav className="flex-1 overflow-y-auto p-3.5 space-y-6 pt-6" aria-label="Main navigation">
-                        <div className="space-y-0.5">
-                            <p className="label-micro px-3 pb-2">Workspace</p>
-                            {NAV_SECTIONS.workspace.map(item => <button key={item.id} onClick={() => { if (item.id === 'case-study') setCaseStudyEntryView('PROSPECTING'); setActiveTab(item.id); }} className={cn('nav-item', activeTab === item.id && 'nav-item-active')}><item.icon className="w-4 h-4 flex-none" />{item.label}</button>)}
-                        </div>
-                        <div className="space-y-0.5">
-                            <p className="label-micro px-3 pb-2">Pipeline</p>
-                            {NAV_SECTIONS.pipeline.map(item => (
-                                <button
-                                    key={item.id}
-                                    onClick={() => setActiveTab(item.id)}
-                                    className={cn("nav-item", item.signal && "nav-item-signal", activeTab === item.id && "nav-item-active")}
-                                >
-                                    <item.icon className="w-4 h-4 flex-none" />
-                                    {item.label}
-                                    {item.id === 'engine' && queueSize > 0 && (
-                                        <span className="nav-count">{queueSize}</span>
-                                    )}
-                                </button>
-                            ))}
-                        </div>
-                        <div className="space-y-0.5">
-                            <p className="label-micro px-3 pb-2">Tools</p>
-                            {NAV_SECTIONS.tools.map(item => (
-                                <button
-                                    key={item.id}
-                                    onClick={() => setActiveTab(item.id)}
-                                    className={cn("nav-item", activeTab === item.id && "nav-item-active")}
-                                >
-                                    <item.icon className="w-4 h-4 flex-none" />
-                                    {item.label}
-                                </button>
-                            ))}
-                        </div>
+                    <button className="workspace-quick-find" onClick={() => { setNavigationOpen(false); setCommandOpen(true); }}><Search size={15} aria-hidden /><span>Jump to a page</span><kbd>Ctrl K</kbd></button>
+                    <nav className="workspace-navigation" aria-label="Main navigation">
+                        {NAV_GROUPS.map(group => <div key={group.label} className="workspace-nav-group">
+                            {group.collapsible ? <button className="workspace-nav-group-toggle" aria-expanded={utilitiesOpen} aria-controls="workspace-utilities" onClick={() => setUtilitiesOpen(!utilitiesOpen)}>{group.label}<ChevronRight size={14} className={utilitiesOpen ? 'is-open' : ''} /></button> : group.label !== 'Workspace' && <p className="workspace-nav-label">{group.label}</p>}
+                            <div hidden={group.collapsible && !utilitiesOpen} id={group.collapsible ? 'workspace-utilities' : undefined}>
+                                {group.items.map(item => <button key={item.id} onClick={() => { if (setActiveTab(item.id) && item.id === 'case-study') setCaseStudyEntryView('PROSPECTING'); }} className={cn('nav-item', activeTab === item.id && 'nav-item-active')} aria-current={activeTab === item.id ? 'page' : undefined}>
+                                    <item.icon size={17} className="flex-none" aria-hidden />{item.label}{item.id === 'engine' && queueSize > 0 && <span className="nav-count">{queueSize}</span>}
+                                </button>)}
+                            </div>
+                        </div>)}
                     </nav>
-
-                    <div className="flex-none border-t border-[#2b3d5b] px-5 py-4 bg-[#1c2c47]">
-                        <div className="flex items-center gap-2">
-                            <span className={cn("dot-live", workerDot)} aria-hidden />
-                            <span className="text-[12px] font-medium text-[#d2dcef]">{workerLabel}</span>
-                        </div>
-                        <p className="text-[11px] text-[#a9b9d2] mt-1.5">
-                            <span className="num">{doneToday.toLocaleString()}</span>
-                            {dailyLimit > 0 && <> of <span className="num">{dailyLimit.toLocaleString()}</span></>} profiles today
-                        </p>
-                    </div>
+                    <button className="workspace-worker" onClick={() => setActiveTab('engine')}>
+                        <span className="workspace-worker-title"><span className={cn('dot-live', workerStatus ? workerDot : 'dot-idle')} aria-hidden />{workerStatus ? workerLabel : 'Worker status'}<ArrowUpRight size={14} aria-hidden /></span>
+                        <span className="workspace-worker-detail">{workerStatus ? <><span className="num">{doneToday.toLocaleString()}</span>{dailyLimit > 0 && <> of <span className="num">{dailyLimit.toLocaleString()}</span></>} profiles today</> : 'Open Engine to check your worker'}</span>
+                    </button>
                 </aside>
-
-                <div className="flex-1 min-w-0 flex flex-col">
-                    <div className="lg:hidden topbar px-4 py-3 flex items-center gap-3">
-                        <span className="w-8 h-8 rounded-lg bg-[var(--signal)] text-white flex items-center justify-center font-bold flex-none" aria-label="Compel">C</span>
-                        <div className="tabs">
-                            {[...NAV_SECTIONS.workspace, ...NAV_SECTIONS.pipeline, ...NAV_SECTIONS.tools].map(item => (
-                                <button
-                                    key={item.id}
-                                    onClick={() => { if (item.id === 'case-study') setCaseStudyEntryView('PROSPECTING'); setActiveTab(item.id); }}
-                                    className={cn("tab", item.signal && "tab-signal", activeTab === item.id && "tab-active")}
-                                >
-                                    {item.label}
-                                </button>
-                            ))}
+                <div className="workspace-main-column" inert={navigationOpen || commandOpen}>
+                    <header className="topbar workspace-header">
+                        <button ref={navigationButton} className="workspace-icon-button workspace-mobile-only" onClick={() => setNavigationOpen(true)} aria-label="Open navigation" aria-expanded={navigationOpen} aria-controls="workspace-navigation"><Menu size={21} /></button>
+                        <div className="workspace-location">
+                            <div className="workspace-breadcrumb"><span>Compel</span><ChevronRight size={12} aria-hidden /><span>{NAV_GROUPS.find(group => group.items.some(item => item.id === activeTab))?.label}</span></div>
+                            <h1>{screen.title}</h1>
                         </div>
-                    </div>
-
-                    <header className="topbar min-h-[76px] px-4 md:px-6 lg:px-8 py-4 flex items-center gap-4 flex-none sticky top-0 z-20">
-                        <div className="min-w-0">
-                            <h1 className="text-[21px] leading-tight font-semibold tracking-[-0.035em] text-[var(--text)] truncate">{screen.title}</h1>
-                            <p className="text-[12px] text-[var(--text-dim)] truncate mt-0.5 hidden sm:block">{screen.sub}</p>
-                        </div>
-                        <div className="ml-auto flex items-center gap-1.5 flex-none">
-                            <LogoutButton />
-                            {activeTab === 'engine' && (
-                                <>
-                                    <button onClick={handleOpenHistory} className="btn btn-ghost !px-2" title="Saved runs">
-                                        <History className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button onClick={handleExport} disabled={leads.length === 0} className="btn btn-outline">
-                                        <Download className="w-3.5 h-3.5" />
-                                        Export
-                                    </button>
-                                    {sheetsConfigured && (
-                                        <button onClick={handleSheetsExport} disabled={leads.length === 0 || sheetsExporting} className="btn btn-outline">
-                                            {sheetsExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sheet className="w-3.5 h-3.5" />}
-                                            Sheets
-                                        </button>
-                                    )}
-                                </>
-                            )}
+                        <div className="workspace-header-actions">
+                            {activeTab === 'engine' && <div className="workspace-engine-actions">
+                                <button onClick={handleOpenHistory} className="btn btn-ghost !px-2" aria-label="Saved runs"><History size={16} /></button>
+                                <button onClick={handleExport} disabled={leads.length === 0} className="btn btn-outline"><Download size={15} />Export</button>
+                                {sheetsConfigured && <button onClick={handleSheetsExport} disabled={leads.length === 0 || sheetsExporting} className="btn btn-outline">{sheetsExporting ? <Loader2 size={15} className="animate-spin" /> : <Sheet size={15} />}Sheets</button>}
+                            </div>}
+                            <button className="workspace-icon-button workspace-header-search" aria-label="Jump to a page" onClick={() => setCommandOpen(true)}><Search size={19} /></button>
                         </div>
                     </header>
-
-                    <main className="flex-1 min-w-0 p-4 md:p-6 lg:p-8">
+                    <main id="workspace-main" className="workspace-content" tabIndex={-1}>
+                        {activeTab !== 'today' && <p className="workspace-description">{screen.sub}</p>}
 
                 {activeTab === 'engine' ? (
-                    <div className="space-y-4">
+                    <div className="engine-workspace space-y-5">
                         {/*
                          * Three figures, not eight. The row this replaced showed Total /
                          * Gate Passed / Emails Found / Efficiency / Activity Failed —
@@ -1343,7 +1350,7 @@ export default function Dashboard() {
                                                     ? <><span className="num">{csvUrls.length.toLocaleString()}</span> profiles ready</>
                                                     : "Drop a CSV here, or click to choose one"}
                                             </p>
-                                            <p className="text-[11.5px] text-[var(--text-faint)] mt-0.5">
+                                            <p className="text-[12px] text-[var(--text-faint)] mt-0.5">
                                                 One LinkedIn URL per row, first column
                                             </p>
                                         </div>
@@ -1535,7 +1542,7 @@ export default function Dashboard() {
                                                 : lead.website ? [lead.website] : [];
                                             return (
                                                 <tr key={i} className="tbl-row">
-                                                    <td className="px-4 py-2.5 num text-[11px] text-[var(--text-faint)] text-right align-top">{i + 1}</td>
+                                                    <td className="px-4 py-2.5 num text-[12px] text-[var(--text-faint)] text-right align-top">{i + 1}</td>
                                                     <td className="px-4 py-2.5 align-top">
                                                         <a
                                                             href={lead.url}
@@ -1552,7 +1559,7 @@ export default function Dashboard() {
                                                     </td>
                                                     <td className="px-4 py-2.5 align-top">
                                                         <div className="flex items-center gap-2">
-                                                            <LeadStatusMark status={lead.status} />
+                                                            <LeadStatusMark status={lead.status} researched={!!lead.prospectQualification} />
                                                             {lead.timedOut && <span className="badge badge-warn">TIMED OUT</span>}
                                                         </div>
                                                         {lead.status === 'ERROR' && <p className="mt-1 text-xs text-[var(--text-dim)] max-w-64">{failureOf(lead).reason}</p>}
@@ -1667,7 +1674,7 @@ export default function Dashboard() {
                                                 style={{ width: `${hunterTotal > 0 ? (hunterProgress / hunterTotal) * 100 : 0}%` }}
                                             />
                                         </div>
-                                        <p className="text-[11.5px] text-[var(--text-faint)] mt-2">
+                                        <p className="text-[12px] text-[var(--text-faint)] mt-2">
                                             <span className="num">{hunterProgress}</span> of <span className="num">{hunterTotal}</span> websites checked
                                         </p>
                                     </div>
@@ -1698,7 +1705,7 @@ export default function Dashboard() {
                                         <tbody>
                                             {hunterResults.map((r, i) => (
                                                 <tr key={i} className="tbl-row">
-                                                    <td className="px-4 py-2.5 num text-[11px] text-[var(--text-faint)] text-right align-top">{i + 1}</td>
+                                                    <td className="px-4 py-2.5 num text-[12px] text-[var(--text-faint)] text-right align-top">{i + 1}</td>
                                                     <td className="px-4 py-2.5 align-top">
                                                         <a
                                                             href={r.website.startsWith('http') ? r.website : 'https://' + r.website}
@@ -1810,7 +1817,7 @@ export default function Dashboard() {
                                                 style={{ width: `${unbouncerTotal > 0 ? (unbouncerProgress / unbouncerTotal) * 100 : 0}%` }}
                                             />
                                         </div>
-                                        <p className="text-[11.5px] text-[var(--text-faint)] mt-2">
+                                        <p className="text-[12px] text-[var(--text-faint)] mt-2">
                                             <span className="num">{unbouncerProgress}</span> of <span className="num">{unbouncerTotal}</span> checked
                                         </p>
                                     </div>
@@ -1879,7 +1886,7 @@ export default function Dashboard() {
                                             <tbody>
                                                 {unbouncerResults.map((r, i) => (
                                                     <tr key={i} className="tbl-row">
-                                                        <td className="px-4 py-2.5 num text-[11px] text-[var(--text-faint)] text-right align-top">{i + 1}</td>
+                                                        <td className="px-4 py-2.5 num text-[12px] text-[var(--text-faint)] text-right align-top">{i + 1}</td>
                                                         <td className="px-4 py-2.5 align-top">
                                                             <div className="flex items-center gap-1.5 flex-wrap">
                                                                 <span className="text-[12.5px] font-[family-name:var(--font-mono)] text-[var(--text)]">{r.email}</span>
@@ -1964,7 +1971,7 @@ export default function Dashboard() {
 
             {/* Saved Runs History Modal */}
             {showHistory && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 animate-in fade-in duration-150">
+                <dialog ref={historyDialog} aria-label="Saved runs" onCancel={() => setShowHistory(false)} className="m-auto w-[min(576px,calc(100vw-32px))] max-h-[80dvh] p-0 border-0 bg-transparent text-[var(--text)] backdrop:bg-black/70">
                     <div className="panel w-full max-w-xl max-h-[80vh] overflow-hidden flex flex-col shadow-[0_24px_60px_rgba(0,0,0,0.7)]">
                         <div className="panel-head flex-none">
                             Saved runs
@@ -1984,17 +1991,17 @@ export default function Dashboard() {
                                         <div className="flex-1 min-w-0">
                                             <p className="text-[13px] text-[var(--text)] truncate">{run.filename}</p>
                                             <div className="flex items-center gap-3 mt-1 flex-wrap">
-                                                <span className="text-[11px] text-[var(--text-faint)] flex items-center gap-1">
+                                                <span className="text-[12px] text-[var(--text-faint)] flex items-center gap-1">
                                                     <Clock className="w-3 h-3" />
                                                     {new Date(run.savedAt).toLocaleString()}
                                                 </span>
-                                                <span className="text-[11px] text-[var(--signal)]">
+                                                <span className="text-[12px] text-[var(--signal)]">
                                                     <span className="num">{run.qualifiedCount}</span> qualified
                                                 </span>
-                                                <span className="text-[11px] text-[var(--text-faint)]">
+                                                <span className="text-[12px] text-[var(--text-faint)]">
                                                     <span className="num">{run.emailsFound}</span> addresses
                                                 </span>
-                                                <span className="text-[11px] text-[var(--text-faint)]">
+                                                <span className="text-[12px] text-[var(--text-faint)]">
                                                     <span className="num">{run.processedCount}</span>/<span className="num">{run.totalCount}</span> done
                                                 </span>
                                             </div>
@@ -2017,7 +2024,7 @@ export default function Dashboard() {
                             )}
                         </div>
                     </div>
-                </div>
+                </dialog>
             )}
 
             {/* Confirm Dialog */}
@@ -2030,6 +2037,6 @@ export default function Dashboard() {
 
             {/* Toast Notifications */}
             <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-        </>
+        </div>
     );
 }

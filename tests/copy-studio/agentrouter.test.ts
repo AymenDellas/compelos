@@ -7,6 +7,7 @@ import {
 import {
   clientResult,
   createAgentRouterCompletion,
+  retryClientOutput,
 } from '../../src/lib/copy-studio/server/agentrouter-client';
 import { startAgentRouterRelay } from '../../src/lib/copy-studio/server/agentrouter-relay';
 import { createServer } from 'node:http';
@@ -135,6 +136,35 @@ test('a completed supported-client response is required before accepting text', 
       ),
     /timed out/,
   );
+});
+
+test('an unreadable or incomplete client envelope is retried once and only a complete result is accepted', async () => {
+  const complete = JSON.stringify([{type:'result', is_error:false, result:'{"offerName":"Coaching & Mentoring"}'}]);
+  for (const broken of ['', '[{"type":"result","is_error":false,"result":"cut off', '[]']) {
+    let calls = 0;
+    const result = await retryClientOutput(async () => clientResult(++calls === 1 ? broken : complete), new AbortController().signal);
+    assert.equal(result, '{"offerName":"Coaching & Mentoring"}');
+    assert.equal(calls, 2);
+  }
+  let calls = 0;
+  await assert.rejects(retryClientOutput(async () => {calls++; return clientResult('truncated');}, new AbortController().signal), /unreadable response/);
+  assert.equal(calls, 2, 'Repeated bad output must stop after one retry.');
+});
+
+test('client recovery does not retry provider refusals, tool requests, or cancelled operations', async () => {
+  for (const message of ['Invalid API key', 'quota exhausted', 'unauthorized client detected', 'aliyun_waf_aa', 'rate limit 429']) {
+    let calls = 0;
+    await assert.rejects(retryClientOutput(async () => {calls++; return clientResult(JSON.stringify([{type:'result',is_error:true,error:{message}}]));}, new AbortController().signal));
+    assert.equal(calls, 1, message);
+  }
+  let calls = 0;
+  const controller = new AbortController();
+  await assert.rejects(retryClientOutput(async () => {calls++; controller.abort(); return clientResult('broken');}, controller.signal), {name:'AbortError'});
+  assert.equal(calls, 1);
+  const tools = JSON.stringify([{type:'result', is_error:false, result:'Do not accept', stats:{tools:{totalCalls:1}}}]);
+  calls = 0;
+  await assert.rejects(retryClientOutput(async () => {calls++; return clientResult(tools);}, new AbortController().signal), /unsupported tool/);
+  assert.equal(calls, 1);
 });
 
 test('hosted HTML security challenges and endpoint authentication failures are classified without exposing their contents', () => {

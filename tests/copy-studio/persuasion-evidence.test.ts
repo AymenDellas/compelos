@@ -134,6 +134,45 @@ test('unsupported free-call and financial-strain assumptions are removed from th
   assert.equal(responses.length, 0);
 });
 
+test('editorial price exclusions and approved evidence IDs do not reject a valid strategy', async () => {
+  const withProof = { ...input, brief: { ...input.brief, proof: testimonialProof(findTestimonials(source, 'Career Coaching').slice(0, 1)) } };
+  const planned = { ...strategy, frameworkPlan: strategy.frameworkPlan.map(step => step.stage === 'Solution' ? {
+    ...step, application: "Proof frames E1 as one client's career-change experience. Objections addresses the hesitation without adding price or policy. CTA repeats the same approved label.",
+  } : step) };
+  const completeDraft = structuredClone(draft);
+  Object.assign(completeDraft.sections.find(section => section.id === 'proof')!, {
+    headline: 'A client’s career decision', body: '',
+    proofFraming: { introduction: 'One client describes the support behind a career decision.', items: [{ id: 'E1', heading: 'Choosing a career direction' }] },
+  });
+  const responses = [planned, completeDraft];
+  const result = await generate(async () => JSON.stringify(responses.shift()), withProof, new AbortController().signal, () => {});
+  assert.equal(responses.length, 0);
+  assert.equal(result.issues.length, 0);
+  assert.equal(result.draft.strategy.frameworkPlan?.[2].application, planned.frameworkPlan[2].application);
+  // The exemption is for internal planning, never for public copy.
+  assert.ok(auditDraft({ ...draft, sections: [{ ...draft.sections[0], body: 'Ask about the price. Reference E1.' }] }, input.brief)
+    .filter(issue => /Pricing is not supplied|numbers/.test(issue.message)).length === 2);
+});
+
+test('an editorial price exclusion does not hide affirmative unsupported strategy claims', async () => {
+  const bad = { ...strategy, frameworkPlan: strategy.frameworkPlan.map(step => step.stage === 'Solution' ? {
+    ...step, application: 'Do not add pricing, but promise guaranteed 300% growth. Mention financial strain as a reason to book.',
+  } : step) };
+  const responses = [bad, strategy, draft];
+  const result = await generate(async () => JSON.stringify(responses.shift()), input, new AbortController().signal, () => {});
+  assert.equal(responses.length, 0);
+  assert.equal(result.draft.strategy.frameworkPlan?.[2].application, strategy.frameworkPlan[2].application);
+});
+
+test('a strategy describing its goal as not a guaranteed outcome is not an affirmative guarantee', async () => {
+  const planned = { ...strategy, promise: 'Clearer language is the aim, not a guaranteed result.',
+    angle: 'Explain the offer clearly, framed as a goal, not as a guaranteed outcome.' };
+  const responses = [planned, draft];
+  const result = await generate(async () => JSON.stringify(responses.shift()), input, new AbortController().signal, () => {});
+  assert.equal(responses.length, 0);
+  assert.equal(result.draft.strategy.promise, planned.promise);
+});
+
 test('approved testimonials cannot be silently omitted and changed quotations are flagged', async () => {
   const proof = testimonialProof(findTestimonials(source, 'Career Coaching').slice(0, 1));
   const withProof = { ...input, brief: { ...input.brief, proof } };

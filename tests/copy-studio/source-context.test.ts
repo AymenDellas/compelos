@@ -4,9 +4,26 @@ import { sourceContext, byteSize } from '../../src/lib/copy-studio/server/source
 import { extract, generate, revise } from './reviewed-engine';
 import { createCompletion, structured } from '../../src/lib/copy-studio/server/provider';
 import { z } from 'zod/v4';
+import { importResultSchema } from '../../src/lib/copy-studio/shared/contracts';
 import { input, draft, strategy } from './fixtures';
 
 const controller = () => new AbortController();
+
+test('prefill accepts multiple source citations per fact and keeps every field supported in the bounded review index', async () => {
+  const keys = ['offerName', 'description', 'audience', 'problem', 'outcome', 'mechanism', 'deliverables', 'cta', 'voice', 'customerLanguage', 'nextStep', 'coachBio'] as const;
+  const fields = Object.fromEntries(keys.map(key => [key, key === 'offerName' ? 'Core Coaching' : `Verified source fact about ${key}.`]));
+  const evidence = keys.flatMap(field => Array.from({ length: 3 }, (_, index) => ({ field, quote: `Core Coaching: ${fields[field]} Supporting passage ${index + 1}.` })));
+  const source = { title: 'Core Coaching', url: 'https://coach.example/', headings: [], text: evidence.map(item => item.quote).join('\n\n') };
+  let calls = 0;
+  const result = await extract(async () => { calls++; return JSON.stringify({ offers: [{ name: 'Core Coaching', summary: 'Private coaching', quote: evidence[0].quote }], fields, evidence, warnings: [] }); }, source, controller().signal, 'Core Coaching');
+  assert.equal(calls, 1, 'Valid extra citations should not trigger a model retry');
+  assert.equal(result.extraction.evidence.length, 24);
+  for (const key of keys) {
+    assert.equal(result.extraction.fields[key], fields[key]);
+    assert.ok(result.extraction.evidence.some(item => item.field === key), `${key} must retain a source citation, even when it appears last`);
+  }
+  importResultSchema.parse(result);
+});
 const largeSource = () => ({
   title: 'Coach', url: 'https://coach.example/', headings: ['Coach'],
   text: Array.from({ length: 75 }, (_, i) => `SOURCE PAGE: https://coach.example/articles/${i}\nTITLE: Article ${i}\n\n${`General article ${i} about weekly planning and personal priorities. `.repeat(50)}`).join('\n\n')

@@ -206,12 +206,12 @@ export default function CaseStudyHunter({ initialView = 'PROSPECTING' }: { initi
     const hunterProspects = prospects.filter((prospect) => !prospect.data.crmLeadId && prospect.data.mode === mode);
     const plan = buildHunterDailyPlan(hunterProspects);
     return (
-        <div className="space-y-5 max-w-7xl" data-testid="case-study-hunter">
+        <div className="hunter-workspace space-y-5" data-testid="case-study-hunter">
             {view !== 'CRM_OUTREACH' && view !== 'PROSPECTING' && <WorkerStrip worker={worker} refresh={refreshWorker} />}
             {error && <p role="alert" className="panel-note text-[var(--bad)]">{error}</p>}
             {message && <p role="status" className="panel-note text-[var(--signal)]">{message}</p>}
 
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="hunter-workspace-tabs flex flex-wrap items-center justify-between gap-3">
                 <div className="seg" aria-label="Case Study Hunter view">
                     {([['PROSPECTING','Prospecting'], ['TODAY', 'Today'], ['PIPELINE', 'Pipeline'], ['CRM_OUTREACH', `CRM outreach (${crmProspects.length})`]] as const).map(([value, label]) => (
                         <button key={value} className={`seg-item ${view === value ? 'seg-active' : ''}`} onClick={() => setView(value)}>{label}</button>

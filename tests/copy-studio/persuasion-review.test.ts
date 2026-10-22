@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generate, revise } from '../../src/lib/copy-studio/server/engine';
 import { PERSUASION_EDITOR, reviewPersuasion } from '../../src/lib/copy-studio/server/persuasion-review';
-import type { Completion } from '../../src/lib/copy-studio/server/provider';
+import { completionDeadline, type Completion } from '../../src/lib/copy-studio/server/provider';
 import { auditDraft, mergeDraftIssues, PERSUASION_REVIEW_PREFIX } from '../../src/lib/copy-studio/shared/quality';
 import { sectionWritingRole } from '../../src/lib/copy-studio/shared/persuasion';
 import { sectionAngleOptions, supportsRevision } from '../../src/lib/copy-studio/shared/revision-options';
@@ -110,6 +110,61 @@ test('cancelling an editorial check propagates cancellation instead of returning
     controller.abort(new Error('Operator cancelled'));
     throw controller.signal.reason;
   }, input, draft, controller.signal, ['hero']), /Operator cancelled/);
+});
+
+test('late completed copy is returned with visible review flags before the enclosing request deadline', async t => {
+  let now = 1000;
+  t.mock.method(Date, 'now', () => now);
+  let calls = 0;
+  const result = await generate(async () => {
+    calls++;
+    if (calls === 1) return JSON.stringify(strategy);
+    assert.equal(calls, 2, 'An exhausted editorial budget must not start another provider request');
+    now += 271_000;
+    return JSON.stringify(draft);
+  }, input, signal(), () => {});
+  assert.equal(calls, 2);
+  assert.deepEqual(result.draft.sections, draft.sections);
+  assert.ok(result.issues.length > 0);
+  assert.ok(result.issues.every(issue => issue.message.startsWith(PERSUASION_REVIEW_PREFIX) && /could not finish/.test(issue.message)));
+});
+
+test('an editorial repair that exhausts its budget preserves the existing draft and actionable finding', async t => {
+  let now = 1000;
+  t.mock.method(Date, 'now', () => now);
+  const replies = [strategy, generic(), { findings: [finding] }, { sections: [draft.sections[0]] }];
+  const result = await generate(async () => {
+    const next = replies.shift();
+    if (!replies.length) now += 151_000;
+    return JSON.stringify(next);
+  }, input, signal(), () => {});
+  assert.equal(replies.length, 0);
+  assert.equal(result.draft.sections[0].headline, finding.quote);
+  assert.match(result.issues[0].message, /interchangeable/);
+});
+
+test('editorial deadlines abort slow provider calls while leaving the enclosing generation active', async () => {
+  let aborted = false;
+  const parent = new AbortController();
+  const slow: Completion = (_system, _prompt, callSignal) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(JSON.stringify(pass)), 5000);
+    const abort = () => {
+      aborted = true;
+      clearTimeout(timer);
+      reject(callSignal.reason);
+    };
+    if (callSignal.aborted) abort();
+    else callSignal.addEventListener('abort', abort, { once: true });
+  });
+  slow.inputByteLimit = 80_000;
+  const bounded = completionDeadline(slow, Date.now() + 300);
+  bounded.inputByteLimit = 70_000;
+  assert.equal(slow.inputByteLimit, 70_000);
+  await assert.rejects(bounded('', '', parent.signal), /time|abort/i);
+  assert.equal(aborted, true);
+  assert.equal(parent.signal.aborted, false);
+  const result = await reviewPersuasion(bounded, input, draft, parent.signal, ['hero']);
+  assert.match(result.issues[0].message, /could not finish/);
 });
 
 test('section angles preserve the page framework and the full role survives compact requests', async () => {

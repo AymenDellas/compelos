@@ -1,4 +1,6 @@
 import { ESSENTIAL_MAX_LENGTH, ONBOARDING_ESSENTIAL_FIELDS } from './offer-essentials';
+import { validateJourney } from './onboarding-journey';
+import { importResultSchema } from './copy-studio/shared/contracts';
 import { validateDeliveryData } from './project-workspace';
 import {
     AGREEMENT_STATUSES,
@@ -158,6 +160,13 @@ export function validateProject(d: ProjectData) {
     if (m.minimumIncrease === 0) throw new Error('The target must be an increase of at least one booking.');
     if (d.onboarding) {
         const o = d.onboarding;
+        if (o.journey) {
+            validateJourney(o.journey);
+            if (o.journey.reference) importResultSchema.parse(o.journey.reference);
+        }
+        text(o.form.coachBio ?? '', 'Coach background', 20000);
+        text(o.form.proof ?? '', 'Client proof', 480000);
+        text(o.form.preferences ?? '', 'Client preferences', 20000);
         required(o.clientName, 'Onboarding client name');
         required(o.projectName, 'Onboarding project name');
         choice(o.projectType, ['PAID', 'CASE_STUDY'], 'project type');
