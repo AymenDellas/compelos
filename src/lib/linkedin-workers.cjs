@@ -6,7 +6,9 @@ const { randomUUID, randomBytes, createCipheriv, createDecipheriv, createHash } 
 const {cleanIdentity}=require('./linkedin-session-identity.cjs');
 const {sameMember}=require('./linkedin-session-policy.cjs');
 const {failureOf}=require('./worker-failure.cjs');
-const activityPolicy=require('./linkedin-activity-policy.cjs');
+const {normalizeEngineResult}=require('./engine-result.cjs');
+const telemetry=require('./engine-telemetry.cjs');
+const daily=require('./engine-daily-policy.cjs');
 const ready = new WeakMap();
 // Browser text can contain lone UTF-16 surrogates or NULs. PostgreSQL JSONB
 // rejects those even though JSON.stringify accepts them. Keep normal emoji.
@@ -17,7 +19,7 @@ INSERT INTO compel_worker_config(id) VALUES(1) ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS compel_linkedin_accounts (
  id TEXT PRIMARY KEY, label TEXT NOT NULL, email TEXT NOT NULL, secret TEXT NOT NULL DEFAULT '',
  profile_key TEXT UNIQUE NOT NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, archived BOOLEAN NOT NULL DEFAULT FALSE,
- daily_limit INTEGER NOT NULL DEFAULT 400 CHECK(daily_limit BETWEEN 1 AND 400), position INTEGER NOT NULL,
+ daily_limit INTEGER NOT NULL DEFAULT 300 CHECK(daily_limit BETWEEN 1 AND 400), position INTEGER NOT NULL,
  login_requested_at TIMESTAMPTZ, changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE UNIQUE INDEX IF NOT EXISTS compel_linkedin_active_email ON compel_linkedin_accounts(lower(email)) WHERE archived IS FALSE;
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS logout_requested_at TIMESTAMPTZ;
@@ -26,6 +28,11 @@ ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS processing_enabled
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS processing_until TIMESTAMPTZ;
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ;
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS confirmed_identity JSONB;
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS aliasmode_profile_id TEXT;
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS aliasmode_profile_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS binding_revision BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS expected_member_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS close_requested_at TIMESTAMPTZ;
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS attention_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS daily_request_limit INTEGER NOT NULL DEFAULT 100;
 ALTER TABLE compel_linkedin_accounts ADD COLUMN IF NOT EXISTS request_interval_seconds INTEGER NOT NULL DEFAULT 15;
@@ -54,6 +61,7 @@ ALTER TABLE compel_worker_jobs ADD COLUMN IF NOT EXISTS queue_order BIGSERIAL;
 ALTER TABLE compel_worker_jobs ADD COLUMN IF NOT EXISTS checkpoint JSONB;
 ALTER TABLE compel_worker_jobs ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ;
 ALTER TABLE compel_worker_jobs ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE compel_worker_jobs ADD COLUMN IF NOT EXISTS lane TEXT NOT NULL DEFAULT 'capture';
 CREATE TABLE IF NOT EXISTS compel_research_budget (id TEXT PRIMARY KEY,next_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 ALTER TABLE compel_worker_config ADD COLUMN IF NOT EXISTS supervisor_seen_at TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS compel_worker_pending_profile ON compel_worker_jobs(profile_key) WHERE status IN ('pending','processing');
@@ -71,9 +79,10 @@ async function ensure(pool) {
    AND to_regclass('compel_worker_profile_usage') IS NOT NULL
    AND to_regclass('compel_prospect_runs') IS NOT NULL
    AND to_regclass('compel_worker_events') IS NOT NULL
+   AND (SELECT count(*)=5 FROM pg_attribute WHERE attrelid=to_regclass('compel_linkedin_accounts') AND attname IN ('aliasmode_profile_id','aliasmode_profile_name','binding_revision','expected_member_name','close_requested_at') AND NOT attisdropped)
    AND (SELECT count(*)=11 FROM pg_attribute WHERE attrelid=to_regclass('compel_linkedin_accounts') AND attname IN ('processing_enabled','processing_until','connected_at','confirmed_identity','attention_reason','daily_request_limit','request_interval_seconds','next_check_at','signed_out_at','activity_limits','working_hours') AND NOT attisdropped)
    AND (SELECT count(*)=3 FROM pg_attribute WHERE attrelid=to_regclass('compel_worker_usage') AND attname IN ('request_count','cached_profiles','request_kinds') AND NOT attisdropped)
-   AND (SELECT count(*)=3 FROM pg_attribute WHERE attrelid=to_regclass('compel_worker_jobs') AND attname IN ('checkpoint','retry_at','retry_count') AND NOT attisdropped)
+   AND (SELECT count(*)=4 FROM pg_attribute WHERE attrelid=to_regclass('compel_worker_jobs') AND attname IN ('checkpoint','retry_at','retry_count','lane') AND NOT attisdropped)
    AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('compel_worker_config') AND attname='supervisor_seen_at' AND NOT attisdropped) AS migrated`);
   if(migrated.rows[0]?.migrated)return;
   // All schema changes share one transaction lock across worker processes.
@@ -89,7 +98,7 @@ async function ensure(pool) {
   }
   catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
  })().catch(error => { ready.delete(pool); throw error; }));
- return ready.get(pool);
+ await ready.get(pool);await daily.ensure(pool);
 }
 async function backfillProfileUsage(client) {
  // The old counter recorded attempts. Recover distinct visits from saved
@@ -171,38 +180,51 @@ function validateSettings(body) {
   if (a.id && (typeof a.id !== 'string' || !/^(?:legacy-\d+|[a-f0-9-]{36})$/.test(a.id) || ids.has(a.id))) throw new Error('Invalid or repeated account ID.');
   if (a.id) ids.add(a.id);
   if (a.password !== undefined && (typeof a.password !== 'string' || a.password.length > 256)) throw new Error('Invalid password.');
-  const dailyRequestLimit=a.dailyRequestLimit??100,requestIntervalSeconds=a.requestIntervalSeconds??15;
-  if(!Number.isInteger(dailyRequestLimit)||dailyRequestLimit<10||dailyRequestLimit>2000)throw new Error('Choose a daily check budget between 10 and 2,000.');
-  if(!Number.isInteger(requestIntervalSeconds)||requestIntervalSeconds<10||requestIntervalSeconds>300)throw new Error('Allow 10–300 seconds between LinkedIn checks.');
-  return { id: a.id || randomUUID(), email, label, enabled: a.enabled, dailyLimit: a.dailyLimit, dailyRequestLimit,requestIntervalSeconds, activityLimits:activityPolicy.validateLimits(a.activityLimits),workingHours:activityPolicy.validateHours(a.workingHours),position };
+  return { id: a.id || randomUUID(), email, label, enabled: a.enabled, dailyLimit: a.dailyLimit,position };
  });
  const enabled = accounts.filter(a => a.enabled).length;
  if (!Number.isInteger(body.activeCount) || body.activeCount < 0 || body.activeCount > enabled) throw new Error('Choose a number of running accounts between 0 and the number enabled.');
- return { accounts, activeCount: body.activeCount, revision: body.revision };
+ // active_count is the global processing switch, not a subset of accounts.
+ // Older saved values such as 1 enable every available account concurrently.
+ return { accounts, activeCount: body.activeCount>0?enabled:0, revision: body.revision };
 }
 async function settings(pool) {
  await ensure(pool);
- const config = (await pool.query('SELECT * FROM compel_worker_config WHERE id=1')).rows[0];
+ const config = (await pool.query('SELECT *,compel_worker_day()::text AS daily_day,((compel_worker_day()+1)::timestamp AT TIME ZONE daily_timezone) AS resume_at FROM compel_worker_config WHERE id=1')).rows[0];
  const rows = (await pool.query(`SELECT a.id,a.label,a.email,a.enabled,a.daily_limit,a.position,(a.secret<>'') AS has_password,
-  a.login_requested_at,a.logout_requested_at,a.signed_out_at,a.processing_enabled,a.processing_until,a.connected_at,a.confirmed_identity,a.attention_reason,a.daily_request_limit,a.request_interval_seconds,a.activity_limits,a.working_hours,s.status,s.updated_at,s.lease_until,COALESCE(u.count,0) AS daily_count,
+  a.login_requested_at,a.logout_requested_at,a.signed_out_at,a.processing_enabled,a.processing_until,a.changed_at::text AS control_version,a.connected_at,a.confirmed_identity,a.attention_reason,
+  a.aliasmode_profile_id,a.aliasmode_profile_name,a.binding_revision,a.expected_member_name,a.close_requested_at,s.status,s.updated_at,s.lease_until,COALESCE(p.used,0) AS daily_count,
   COALESCE(u.request_count,0) AS request_count,COALESCE(u.cached_profiles,0) AS cached_profiles,COALESCE(u.request_kinds,'{}') AS request_kinds
   FROM compel_linkedin_accounts a LEFT JOIN compel_worker_sessions s ON s.account_id=a.id
-  LEFT JOIN compel_worker_usage u ON u.account_id=a.id AND u.day=(NOW() AT TIME ZONE 'UTC')::date
+  LEFT JOIN compel_worker_usage u ON u.account_id=a.id AND u.day=compel_worker_day()
+  LEFT JOIN (SELECT account_id,count(*)::int AS used FROM compel_worker_account_profiles WHERE day=compel_worker_day() GROUP BY account_id) p ON p.account_id=a.id
   WHERE a.archived IS FALSE ORDER BY a.position,a.id`)).rows;
- const events=(await pool.query("SELECT account_id,data,created_at,EXTRACT(EPOCH FROM NOW())*1000 AS observed_ms FROM compel_worker_events WHERE kind='read' AND created_at>NOW()-interval '24 hours'")).rows;
- return { revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: Math.min(config.active_count, rows.filter(a => a.enabled).length), accounts: rows.map(a => ({
+ return { resources:config.agent_status?.resources||null,browserLimit:config.agent_status?.browserCapacity||10,dailyDay:config.daily_day,defaultDailyLimit:daily.defaultLimit(),revision: config.revision, supervisorOnline:!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000, activeCount: config.active_count>0?rows.filter(a => a.enabled).length:0, accounts: rows.map(a => ({
   id:a.id,label:a.label,email:a.email,enabled:a.enabled,dailyLimit:a.daily_limit,hasPassword:a.has_password,
-  dailyCount:a.daily_count,status:a.status?.status || 'offline',reason:a.status?.reason || '',
+  aliasmodeProfileId:a.aliasmode_profile_id||null,aliasmodeProfileName:a.aliasmode_profile_name||'',bindingRevision:Number(a.binding_revision||0),expectedMemberName:a.expected_member_name||'',closePending:!!a.close_requested_at,
+  dailyCount:a.daily_count,dailyTimezone:config.daily_timezone,dailyResumeAt:a.daily_count>=a.daily_limit?config.resume_at:null,status:a.status?.status || 'offline',reason:a.status?.reason || '',
+  runtimeVersion:a.status?.runtimeVersion||'',sessionReady:!!a.status?.sessionReady,browserOpen:!!a.status?.browserOpen,browserMode:a.status?.browserOpen&&['headless','visible','unknown'].includes(a.status?.browserMode)?a.status.browserMode:null,nextEligibleAt:a.status?.nextEligibleAt||(a.daily_count>=a.daily_limit?config.resume_at:null),
   dailyRequests:a.request_count||0,dailyCachedProfiles:a.cached_profiles||0,requestKinds:a.request_kinds||{},
-  processingEnabled:!!a.processing_enabled&&new Date(a.processing_until).getTime()>Date.now(),processingUntil:a.processing_until||null,
-  connectedAt:a.connected_at||null,attentionReason:a.attention_reason||'',dailyRequestLimit:a.daily_request_limit,requestIntervalSeconds:a.request_interval_seconds,
-  activityLimits:activityPolicy.validateLimits(a.activity_limits),workingHours:a.working_hours,activityUsage:activityPolicy.windowUsage(events.filter(e=>e.account_id===a.id),events.length?Number(events[0].observed_ms):Date.now()),
+  processingEnabled:!!a.processing_enabled,processingUntil:null,
+  connectedAt:a.connected_at||null,attentionReason:a.attention_reason||'',
   prospectingReady:a.status?.prospectingVersion==='COACH_EVIDENCE_V1',
   online:!!a.lease_until && new Date(a.lease_until).getTime() > Date.now(),
   loginPending:!!a.login_requested_at, logoutPending:!!a.logout_requested_at, signedOut:!!a.signed_out_at, updatedAt:a.updated_at || null,
   memoryMB:a.status?.memoryMB || 0,avgJobDurationMs:a.status?.avgJobDurationMs || 0,url:a.status?.url || '',
   signedIn:a.signed_out_at?null:cleanIdentity(a.confirmed_identity||a.status?.signedIn),
+  ...startupForAccount(config,a),
  })) };
+}
+function startupForAccount(config,a){
+ const live=config.agent_status?.accounts?.[a.id],saved=a.status;
+ const agentOnline=!!config.supervisor_seen_at&&Date.now()-new Date(config.supervisor_seen_at).getTime()<45000;
+ const state=(agentOnline||live?.startupStage==='FAILED')&&live?.controlVersion===a.control_version?live:saved?.controlVersion===a.control_version?saved:null;
+  if(a.attention_reason&&!a.login_requested_at&&!a.close_requested_at)return {startupStage:'SESSION_REVIEW',startupReason:a.attention_reason};
+ if(!a.processing_enabled&&!a.login_requested_at&&!a.logout_requested_at&&state?.startupStage!=='FAILED')return {startupStage:agentOnline?(a.status?.sessionReady?'SESSION_VERIFIED':'AGENT_ACK'):'OFFLINE'};
+ if(!agentOnline&&a.processing_enabled)return {startupStage:'REQUEST_RECEIVED',startupReason:'Processing intent is saved. Start the local agent to resume it.'};
+ if(state?.startupStage)return {startupStage:state.startupStage,failedStage:state.failedStage||null,startupReason:state.reason||'',startupAction:state.action||''};
+ if(a.login_requested_at||a.processing_enabled)return {startupStage:'REQUEST_RECEIVED',startupReason:'Request saved. Waiting for the local agent to acknowledge it.'};
+ return {startupStage:null};
 }
 async function saveSettings(pool, body) {
  const value = validateSettings(body); await ensure(pool);
@@ -228,10 +250,12 @@ async function saveSettings(pool, body) {
     changed_at=CASE WHEN compel_linkedin_accounts.secret IS DISTINCT FROM $4 THEN NOW() ELSE compel_linkedin_accounts.changed_at END`,
     [a.id,a.label,a.email,secret,a.enabled,a.dailyLimit,a.position]);
   }
-  for(const a of value.accounts)await client.query(`UPDATE compel_linkedin_accounts SET daily_request_limit=$2,request_interval_seconds=$3,
-   processing_enabled=CASE WHEN $4 THEN processing_enabled ELSE FALSE END,activity_limits=$5::jsonb,working_hours=$6::jsonb WHERE id=$1`,[a.id,a.dailyRequestLimit,a.requestIntervalSeconds,a.enabled,json(a.activityLimits),json(a.workingHours)]);
+  for(const a of value.accounts)await client.query(`UPDATE compel_linkedin_accounts SET
+   processing_enabled=CASE WHEN $2 THEN processing_enabled ELSE FALSE END WHERE id=$1`,[a.id,a.enabled]);
   await client.query('UPDATE compel_linkedin_accounts SET archived=TRUE,enabled=FALSE,processing_enabled=FALSE,processing_until=NULL WHERE archived IS FALSE AND NOT(id=ANY($1::text[]))', [value.accounts.map(a => a.id)]);
   await client.query('UPDATE compel_worker_config SET active_count=$1,revision=revision+1 WHERE id=1', [value.activeCount]);
+  if(value.activeCount===0)await client.query('UPDATE compel_linkedin_accounts SET processing_enabled=FALSE,processing_until=NULL WHERE processing_enabled');
+  await client.query("SELECT pg_notify('compel_engine_wake','')");
   await client.query('COMMIT');
  } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
  return settings(pool);
@@ -259,14 +283,19 @@ async function importAccounts(pool, accounts, legacyUsage) {
 async function selectedAccounts(pool) {
  await ensure(pool);
  return (await pool.query(`SELECT a.*,a.changed_at::text AS control_version FROM compel_linkedin_accounts a WHERE a.enabled IS TRUE AND a.archived IS FALSE AND a.logout_requested_at IS NULL AND a.signed_out_at IS NULL
-  AND a.processing_enabled IS TRUE AND a.processing_until>NOW() AND a.connected_at IS NOT NULL AND a.attention_reason=''
-  ORDER BY a.position,a.id LIMIT (SELECT active_count FROM compel_worker_config WHERE id=1)`)).rows;
+  AND a.processing_enabled IS TRUE AND a.connected_at IS NOT NULL AND a.attention_reason=''
+  AND (SELECT active_count FROM compel_worker_config WHERE id=1)>0 ORDER BY a.position,a.id`)).rows;
+}
+async function readRuntimeAccount(pool,id) {
+  return (await pool.query(`SELECT a.*,a.changed_at::text AS control_version,a.changed_at::text AS processing_token,a.login_requested_at::text AS login_token,a.logout_requested_at::text AS logout_token,a.close_requested_at::text AS close_token,
+  (a.processing_enabled AND (SELECT active_count FROM compel_worker_config WHERE id=1)>0) AS authorized
+  FROM compel_linkedin_accounts a WHERE a.id=$1 AND a.archived IS FALSE`,[id])).rows[0]||null;
 }
 async function acquireSession(pool, id, owner) {
  await ensure(pool);
  return (await pool.query(`INSERT INTO compel_worker_sessions(account_id,owner,lease_until,status) VALUES($1,$2,NOW()+interval '120 seconds','{"status":"starting"}')
   ON CONFLICT(account_id) DO UPDATE SET owner=$2,lease_until=NOW()+interval '120 seconds',status='{"status":"starting"}',updated_at=NOW()
-  WHERE compel_worker_sessions.lease_until<NOW() OR compel_worker_sessions.owner=$2 RETURNING account_id`,[id,owner])).rowCount === 1;
+  WHERE compel_worker_sessions.owner=$2 OR (compel_worker_sessions.lease_until<NOW() AND (compel_worker_sessions.lease_until<=compel_worker_sessions.updated_at OR compel_worker_sessions.status->>'status' IN ('offline','signed_out'))) RETURNING account_id`,[id,owner])).rowCount === 1;
 }
 async function heartbeat(pool, id, owner, status) {
  const update = await pool.query(`UPDATE compel_worker_sessions SET lease_until=NOW()+interval '120 seconds',status=$3::jsonb,updated_at=NOW() WHERE account_id=$1 AND owner=$2 AND lease_until>NOW()`,[id,owner,json(status)]);
@@ -281,15 +310,8 @@ async function requestLogin(pool,id) {
  return accountTransaction(pool,async client=>{
   const a=(await client.query('SELECT * FROM compel_linkedin_accounts WHERE id=$1 AND archived IS FALSE FOR UPDATE',[id])).rows[0];
   if(!a||a.logout_requested_at)throw new Error('Account not found or sign-out is still pending.');
-  if(a.login_requested_at&&Date.now()-new Date(a.login_requested_at).getTime()>600000){
-   await client.query('UPDATE compel_linkedin_accounts SET login_requested_at=NULL WHERE id=$1',[id]);a.login_requested_at=null;
-  }
   const session=(await client.query('SELECT status,lease_until>NOW() AS online FROM compel_worker_sessions WHERE account_id=$1',[id])).rows[0];
-  if(a.login_requested_at||session?.online&&session.status?.status==='awaiting_login')return;
-  if((await client.query("SELECT 1 FROM compel_worker_events WHERE account_id=$1 AND kind='sign_in_requested' AND created_at>NOW()-interval '5 minutes' LIMIT 1",[id])).rowCount)
-   throw new Error('A sign-in was recently requested. Wait five minutes before opening another window.');
-  if((await client.query("SELECT count(*)::int AS n FROM compel_worker_events WHERE account_id=$1 AND kind='sign_in_requested' AND created_at>NOW()-interval '1 hour'",[id])).rows[0].n>=3)
-   throw new Error('Three sign-in windows were already requested in the last hour. Stop retrying and review the account before requesting another.');
+  if(session?.online&&session.status?.status==='awaiting_login')return;
   await client.query('UPDATE compel_linkedin_accounts SET processing_enabled=FALSE,processing_until=NULL,login_requested_at=NOW(),signed_out_at=NULL,changed_at=NOW() WHERE id=$1',[id]);
   await accountEvent(client,id,'sign_in_requested','Manual sign-in requested. Processing stays paused.');
  });
@@ -326,6 +348,7 @@ async function accountTransaction(pool,fn) {
 }
 async function accountEvent(client,id,kind,message,data={}) {
  await client.query('INSERT INTO compel_worker_events(account_id,kind,message,data) VALUES($1,$2,$3,$4::jsonb)',[id,kind,message,json(data)]);
+ await client.query("SELECT pg_notify('compel_engine_wake','')");
 }
 async function accountEvents(pool,id) {
  await ensure(pool);
@@ -340,6 +363,8 @@ async function confirmManualSignIn(pool,id,owner,identity) {
   const a=(await client.query('SELECT * FROM compel_linkedin_accounts WHERE id=$1 AND archived IS FALSE FOR UPDATE',[id])).rows[0];
   const lease=await client.query('SELECT 1 FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW()',[id,owner]);
   if(!a||!lease.rowCount||a.logout_requested_at||a.login_requested_at)throw new Error('Account request changed; sign-in was not confirmed.');
+   const memberName=value=>String(value||'').normalize('NFKC').replace(/\s+/g,' ').trim().toLowerCase();
+   if(!a.confirmed_identity&&a.expected_member_name&&memberName(a.expected_member_name)!==memberName(clean.name))throw new Error('This AliasMode profile does not show the expected LinkedIn member. Review its binding before processing.');
   if(a.confirmed_identity&&!sameMember(a.confirmed_identity,clean))throw new Error('This browser is signed into a different LinkedIn member. Sign out and use the intended account.');
   if((await client.query("SELECT 1 FROM compel_linkedin_accounts WHERE id<>$1 AND archived IS FALSE AND connected_at IS NOT NULL AND (($2<>'' AND confirmed_identity->>'memberUrn'=$2) OR ($3<>'' AND confirmed_identity->>'profileUrl'=$3)) LIMIT 1",[id,clean.memberUrn,clean.profileUrl])).rowCount)
    throw new Error('This LinkedIn member is already connected to another saved account. Use that account instead.');
@@ -347,26 +372,20 @@ async function confirmManualSignIn(pool,id,owner,identity) {
   await accountEvent(client,id,'connected','Sign-in confirmed. Account is idle; processing requires an explicit start.');
  });
 }
-async function startProcessing(pool,id,minutes=60) {
- if(!Number.isInteger(minutes)||minutes<15||minutes>120)throw new Error('Choose a processing session of 15–120 minutes.');
+async function startProcessing(pool,id) {
  return accountTransaction(pool,async client=>{
   const config=(await client.query('SELECT * FROM compel_worker_config WHERE id=1 FOR UPDATE')).rows[0];
   const a=(await client.query('SELECT * FROM compel_linkedin_accounts WHERE id=$1 AND archived IS FALSE FOR UPDATE',[id])).rows[0];
   if(!a||!a.enabled)throw new Error('Enable this account in settings before starting.');
   if(a.attention_reason)throw new Error('This account needs review. Resolve LinkedIn’s check and complete manual sign-in before starting.');
   if(!a.connected_at||a.signed_out_at||a.login_requested_at||a.logout_requested_at)throw new Error('Complete manual sign-in before starting processing.');
-  if(a.processing_enabled&&new Date(a.processing_until).getTime()>Date.now())return;
-  if(!activityPolicy.hoursAllowed(a.working_hours))throw new Error('Outside this account’s working hours. Start processing during its saved schedule.');
-  const usage=(await client.query("SELECT request_count,count FROM compel_worker_usage WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date",[id])).rows[0];
-  const rolling=(await client.query("SELECT count(*)::int AS n FROM compel_worker_events WHERE account_id=$1 AND kind='read' AND created_at>NOW()-interval '24 hours'",[id])).rows[0].n;
-  if(Math.max(usage?.request_count||0,rolling)>=a.daily_request_limit)throw new Error('The daily processing budget is exhausted. Wait for checks to leave the rolling 24-hour window before starting.');
-  if((await client.query("SELECT count(*)::int AS n FROM compel_worker_events WHERE account_id=$1 AND kind='read' AND created_at>NOW()-interval '1 hour'",[id])).rows[0].n>=30)throw new Error('The hourly LinkedIn check budget is exhausted. Wait for recent checks to leave the rolling hour.');
-  const existing=(await client.query('SELECT lease_until>NOW() AS online FROM compel_worker_sessions WHERE account_id=$1',[id])).rows[0];
-  if(existing?.online)throw new Error('The previous account window is still closing. Wait for it to finish.');
-  const count=(await client.query('SELECT count(*)::int AS n FROM compel_linkedin_accounts WHERE id<>$1 AND archived IS FALSE AND enabled IS TRUE AND processing_enabled IS TRUE AND processing_until>NOW()',[id])).rows[0].n;
-  if(config.active_count<=count)throw new Error('All processing slots are in use. Increase the account capacity or pause another account.');
-  await client.query("UPDATE compel_linkedin_accounts SET processing_enabled=TRUE,processing_until=NOW()+$2*interval '1 minute',changed_at=NOW() WHERE id=$1",[id,minutes]);
-  await accountEvent(client,id,'processing_started',`Processing explicitly started for ${minutes} minutes.`);
+  const existing=(await client.query('SELECT status,lease_until>NOW() AS online FROM compel_worker_sessions WHERE account_id=$1',[id])).rows[0];
+  if(existing?.online&&existing.status?.runtimeVersion!=='SESSION_V2')throw new Error('The previous account window is still closing. Wait for it to finish.');
+  if(existing?.online&&existing.status?.runtimeVersion==='SESSION_V2'&&(['awaiting_login','signing_out'].includes(existing.status?.status)||existing.status?.browserOpen&&!existing.status?.sessionReady))
+   throw new Error('Finish connecting this account in its open browser before starting the batch.');
+  if(config.active_count===0)throw new Error('Enable a processing slot in account settings before starting.');
+  await client.query("UPDATE compel_linkedin_accounts SET processing_enabled=TRUE,processing_until=NULL,changed_at=clock_timestamp() WHERE id=$1",[id]);
+  await accountEvent(client,id,'processing_started','Processing requested. Authorization persists until Pause, disable or account review.');
  });
 }
 async function pauseProcessing(pool,id,message='Processing paused from account settings.',attention=false,owner=null,version=null) {
@@ -379,44 +398,24 @@ async function pauseProcessing(pool,id,message='Processing paused from account s
   if(result.rowCount)await accountEvent(client,id,attention?'needs_attention':'processing_paused',message);
  });
 }
-async function resetProcessing(pool) {
- await ensure(pool);
- // Restarting the supervisor never restarts activity against LinkedIn.
- await pool.query("WITH stopped AS (UPDATE compel_linkedin_accounts SET processing_enabled=FALSE,processing_until=NULL WHERE processing_enabled IS TRUE RETURNING id) INSERT INTO compel_worker_events(account_id,kind,message) SELECT id,'processing_paused','Worker supervisor restarted. Start processing explicitly to continue.' FROM stopped");
-}
-async function expireLoginRequests(pool) {
- await pool.query("WITH expired AS (UPDATE compel_linkedin_accounts SET login_requested_at=NULL WHERE login_requested_at<NOW()-interval '10 minutes' RETURNING id) INSERT INTO compel_worker_events(account_id,kind,message) SELECT id,'sign_in_expired','Sign-in request expired while waiting for the worker. Request a new window explicitly.' FROM expired");
-}
-async function processingAllowed(pool,id,owner) {
+async function processingAllowed(pool,id,owner,version=null) {
  const result=await pool.query(`SELECT 1 FROM compel_linkedin_accounts a JOIN compel_worker_sessions s ON s.account_id=a.id
   WHERE a.id=$1 AND s.owner=$2 AND s.lease_until>NOW() AND a.enabled IS TRUE AND a.archived IS FALSE
-   AND a.processing_enabled IS TRUE AND a.processing_until>NOW() AND a.attention_reason='' AND a.connected_at IS NOT NULL
-   AND a.login_requested_at IS NULL AND a.logout_requested_at IS NULL AND a.signed_out_at IS NULL`,[id,owner]);
+   AND a.processing_enabled IS TRUE AND a.attention_reason='' AND a.connected_at IS NOT NULL
+   AND a.login_requested_at IS NULL AND a.logout_requested_at IS NULL AND a.signed_out_at IS NULL
+   AND (SELECT active_count FROM compel_worker_config WHERE id=1)>0
+   AND ($3::timestamptz IS NULL OR a.changed_at=$3::timestamptz)`,[id,owner,version]);
  return result.rowCount===1;
 }
-async function reserveLinkedInCheck(pool,id,owner,kind,{manual=false}={}) {
+async function recordLinkedInAction(pool,id,owner,kind,{manual=false,version=null}={}) {
  if(!['contact','profile','featured','activity','identity','discovery','profile_page','activity_page','other'].includes(kind))throw new Error('Unknown LinkedIn check.');
- return accountTransaction(pool,async client=>{
-  const a=(await client.query(`SELECT a.*,s.lease_until>NOW() AS leased,s.owner AS lease_owner,
-   GREATEST(0,EXTRACT(EPOCH FROM (a.next_check_at-NOW()))*1000)::int AS wait_ms,EXTRACT(EPOCH FROM NOW())*1000 AS now_ms
-   FROM compel_linkedin_accounts a JOIN compel_worker_sessions s ON s.account_id=a.id WHERE a.id=$1 FOR UPDATE OF a`,[id])).rows[0];
-  if(!a||a.lease_owner!==owner||!a.leased)throw new Error('Account session lease lost before LinkedIn access.');
-  if(manual&&kind!=='identity')throw new Error('Manual sign-in may only verify the account identity.');
-  if(!manual&&!await processingAllowed(client,id,owner))return {stopped:true,reason:'Processing is paused or the session has ended.'};
-  if(!manual&&!activityPolicy.hoursAllowed(a.working_hours))return {waitMs:60000,reason:'Outside saved working hours. Pending work is retained.'};
-  if(a.wait_ms>0)return {waitMs:a.wait_ms};
-  const events=(await client.query("SELECT data,created_at FROM compel_worker_events WHERE account_id=$1 AND kind='read' AND created_at>NOW()-interval '24 hours' ORDER BY created_at",[id])).rows;
-  const usage=activityPolicy.windowUsage(events,Number(a.now_ms));
-  const today=(await client.query("SELECT request_count FROM compel_worker_usage WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date",[id])).rows[0]?.request_count||0;
-  if(Math.max(today,usage.daily)>=a.daily_request_limit||usage.hourly>=30)return {stopped:true,reason:Math.max(today,usage.daily)>=a.daily_request_limit?'Daily LinkedIn check budget reached (rolling 24 hours).':'Hourly LinkedIn check budget reached. Wait for checks to leave the rolling hour.'};
-  const actionWait=activityPolicy.actionWait(events,kind,a.activity_limits,Number(a.now_ms));
-  if(actionWait)return {waitMs:actionWait,reason:`The ${activityPolicy.category(kind)} activity budget is resting. Pending work is retained.`};
-  await client.query("UPDATE compel_linkedin_accounts SET next_check_at=NOW()+request_interval_seconds*interval '1 second' WHERE id=$1",[id]);
-  const counted=await recordLinkedInCheck(client,id,owner,kind);
-  await accountEvent(client,id,'read','LinkedIn page interaction.',{kind,execution:'rendered_page'});
-  return counted;
- });
+ if(manual&&kind!=='identity')throw new Error('Manual sign-in may only verify the account identity.');
+ if(!manual&&!await processingAllowed(pool,id,owner,version))return {stopped:true,reason:'Processing is paused or the session request has changed.'};
+ // Counts are dashboard statistics. No hourly, rolling, per-kind, schedule,
+ // check budget, next-check time, permit or sleep can deny an owned action.
+ return recordLinkedInCheck(pool,id,owner,kind);
 }
+const reserveLinkedInCheck=recordLinkedInAction; // compatibility for older local callers; no allowance is reserved
 async function enqueue(pool, urls, options = {}) {
  await ensure(pool); const entries=[], skipped=[];
  if (!Array.isArray(urls) || urls.length > 5000) throw new Error('Submit up to 5,000 LinkedIn profiles.');
@@ -425,24 +424,25 @@ async function enqueue(pool, urls, options = {}) {
   const url = typeof value === 'string' ? profileUrl(value) : null;
   if (!url) { skipped.push({url:value,reason:'Invalid LinkedIn person profile'}); continue; }
   const id = options.jobId || `job_${randomUUID()}`;
-  const payload={jobId:id,linkedinUrl:url,nativePostProcess:options.nativePostProcess!==false,targetRegion:options.targetRegion||'na',createdAt:new Date().toISOString()};
+  const payload={jobId:id,linkedinUrl:url,nativePostProcess:options.nativePostProcess!==false,targetRegion:options.targetRegion||'na',createdAt:new Date().toISOString(),...(options.engineBatchId?{engineBatchId:options.engineBatchId}:{}),...(options.explicitRetry?{explicitRetry:true,followerRecheck:true}:{})};
   entries.push({id,profile_key:url,payload,position:entries.length});
  }
  if(!entries.length)return{jobs:[],queuedCount:0,skipped,queued:[]};
  const completed=new Set((await pool.query(`SELECT DISTINCT profile_key FROM compel_worker_jobs
   WHERE profile_key=ANY($1::text[]) AND status='done'
-   AND completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC')`,[entries.map(entry=>entry.profile_key)])).rows.map(row=>row.profile_key));
- const eligible=entries.filter(entry=>!completed.has(entry.profile_key));
- for(const entry of entries)if(completed.has(entry.profile_key))skipped.push({url:entry.profile_key,reason:'Already completed today; use Retry failed for failed profiles'});
+   AND completed_at>=(compel_worker_day()::timestamp AT TIME ZONE (SELECT daily_timezone FROM compel_worker_config WHERE id=1))`,[entries.map(entry=>entry.profile_key)])).rows.map(row=>row.profile_key));
+ const eligible=entries.filter(entry=>options.explicitRetry||!completed.has(entry.profile_key));
+ for(const entry of entries)if(!options.explicitRetry&&completed.has(entry.profile_key))skipped.push({url:entry.profile_key,reason:'Already completed today; use Retry failed for failed profiles'});
  const result=await pool.query(`INSERT INTO compel_worker_jobs(id,profile_key,payload)
   SELECT entry.id,entry.profile_key,entry.payload FROM jsonb_to_recordset($1::jsonb) AS entry(id TEXT,profile_key TEXT,payload JSONB,position INTEGER)
-  WHERE NOT EXISTS(SELECT 1 FROM compel_worker_jobs done WHERE done.profile_key=entry.profile_key AND done.status='done'
-   AND done.completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'))
-  ORDER BY entry.position ON CONFLICT DO NOTHING RETURNING id`,[json(eligible)]);
+  WHERE (entry.payload->>'explicitRetry'='true' OR NOT EXISTS(SELECT 1 FROM compel_worker_jobs done WHERE done.profile_key=entry.profile_key AND done.status='done'
+   AND done.completed_at>=(compel_worker_day()::timestamp AT TIME ZONE (SELECT daily_timezone FROM compel_worker_config WHERE id=1)))
+   ) ORDER BY entry.position ON CONFLICT DO NOTHING RETURNING id`,[json(eligible)]);
  const inserted=new Set(result.rows.map(row=>row.id));
  const queued=entries.filter(entry=>inserted.has(entry.id)).map(entry=>({id:entry.id,url:entry.profile_key}));
  for(const entry of eligible)if(!inserted.has(entry.id))skipped.push({url:entry.profile_key,reason:'Already queued or completed today'});
  const jobs=queued.map(entry=>entry.id);
+ if(jobs.length)await pool.query("SELECT pg_notify('compel_engine_wake','')");
  return {jobs,queuedCount:jobs.length,skipped,queued};
 }
 // A duplicate Inbox row must not bring an assessed/contacted profile back into
@@ -458,7 +458,7 @@ async function queueCandidates(pool) {
    AND NOT EXISTS(SELECT 1 FROM people other WHERE other.slug=p.slug AND
     (other.pipeline_status IS DISTINCT FROM 'INBOX' OR other.do_not_contact IS TRUE OR (other.contacted IS TRUE AND other.contacted_source IS NOT NULL)))
    AND NOT EXISTS(SELECT 1 FROM compel_worker_jobs j WHERE j.profile_key='https://www.linkedin.com/in/'||p.slug||'/' AND
-    (j.status IN ('pending','processing') OR j.status='done' AND j.completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC')))
+    (j.status IN ('pending','processing') OR j.status='done' AND j.completed_at>=(compel_worker_day()::timestamp AT TIME ZONE (SELECT daily_timezone FROM compel_worker_config WHERE id=1))))
   ORDER BY p.slug,p.fit_score DESC NULLS LAST,p.created_at,p.id
  ) SELECT * FROM eligible ORDER BY fit_score DESC NULLS LAST,created_at,id`)).rows;
 }
@@ -471,7 +471,7 @@ async function skipCompletedDuplicates(pool) {
   WHERE j.status='pending' AND j.checkpoint IS NULL AND j.payload->>'websiteContinuation' IS DISTINCT FROM 'true' AND j.payload->>'explicitRetry' IS DISTINCT FROM 'true'
    AND j.payload->'prospecting' IS NULL
    AND EXISTS(SELECT 1 FROM compel_worker_jobs d WHERE d.profile_key=j.profile_key AND d.status='done'
-    AND d.completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC'))`)).rowCount;
+    AND d.completed_at>=(compel_worker_day()::timestamp AT TIME ZONE (SELECT daily_timezone FROM compel_worker_config WHERE id=1)))`)).rowCount;
 }
 // Reuse captured facts, but never another account's messaging permission.
 // Use capture time, not completion time: website retries are not a refresh.
@@ -484,6 +484,14 @@ function reusableLinkedInProfile(row,url,accountId,now=Date.now()) {
   const at=Date.parse(value.linkedinCapturedAt||value.activityEvidence?.checkedAt||value.linkedinContact?.checkedAt);
   if(!Number.isFinite(at)||at>now||now-at>=24*60*60*1000)continue;
   const saved=structuredClone(value);saved.status='PENDING';
+  // An older follower-only stop has no downstream capture to reuse after a
+  // lower threshold/parser fix. A new job needs to continue the profile read;
+  // website/CRM checkpoints are unaffected by this completed-result cache rule.
+  if(saved.decisionStage==='followers'){
+   const policy=require('./follower-policy.cjs'),record=saved.followers;
+   const count=Number.isSafeInteger(record?.count)?record.count:policy.audienceRecord(record?.rawText).count;
+   if(policy.followersDecision({count},policy.minFollowers()).status==='CONTINUE')continue;
+  }
   if(sourceAccount!==accountId||saved.linkedinContact?.accountId!==accountId)delete saved.linkedinContact;
   for(const key of ['failure','crmSaved','crmLeadId','linkedinChecks','linkedinCacheHit'])delete saved[key];
   return saved;
@@ -503,7 +511,7 @@ async function recordLinkedInCheck(pool,id,owner,kind) {
  if(!['contact','profile','featured','activity','identity','discovery','profile_page','activity_page','other','cache'].includes(kind))throw new Error('Unknown LinkedIn check.');
  const cached=kind==='cache';
  const result=await pool.query(`INSERT INTO compel_worker_usage(account_id,day,request_count,cached_profiles,request_kinds)
-  SELECT $1,(NOW() AT TIME ZONE 'UTC')::date,$4,$5,jsonb_build_object($3::text,$4::int)
+  SELECT $1,compel_worker_day(),$4,$5,jsonb_build_object($3::text,$4::int)
   FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW()
   ON CONFLICT(account_id,day) DO UPDATE SET request_count=compel_worker_usage.request_count+$4,
    cached_profiles=compel_worker_usage.cached_profiles+$5,
@@ -513,76 +521,76 @@ async function recordLinkedInCheck(pool,id,owner,kind) {
  if(!result.rowCount)throw new Error('Account session lease lost before LinkedIn access.');
  return result.rows[0];
 }
-async function claim(pool,id,owner,options={}) {
+async function recordLinkedInChecks(pool,id,owner,kinds){
+ const count=Object.values(kinds).reduce((sum,n)=>sum+n,0);if(!count)return;
+ const result=await pool.query(`INSERT INTO compel_worker_usage(account_id,day,request_count,request_kinds)
+  SELECT $1,compel_worker_day(),$4,$3::jsonb FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW()
+  ON CONFLICT(account_id,day) DO UPDATE SET request_count=compel_worker_usage.request_count+$4,
+  request_kinds=compel_worker_usage.request_kinds || (SELECT jsonb_object_agg(key,to_jsonb(COALESCE((compel_worker_usage.request_kinds->>key)::int,0)+value::int)) FROM jsonb_each_text($3::jsonb))
+  RETURNING account_id`,[id,owner,json(kinds),count]);
+ if(!result.rowCount)throw Error('Account session lease lost while saving action statistics.');
+}
+async function sessionOwned(pool,id,owner){return (await pool.query('SELECT 1 FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW()',[id,owner])).rowCount===1;}
+async function claim(pool,id,owner) {
  await ensure(pool);
  const client=await pool.connect();
  try {
   await client.query('BEGIN');
-  const account=(await client.query(`SELECT a.* FROM compel_linkedin_accounts a WHERE a.id=$1 AND a.enabled IS TRUE AND a.archived IS FALSE AND a.logout_requested_at IS NULL AND a.signed_out_at IS NULL
-   AND a.processing_enabled IS TRUE AND a.processing_until>NOW() AND a.connected_at IS NOT NULL AND a.attention_reason=''
-   AND a.id IN (SELECT id FROM compel_linkedin_accounts WHERE enabled IS TRUE AND archived IS FALSE AND logout_requested_at IS NULL AND signed_out_at IS NULL AND processing_enabled IS TRUE AND processing_until>NOW() AND connected_at IS NOT NULL AND attention_reason='' ORDER BY position,id LIMIT(SELECT active_count FROM compel_worker_config WHERE id=1)) FOR SHARE`,[id])).rows[0];
-  if (!account) { await client.query('COMMIT'); return {disabled:true}; }
-  const session=(await client.query('SELECT account_id FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW() FOR UPDATE',[id,owner])).rows[0];
-  if (!session) throw new Error('Account session lease lost.');
-  await client.query(`INSERT INTO compel_worker_usage(account_id,day) VALUES($1,(NOW() AT TIME ZONE 'UTC')::date) ON CONFLICT DO NOTHING`,[id]);
-  const usage=(await client.query(`SELECT count FROM compel_worker_usage WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date FOR UPDATE`,[id])).rows[0];
+  const account=(await client.query(`SELECT a.daily_limit,a.next_profile_at,a.next_profile_at>clock_timestamp() AS profile_wait FROM compel_linkedin_accounts a WHERE a.id=$1 AND a.enabled AND NOT a.archived
+   AND a.logout_requested_at IS NULL AND a.login_requested_at IS NULL AND a.signed_out_at IS NULL AND a.processing_enabled
+   AND a.connected_at IS NOT NULL AND a.attention_reason='' AND (SELECT active_count FROM compel_worker_config WHERE id=1)>0 FOR SHARE`,[id])).rows[0];
+  if(!account){await client.query('COMMIT');return {disabled:true};}
+  if(!(await client.query('SELECT 1 FROM compel_worker_sessions WHERE account_id=$1 AND owner=$2 AND lease_until>NOW() FOR UPDATE',[id,owner])).rowCount)throw Error('Account session lease lost.');
+  const usage=await daily.usage(client,id),limited=usage.used>=usage.limit;
   await skipCompletedDuplicates(client);
-  const job=(await client.query(`SELECT * FROM compel_worker_jobs WHERE ((status='pending' AND (retry_at IS NULL OR retry_at<=NOW())) OR (status='processing' AND lease_until<NOW()))
-   AND ($3 IS FALSE OR checkpoint IS NOT NULL OR EXISTS(
-    SELECT 1 FROM compel_worker_profile_usage p WHERE p.profile_key=compel_worker_jobs.profile_key AND p.day=(NOW() AT TIME ZONE 'UTC')::date)
+  const job=(await client.query(`SELECT * FROM compel_worker_jobs j WHERE lane='capture' AND status='pending' AND (retry_at IS NULL OR retry_at<=NOW())
+   AND ($2 IS FALSE OR (checkpoint->>'profileIdentityConfirmed'='true' AND checkpoint#>>'{linkedinCapture,complete}' IS DISTINCT FROM 'false')
+    OR EXISTS(SELECT 1 FROM compel_worker_account_profiles p WHERE p.account_id=$1 AND p.day=compel_worker_day() AND p.profile_key=j.profile_key)
     OR (payload->>'explicitRetry' IS DISTINCT FROM 'true' AND EXISTS(SELECT 1 FROM compel_worker_jobs saved
-     WHERE saved.profile_key=compel_worker_jobs.profile_key AND saved.status='done'
-      AND saved.checkpoint->>'profileIdentityConfirmed'='true'
-      AND saved.checkpoint->>'linkedinCapturedAt'>$5 AND saved.checkpoint->>'linkedinCapturedAt'<=$6)))
-   AND ($2 IS FALSE OR result->'failure'->>'code' IS DISTINCT FROM 'AI_RATE_LIMIT' OR NOT EXISTS(SELECT 1 FROM compel_research_budget WHERE id=$1 AND next_at>NOW()))
-   AND (payload->'prospecting' IS NULL OR (payload->'prospecting'->>'accountId'=$4 AND EXISTS(
+     WHERE saved.profile_key=j.profile_key AND saved.status='done' AND saved.checkpoint->>'profileIdentityConfirmed'='true'
+      AND saved.checkpoint#>>'{linkedinCapture,complete}' IS DISTINCT FROM 'false' AND saved.checkpoint->>'linkedinCapturedAt'>$3)))
+   AND (payload->'prospecting' IS NULL OR (payload->'prospecting'->>'accountId'=$1 AND EXISTS(
     SELECT 1 FROM compel_prospect_runs r WHERE r.id::text=payload->'prospecting'->>'runId' AND r.status IN ('PENDING','RUNNING','QUEUED'))))
-   ORDER BY (COALESCE(payload->>'websiteContinuation','false')<>'true') DESC,(checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`,['groq/research/'+(process.env.PROSPECT_RESEARCH_MODEL?.trim()||'openai/gpt-oss-120b'),options.requiresAI===true,usage.count>=account.daily_limit,id,new Date(Date.now()-86400000).toISOString(),new Date().toISOString()])).rows[0];
-  if (!job) { await client.query('COMMIT'); return usage.count>=account.daily_limit?{limited:true,dailyCount:usage.count,dailyLimit:account.daily_limit}:null; }
+   ORDER BY (checkpoint IS NOT NULL) DESC,created_at,queue_order FOR UPDATE SKIP LOCKED LIMIT 1`,[id,limited,new Date(Date.now()-86400000).toISOString()])).rows[0];
+  const allowance={dailyCount:usage.used,dailyLimit:usage.limit,resumeAt:usage.resume_at,timezone:usage.timezone};
+  if(!job){await client.query('COMMIT');return limited?{limited:true,...allowance}:null;}
   if(!job.checkpoint&&job.payload.explicitRetry!==true)job.checkpoint=await cachedLinkedInProfile(client,job.profile_key,id);
-  if(!job.checkpoint&&usage.count>=account.daily_limit&&!(await client.query(`SELECT 1 FROM compel_worker_profile_usage WHERE day=(NOW() AT TIME ZONE 'UTC')::date AND profile_key=$1`,[job.profile_key])).rowCount){
-   await client.query('COMMIT');return {limited:true,dailyCount:usage.count,dailyLimit:account.daily_limit};
-  }
-  let charged=false;
-  if(!job.checkpoint) {
-   // Global day/profile uniqueness also covers a retry claimed by a different
-   // account, an expired job lease, or an explicit manual retry of the batch.
-   const reserved=await client.query(`INSERT INTO compel_worker_profile_usage(day,profile_key,account_id,job_id)
-    VALUES((NOW() AT TIME ZONE 'UTC')::date,$1,$2,$3) ON CONFLICT DO NOTHING RETURNING profile_key`,[job.profile_key,id,job.id]);
-   charged=reserved.rowCount===1;
-   if(charged)await client.query(`UPDATE compel_worker_usage SET count=count+1 WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date`,[id]);
-   else await client.query(`UPDATE compel_worker_profile_usage SET attempts=attempts+1,last_claimed_at=NOW()
-    WHERE day=(NOW() AT TIME ZONE 'UTC')::date AND profile_key=$1`,[job.profile_key]);
+  if(account.profile_wait&&!require('./worker-research-queue.cjs').fullCapture(job.checkpoint)){
+   await client.query('COMMIT');return {paced:true,resumeAt:account.next_profile_at};
   }
   await client.query(`UPDATE compel_worker_jobs SET status='processing',account_id=$2,owner=$3,lease_until=NOW()+interval '15 minutes',checkpoint=$4::jsonb WHERE id=$1`,[job.id,id,owner,job.checkpoint?json(job.checkpoint):null]);
-  await client.query('COMMIT'); return {job:{...job.payload,...(job.checkpoint?{resumeResult:{...job.checkpoint,...(job.result?.failure?{failure:job.result.failure}:{})},resumeCapture:job.checkpoint.linkedinCapture?.version===2&&job.checkpoint.linkedinCapture.complete===false}:{}),retryCount:job.retry_count},dailyCount:usage.count+(charged?1:0),dailyLimit:account.daily_limit};
- } catch(error) { await client.query('ROLLBACK'); throw error; } finally {client.release();}
+  await client.query('COMMIT');return {job:{...job.payload,jobId:job.id,engineCreatedAt:job.created_at,enginePickedAt:new Date().toISOString(),
+   ...(job.checkpoint?{resumeResult:{...job.checkpoint,...(job.result?.failure?{failure:job.result.failure}:{})},resumeCapture:job.checkpoint.linkedinCapture?.version===2&&job.checkpoint.linkedinCapture.complete===false}:{}),retryCount:job.retry_count},...allowance};
+ }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
 }
 async function complete(pool,id,owner,result) {
- const crawl=result?.prospectQualification?.research?.crawl;
- // Qualification is saved immediately. Large/temporarily blocked sites finish
- // crawling in a separate cached-profile job, without a new LinkedIn visit.
- const update=await pool.query(`WITH finished AS (
-  UPDATE compel_worker_jobs SET status='done',result=$3::jsonb,completed_at=NOW(),lease_until=NULL
-   WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW() RETURNING *
- ), continuation AS (
-  INSERT INTO compel_worker_jobs(id,profile_key,payload,checkpoint,retry_at,retry_count)
-  SELECT $4,profile_key,payload || jsonb_build_object('jobId',$4::text,'websiteContinuation',true),$3::jsonb,NOW()+interval '30 seconds',
-   retry_count+1 FROM finished
-  WHERE $5 AND retry_count<3 ON CONFLICT DO NOTHING RETURNING id
- ) SELECT id,(SELECT id FROM continuation) AS continuation_id FROM finished`,
- [id,owner,json(result),'job_'+randomUUID(),Boolean(result.status==='QUALIFIED'&&crawl&&!crawl.complete&&crawl.retryable!==false&&!/storage limit/i.test(crawl.stoppedReason))]);
- if (!update.rowCount) throw new Error('Job lease lost; result was not overwritten.');
+ result=telemetry.attach(result);
+ const update=await telemetry.span('db.final_save',()=>pool.query(`UPDATE compel_worker_jobs SET status='done',result=$3::jsonb,completed_at=NOW(),lease_until=NULL
+  WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW() RETURNING id`,[id,owner,json(result)]));
+ if(!update.rowCount)throw new Error('Job lease lost; result was not overwritten.');
+ await telemetry.persist(pool,result,{final:true}).catch(error=>console.warn('[Engine metrics]',error.message));
 }
 async function checkpoint(pool,id,owner,result) {
+ result=telemetry.attach(result);
  const update=await pool.query(`UPDATE compel_worker_jobs SET checkpoint=$3::jsonb WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result)]);
  if(!update.rowCount)throw new Error('Job lease lost before saving the scraped profile.');
 }
+async function releaseClaim(pool,id,owner){
+ const update=await pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL
+  WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW() RETURNING id`,[id,owner]);
+ return update.rowCount===1;
+}
+async function releaseCaptureClaims(pool,id,owner){
+ await pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL
+  WHERE account_id=$1 AND owner=$2 AND lane='capture' AND status='processing'`,[id,owner]);
+}
 async function defer(pool,id,owner,result,retryAt) {
+ result=telemetry.attach(result);
  const update=await pool.query(`UPDATE compel_worker_jobs SET status='pending',owner=NULL,account_id=NULL,lease_until=NULL,result=$3::jsonb,retry_at=$4,retry_count=retry_count+1,
   checkpoint=CASE WHEN $3::jsonb->'failure'->>'stage'='linkedin' AND checkpoint->'linkedinCapture'->>'version' IS DISTINCT FROM '2' THEN NULL ELSE checkpoint END
   WHERE id=$1 AND owner=$2 AND status='processing' AND lease_until>NOW()`,[id,owner,json(result),retryAt]);
  if(!update.rowCount)throw new Error('Job lease lost before scheduling recovery.');
+ await telemetry.persist(pool,result).catch(error=>console.warn('[Engine metrics]',error.message));
 }
 async function retryFailed(pool) {
  await ensure(pool);const client=await pool.connect();let count=0,researchOnly=0;
@@ -592,6 +600,7 @@ async function retryFailed(pool) {
    AND NOT EXISTS(SELECT 1 FROM compel_worker_jobs newer WHERE newer.profile_key=j.profile_key AND newer.queue_order>j.queue_order)
    ORDER BY j.created_at FOR UPDATE OF j`)).rows;
   for(const job of jobs) {
+   if(failureOf(job.result).retryable===false)continue;
    if((await client.query(`SELECT id FROM compel_worker_jobs WHERE profile_key=$1 AND status IN ('pending','processing')`,[job.profile_key])).rowCount)continue;
    const saved=failureOf(job.result).stage==='linkedin'?(job.checkpoint?.linkedinCapture?.version===2?job.checkpoint:null):job.result.profileIdentityConfirmed?job.result:job.checkpoint;
    const resume=saved?structuredClone(saved):null;
@@ -632,14 +641,16 @@ async function clearQueue(pool) {
  return (await pool.query(`UPDATE compel_worker_jobs SET status='cancelled',completed_at=NOW() WHERE status='pending'`)).rowCount;
 }
 function normalizeResult(result) {
+ if(['SKIPPED','CANCELLED'].includes(result?.status))return result;
  if (result?.status==='PROSPECTED') return result;
  if (result?.status==='ERROR' && /saved profile and crawl will be resumed/i.test(result.failure?.reason || ''))return {...result,failure:{...result.failure,retryable:false,reason:'Website could not be fully read; the saved profile is retained for manual retry.'}};
  if (!result?.prospectQualification?.research || result.status==='ERROR') return result;
  try {
   const q=require('./prospect-qualification.cjs');
   const email=result.primaryEmail || result.emails?.[0] || '';
-  const assessment=q.assessProspect(result.prospectQualification.baseResearch || result.prospectQualification.research,{email});
-  return {...result,prospectQualification:assessment,status:q.pipelineForAssessment(assessment)==='QUALIFIED'?'QUALIFIED':'REJECTED'};
+  const research=result.prospectQualification.baseResearch || result.prospectQualification.research;
+  const assessment=q.assessProspect(research,{email,legacyFollowersUnchecked:result.prospectQualification.version<2&&!research.followers});
+  return {...result,prospectQualification:assessment,status:q.pipelineForAssessment(assessment)==='QUALIFIED'?'QUALIFIED':q.pipelineForAssessment(assessment)==='REVIEW'?'REVIEW':result.status==='REVIEW'?'REVIEW':'REJECTED'};
  }catch{return {...result,status:'REJECTED'};}
 }
 async function importResult(pool,id,wrapper) {
@@ -649,22 +660,53 @@ async function importResult(pool,id,wrapper) {
  await pool.query(`INSERT INTO compel_worker_jobs(id,profile_key,payload,status,result,completed_at,created_at)
   VALUES($1,$2,$3::jsonb,'done',$4::jsonb,$5,$5) ON CONFLICT(id) DO NOTHING`,[id,url,json({jobId:id,linkedinUrl:url}),json(result),wrapper.completedAt]);
 }
-async function queueStatus(pool) {
+function historyPreview(value,fallbackUrl='') {
+ const result=normalizeEngineResult(normalizeResult(value),fallbackUrl);if(!result)return result;
+ const {about,latestPostText,prospectQualification,...preview}=result;
+ if(!prospectQualification)return preview;
+ const {research,baseResearch,...assessment}=prospectQualification;
+ return {...preview,prospectQualification:{...assessment,...(research?{research:{profileIdentityConfirmed:research.profileIdentityConfirmed,lastActivityAt:research.lastActivityAt,
+  ...(research.crawl?{crawl:{inspected:research.crawl.inspected,complete:research.crawl.complete,retryable:research.crawl.retryable,stoppedReason:research.crawl.stoppedReason}}:{})}}:{})}};
+}
+async function queueStatus(pool,{includeHistory=true}={}) {
  const config=await settings(pool);
  const rows=(await pool.query(`WITH jobs AS (
   SELECT *, retry_at AS ready_at FROM compel_worker_jobs)
   SELECT count(*) FILTER(WHERE status IN ('pending','processing'))::integer AS pending,
+   count(*) FILTER(WHERE lane='research' AND status='pending')::integer AS research_pending,
+   count(*) FILTER(WHERE lane='research' AND status='processing' AND lease_until>NOW())::integer AS research_processing,
    count(*) FILTER(WHERE status='pending' AND ready_at>NOW())::integer AS waiting,
    min(ready_at) FILTER(WHERE status='pending' AND ready_at>NOW()) AS next_retry FROM jobs`)).rows[0];
- const recent=(await pool.query(`SELECT id,result,completed_at FROM (
-  SELECT DISTINCT ON (profile_key) id,result,completed_at FROM compel_worker_jobs WHERE status='done' ORDER BY profile_key,completed_at DESC,queue_order DESC
- ) latest ORDER BY completed_at DESC LIMIT 100`)).rows;
+ // Choose IDs before loading JSON. Polling needs a result preview, not every
+ // saved HTML page and crawl candidate in 100 complete research documents.
+ // Retain the facts, contacts and crawl state used by normalizeResult's gates.
+ const recent=includeHistory?(await pool.query(`WITH latest AS MATERIALIZED (
+  SELECT DISTINCT ON (profile_key) id,completed_at,queue_order FROM compel_worker_jobs
+  WHERE status='done' ORDER BY profile_key,completed_at DESC,queue_order DESC
+ ), history AS MATERIALIZED (
+  SELECT id,completed_at FROM latest ORDER BY completed_at DESC,queue_order DESC LIMIT 100
+ ) SELECT id,profile_key,result,completed_at FROM (
+  SELECT j.id,j.profile_key,h.completed_at,
+   (j.result - ARRAY['logs','html','rawHtml','about','latestPostText','activityEvidence','prospectQualification','engineMetrics']) ||
+   CASE WHEN jsonb_typeof(j.result->'prospectQualification')='object' THEN jsonb_build_object('prospectQualification',
+    ((j.result->'prospectQualification') - ARRAY['baseResearch','research']) ||
+    CASE WHEN jsonb_typeof(r.value)='object' THEN jsonb_build_object('research',
+     (r.value - ARRAY['pages','about','latestPostText','activityEvidence','description','crawl']) ||
+     CASE WHEN jsonb_typeof(r.value->'crawl')='object' THEN jsonb_build_object('crawl',
+      ((r.value->'crawl') - ARRAY['candidates','attempted','visited','pending','failed']) || jsonb_build_object(
+       'pending',CASE WHEN jsonb_typeof(r.value#>'{crawl,pending}')='array' AND jsonb_array_length(r.value#>'{crawl,pending}')>0 THEN jsonb_build_array(r.value#>'{crawl,pending,0}') ELSE '[]'::jsonb END,
+       'failed',CASE WHEN jsonb_typeof(r.value#>'{crawl,failed}')='array' AND jsonb_array_length(r.value#>'{crawl,failed}')>0 THEN jsonb_build_array(r.value#>'{crawl,failed,0}') ELSE '[]'::jsonb END)) ELSE '{}'::jsonb END
+    ) ELSE '{}'::jsonb END
+   ) ELSE '{}'::jsonb END AS result
+  FROM history h JOIN compel_worker_jobs j ON j.id=h.id
+  CROSS JOIN LATERAL (SELECT COALESCE(NULLIF(j.result#>'{prospectQualification,baseResearch}','null'::jsonb),j.result#>'{prospectQualification,research}') AS value) r
+ ) previews ORDER BY completed_at DESC`)).rows:[];
  const selected=config.accounts.filter(a=>a.enabled&&!a.signedOut&&!a.logoutPending).slice(0,config.activeCount);
- const live=selected.filter(a=>a.online), busy=live.find(a=>a.status==='processing');
- const dailyCount=Number((await pool.query("SELECT COALESCE(sum(count),0)::integer AS total FROM compel_worker_usage WHERE day=(NOW() AT TIME ZONE 'UTC')::date")).rows[0].total);
+ const live=selected.filter(a=>a.online), busy=live.find(a=>a.status==='processing'), sleeping=live.find(a=>a.status==='sleeping');
+ const dailyCount=config.accounts.reduce((sum,a)=>sum+a.dailyCount,0);
  const dailyLimit=selected.reduce((sum,a)=>sum+a.dailyLimit,0);
  const latestToday=`SELECT DISTINCT ON(profile_key) profile_key,result FROM compel_worker_jobs
-  WHERE status='done' AND completed_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC')
+  WHERE status='done' AND completed_at>=(compel_worker_day()::timestamp AT TIME ZONE (SELECT daily_timezone FROM compel_worker_config WHERE id=1))
   ORDER BY profile_key,completed_at DESC,queue_order DESC`;
  let today=(await pool.query(`WITH latest AS (${latestToday}) SELECT
   count(*) FILTER(WHERE result->>'status'='QUALIFIED')::integer AS qualified,
@@ -673,7 +715,7 @@ async function queueStatus(pool) {
  // CRM outcomes include results saved before the database queue was installed.
  try {today=(await pool.query(`WITH latest AS (${latestToday}), legacy AS (
    SELECT DISTINCT ON(lower(substring(linkedin_url from '/in/([^/?#]+)'))) pipeline_status,email
-   FROM leads WHERE prospect_researched_at>=((NOW() AT TIME ZONE 'UTC')::date AT TIME ZONE 'UTC')
+   FROM leads WHERE prospect_researched_at>=(compel_worker_day()::timestamp AT TIME ZONE (SELECT daily_timezone FROM compel_worker_config WHERE id=1))
     AND NOT EXISTS(SELECT 1 FROM latest WHERE lower(substring(latest.profile_key from '/in/([^/?#]+)'))=lower(substring(leads.linkedin_url from '/in/([^/?#]+)')))
    ORDER BY lower(substring(linkedin_url from '/in/([^/?#]+)')),prospect_researched_at DESC
   ), outcomes AS (
@@ -685,16 +727,22 @@ async function queueStatus(pool) {
  const ratePerHour=live.reduce((sum,a)=>sum+(a.avgJobDurationMs?Math.round(3600000/a.avgJobDurationMs):0),0);
  const dailyRemaining=selected.reduce((sum,a)=>sum+Math.max(0,a.dailyLimit-a.dailyCount),0);
  const limitReached=live.length>0&&live.every(a=>a.dailyCount>=a.dailyLimit);
- const paused=live.length>0&&live.every(a=>a.status==='paused');
+ const authorized=selected.filter(a=>a.processingEnabled);
+ const connectedIdle=selected.some(a=>a.connectedAt&&!a.attentionReason);
+ const paused=live.length>0&&live.every(a=>a.status==='paused')||selected.length>0&&!authorized.length&&connectedIdle;
  const nextDailyResetAt=new Date(new Date().setUTCHours(24,0,0,0)).toISOString();
  return {status:'ok',available:true,queueSize:rows.pending,waitingCount:rows.waiting,nextRetryAt:rows.next_retry,accounts:config.accounts,activeCount:config.activeCount,
-  workerStatus:{status:busy?'processing':paused||limitReached?'paused':live.length?'ready':'offline',stale:!live.length,
+  workerStatus:{status:busy?'processing':sleeping?'sleeping':paused||limitReached?'paused':live.length?'ready':connectedIdle?'idle':'offline',stale:!live.length&&!config.supervisorOnline,
+   nextEligibleAt:sleeping?.nextEligibleAt||null,
+   researchPending:rows.research_pending||0,researchProcessing:rows.research_processing||0,
+   reason:busy?.reason||live.find(a=>a.reason)?.reason||(!authorized.length?selected.find(a=>a.reason||a.attentionReason)?.reason||selected.find(a=>a.attentionReason)?.attentionReason:'')||'',
+   processingAuthorized:authorized.length>0,supervisorOnline:!!config.supervisorOnline,
    pauseReason:limitReached?'DAILY_LIMIT':paused?'ACCOUNT_PAUSED':null,nextDailyResetAt,
    dailyCount,dailyLimit,dailyRequests:config.accounts.reduce((sum,a)=>sum+a.dailyRequests,0),dailyCachedProfiles:config.accounts.reduce((sum,a)=>sum+a.dailyCachedProfiles,0),dailyQualified:today.qualified,dailyRejected:today.rejected,dailyErrors:today.errors,
    dailyCompleted:today.qualified+today.rejected+today.errors,activeAccounts:live.length,configuredAccounts:selected.length,
-   memoryMB:live.reduce((sum,a)=>sum+a.memoryMB,0),ratePerHour:ratePerHour||null,url:busy?.url||'',waitingCount:rows.waiting,nextRetryAt:rows.next_retry,
+   memoryMB:config.supervisorOnline?(config.resources?.treeRssMB??live.reduce((sum,a)=>sum+a.memoryMB,0)):0,ratePerHour:ratePerHour||null,url:busy?.url||sleeping?.url||'',waitingCount:rows.waiting,nextRetryAt:rows.next_retry,
    dailyBudgetCount:selected.reduce((sum,a)=>sum+a.dailyCount,0),dailyRemaining},
-  dailyStats:{date:new Date().toISOString().slice(0,10),count:dailyCount,limit:dailyLimit},
-  recentResults:recent.map(row=>({jobId:row.id,result:normalizeResult(row.result),completedAt:row.completed_at}))};
+  dailyStats:{date:config.dailyDay||new Date().toISOString().slice(0,10),count:dailyCount,limit:dailyLimit},
+  ...(includeHistory?{recentResults:recent.map(row=>({jobId:row.id,result:historyPreview(row.result,row.profile_key),completedAt:row.completed_at}))}:{})};
 }
-module.exports={SCHEMA,ensure,expireLoginRequests,accountEvents,confirmManualSignIn,startProcessing,pauseProcessing,resetProcessing,processingAllowed,reserveLinkedInCheck,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,queueCandidates,skipCompletedDuplicates,reusableLinkedInProfile,cachedLinkedInProfile,recordLinkedInCheck,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};
+module.exports={saveCaptureReview:(pool,input)=>require('./worker-research-store.cjs').saveCaptureReview(pool,input),reserveProfile:daily.reserve,sessionOwned,recordLinkedInChecks,releaseCaptureClaims,releaseClaim,SCHEMA,ensure,readRuntimeAccount,accountEvents,confirmManualSignIn,startProcessing,pauseProcessing,processingAllowed,recordLinkedInAction,reserveLinkedInCheck,encrypt,decrypt,profileUrl,validateSettings,settings,saveSettings,importAccounts,selectedAccounts,acquireSession,heartbeat,releaseSession,requestLogin,consumeLoginRequest,requestLogout,finishLogout,enqueue,queueCandidates,skipCompletedDuplicates,reusableLinkedInProfile,cachedLinkedInProfile,recordLinkedInCheck,claim,complete,checkpoint,defer,retryFailed,reserveResearch,coolResearch,jobStatus,clearQueue,queueStatus,importResult,json};

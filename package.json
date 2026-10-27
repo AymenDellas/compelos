@@ -6,18 +6,20 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
-    "lint": "next lint",
+    "lint": "eslint src",
     "backup": "node scripts/backup-db.mjs",
     "check-env": "node scripts/check-env.mjs",
-    "worker": "node scripts/linkedin-worker-supervisor.cjs",
-    "worker:single": "node worker.cjs",
-    "test:workers": "node --test tests/workers/*.test.cjs",
+    "worker": "node --max-old-space-size=384 worker.cjs",
+    "worker:single": "node --max-old-space-size=384 worker.cjs",
+    "test:workers": "node --test --test-concurrency=1 tests/workers/*.test.cjs",
     "case-study-worker": "node case-study-worker.cjs",
     "test:copy-studio": "node scripts/copy-studio-tests.mjs",
     "test:copy-studio:browser": "playwright test -c playwright.copy-studio.config.ts",
     "test:qev": "node --test scripts/check-quickemailverification.cjs tests/email-verification/*.test.cjs",
     "test:projects": "tsx --test tests/projects/workspace.test.ts tests/projects/actions.test.cjs",
-    "test:prospecting": "node --test tests/coach-prospecting/*.test.cjs"
+    "test:crm": "node --require ./scripts/test-env.cjs --import tsx --test tests/crm/*.test.ts",
+    "test:prospecting": "node --test tests/coach-prospecting/*.test.cjs",
+    "worker:stop": "node worker.cjs --stop"
   },
   "dependencies": {
     "@qwen-code/qwen-code": "0.24.6",
@@ -35,14 +37,13 @@
     "ipaddr.js": "^2.5.0",
     "lucide": "latest",
     "lucide-react": "latest",
-    "next": "16.3.8",
+    "next": "latest",
     "papaparse": "^5.5.3",
-    "pdfjs-dist": "6.3.289",
     "pg": "^8.23.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
+    "react": "latest",
+    "react-dom": "latest",
     "sqlite": "^5.1.1",
     "sqlite3": "^6.0.1",
     "tailwind-merge": "latest",
@@ -63,8 +64,5 @@
     "tailwindcss": "^4.1.18",
     "tsx": "^4.23.15",
     "typescript": "latest"
-  },
-  "engines": {
-    "node": "22.x"
   }
 }

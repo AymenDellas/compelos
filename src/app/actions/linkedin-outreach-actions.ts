@@ -1,5 +1,4 @@
 'use server';
-import { requireAdmin } from '@/lib/dashboard-auth';
 
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
@@ -17,6 +16,8 @@ import { caseStudyTransaction, mapCaseStudyProspect, recordCaseStudyActivity } f
 import type { LeadRecord } from '@/lib/db';
 import { ensureDmColumn, stampLinkedinDmForLead, syncCrmOutreachSuppression } from '@/lib/linkedin-outreach-store';
 import { syncHunterContacted } from '@/lib/hunter-contact-sync';
+import { isQualifiedRecord } from '@/lib/prospect-qualification.cjs';
+import { assessmentForLead } from '@/lib/prospect-store';
 
 function validWebsite(value: string | null | undefined) {
     try {
@@ -122,7 +123,6 @@ async function linkedProspect(client: PoolClient, lead: LeadRecord) {
 }
 
 export async function importCrmLeadsToHunterAction(ids: string[]) {
-    await requireAdmin();
     if (!Array.isArray(ids) || ids.length === 0 || ids.length > 25 || new Set(ids).size !== ids.length)
         throw new Error('Select 1 to 25 distinct CRM leads.');
     await ensureDmColumn();
@@ -134,8 +134,8 @@ export async function importCrmLeadsToHunterAction(ids: string[]) {
         for (const id of ids) {
             const lead = byId.get(id);
             if (!lead) { skipped.push({ leadId: id, reason: 'Lead no longer exists' }); continue; }
-            if (!['QUALIFIED', 'OUTREACH'].includes(lead.pipeline_status)) {
-                skipped.push({ leadId: id, reason: 'Lead is not qualified' }); continue;
+            if (!isQualifiedRecord({ ...lead, prospect_assessment: assessmentForLead(lead) })) {
+                skipped.push({ leadId: id, reason: 'This lead is not qualified' }); continue;
             }
             if (lead.do_not_contact) { skipped.push({ leadId: id, reason: 'Do not contact' }); continue; }
             if (lead.contacted && lead.contacted_source && lead.contacted_source !== 'HUNTER') {
@@ -163,7 +163,6 @@ export async function importCrmLeadsToHunterAction(ids: string[]) {
 
 /** Suppress or resume a CRM outreach lead without recording or sending a DM. */
 export async function setCrmOutreachDoNotContactAction(prospectId: string, excluded: boolean) {
-    await requireAdmin();
     if (typeof prospectId !== 'string' || !prospectId.trim()) throw new Error('Choose a CRM outreach lead.');
     if (typeof excluded !== 'boolean') throw new Error('Choose a valid contact status.');
     return caseStudyTransaction(async (client) => {
@@ -192,7 +191,6 @@ export async function setCrmOutreachDoNotContactAction(prospectId: string, exclu
 
 /** Applies one status to selected CRM outreach rows and returns only the changed records. */
 export async function setCrmOutreachStatusesAction(ids: string[], status: CrmOutreachStatus) {
-    await requireAdmin();
     if (!Array.isArray(ids) || ids.length < 1 || ids.length > 150 ||
         new Set(ids).size !== ids.length || ids.some((id) => typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)))
         throw new Error('Select 1 to 150 distinct CRM outreach leads.');
@@ -284,7 +282,6 @@ export async function setCrmOutreachStatusesAction(ids: string[], status: CrmOut
 
 /** Records a DM after the operator has sent it; this action never sends a message. */
 export async function markCrmLeadLinkedinDmSentAction(leadId: string) {
-    await requireAdmin();
     if (typeof leadId !== 'string' || !leadId.trim()) throw new Error('Choose a CRM lead.');
     await ensureDmColumn();
     return caseStudyTransaction(async (client) => {
@@ -327,7 +324,6 @@ export async function markCrmLeadLinkedinDmSentAction(leadId: string) {
 }
 
 export async function markHunterProspectLinkedinDmSentAction(prospectId: string) {
-    await requireAdmin();
     if (typeof prospectId !== 'string' || !prospectId.trim()) throw new Error('Choose a Hunter prospect.');
     await ensureDmColumn();
     return caseStudyTransaction(async (client) => {
@@ -352,7 +348,6 @@ export async function markHunterProspectLinkedinDmSentAction(prospectId: string)
 
 /** Corrects an accidental DM mark while the prospect is still at Messaged. */
 export async function undoHunterProspectLinkedinDmAction(prospectId: string) {
-    await requireAdmin();
     if (typeof prospectId !== 'string' || !prospectId.trim()) throw new Error('Choose a Hunter prospect.');
     await ensureDmColumn();
     return caseStudyTransaction(async (client) => {

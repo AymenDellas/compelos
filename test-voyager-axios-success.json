@@ -1,0 +1,21 @@
+{
+  "data": {
+    "metadata": {
+      "paginationToken": "",
+      "newRelevanceFeed": false,
+      "id": "ACoAADeMWnsBPQzfYY9nO0ZHCmNLaDPKxNKaJpg",
+      "type": "feed",
+      "queryAfterTime": 1773076816560,
+      "$type": "com.linkedin.voyager.feed.Metadata"
+    },
+    "entityUrn": "urn:li:collectionResponse:OjTcbrsIkAYZcJp2LK3IXp4skZYvLQ1HAZNITgySMgo=",
+    "elements": [],
+    "paging": {
+      "count": 10,
+      "start": 0,
+      "links": []
+    },
+    "$type": "com.linkedin.restli.common.CollectionResponse"
+  },
+  "included": []
+}

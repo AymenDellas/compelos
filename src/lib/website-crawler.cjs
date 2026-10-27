@@ -1,5 +1,6 @@
 'use strict';
 const { hostOf, isPlatformWebsite } = require('./prospect-qualification.cjs');
+const telemetry=require('./engine-telemetry.cjs');
 
 // Only supplied URLs, redirects and links actually present in HTML are read.
 function routeUrl(value, publicUrl) {
@@ -21,7 +22,7 @@ function publicRoute(value) {
 }
 function routePriority(item) {
     const label = (item.label || '') + ' ' + new URL(item.url).pathname;
-    return /contact|get.in.touch|reach.out|connect/i.test(label) ? 0
+    return item.root||new URL(item.url).pathname==='/'?-1:/contact|get.in.touch|reach.out|connect/i.test(label) ? 0
         : /about|biography|our.story|who.we|meet/i.test(label) ? 1
         : /coaching|services|work.with|offer|program/i.test(label) ? 2 : 3;
 }
@@ -52,9 +53,15 @@ async function crawlWebsiteRoutes(input, options) {
     // The pass budget allows useful progress; the persistent budget bounds all
     // resumes, including jobs continuing research after qualification.
     const attempted = new Map((resume && previous.version===2 ? (previous.attempted || []).filter(validRoute) : []).map(url => [routeKey(url), url]));
-    const maxRoutes = Math.max(1, Math.min(600, previous?.version === 2 ? previous.maxRoutes || 600 : options.maxRoutes || 600));
-    const maxPages = Math.max(1, Math.min(200, options.maxPages || 200));
-    const deadline = Date.now() + Math.max(100, Math.min(90000, options.maxTimeMs || 90000));
+    const maxPages=Math.max(1,Math.min(50,options.maxPages||Number(process.env.WEBSITE_MAX_PAGES)||8));
+    const maxRoutes=Math.max(1,Math.min(maxPages,options.maxRoutes||maxPages,previous?.maxRoutes||maxPages));
+    const maxAttempts=Math.max(1,Math.min(100,Number(process.env.WEBSITE_MAX_ATTEMPTS)||12));
+    const attemptBudget=Math.max(0,maxAttempts-pages.reduce((sum,page)=>sum+(page.attempts||0),0));
+    const maxTimeMs=Math.max(100,Math.min(Number(process.env.WEBSITE_MAX_MS)||20000,options.maxTimeMs||20000));
+    const started=Date.now(),previousMs=Number(previous?.elapsedMs)||0;
+    const firstStartedAt=previous?.firstStartedAt||new Date(started).toISOString();
+    const deadline=Math.min(started+Math.max(0,maxTimeMs-previousMs),Date.parse(firstStartedAt)+maxTimeMs);
+    const requestTimeout=Math.max(100,Math.min(12000,Number(process.env.WEBSITE_REQUEST_TIMEOUT_MS)||5000));
     let description = resume && options.previousResearch.description && validRoute(options.previousResearch.description.url) ? options.previousResearch.description : null;
     const descriptionScore = value => !value ? -1 : (/about|biography|our.story|meet|who.we/i.test(new URL(value.url).pathname) ? 4 : 0) + (/coach(?:ing)?|leadership|career|practice/i.test(value.text) ? 2 : 0);
     let attempts = 0, storageLimited = resume && !migrate && previous.storageLimited === true;
@@ -101,9 +108,10 @@ async function crawlWebsiteRoutes(input, options) {
         const index = pages.findIndex(page => routeKey(page.url) === routeKey(record.url) || routeKey(page.url) === routeKey(originalUrl));
         if (index >= 0) pages[index] = record; else pages.push(record);
     };
-    while (queue.size && attempts < maxPages && Date.now() < deadline) {
+    const sufficient=()=>options.enoughEvidence?.({candidates,matchedHosts:[...matchedHosts],contactMatchedHosts:[...contactMatchedHosts]})===true;
+    while (queue.size && attempts < Math.min(maxPages,attemptBudget) && Date.now() < deadline&&!sufficient()) {
         const batch = [...queue.values()].filter(item => attempted.has(routeKey(item.url)) || attempted.size < maxRoutes)
-            .sort((a, b) => routePriority(a) - routePriority(b)).slice(0, Math.min(3, maxPages - attempts));
+            .sort((a, b) => routePriority(a) - routePriority(b)).slice(0, Math.min(3, maxPages - attempts,attemptBudget-attempts));
         let remaining = maxRoutes - attempted.size;
         const eligible = batch.filter(item => attempted.has(routeKey(item.url)) || remaining-- > 0);
         if (!eligible.length) break;
@@ -113,20 +121,12 @@ async function crawlWebsiteRoutes(input, options) {
             queue.delete(key); visited.set(key, item.url); attempted.set(key, item.url); attempts++;
         }
         const results = await Promise.allSettled(eligible.map(async item => {
-            let fetched,page;
-            try{
-                fetched = await fetchPage(item.url, { timeoutMs: Math.max(1, Math.min(10000, deadline - Date.now())) });
-                page=parsePage(fetched.html,routeUrl(fetched.url||item.url,publicUrl));
-            }catch(error){
-                if(!options.renderPage||!item.root&&routePriority(item)>1||[404,410].includes(error.httpStatus)||/private|unsupported|CERT_|certificate|size limit|NON_HTML/i.test(error.code+' '+error.message))throw error;
-                try{fetched=await options.renderPage(item.url,{timeoutMs:Math.max(1,Math.min(10000,deadline-Date.now()))});}
-                catch(renderError){error.message+=' Browser fallback: '+renderError.message;throw error;}
-                page=parsePage(fetched.html,routeUrl(fetched.url||item.url,publicUrl));
+            const fetched=await telemetry.span('website.page_http',()=>fetchPage(item.url,{timeoutMs:Math.max(1,Math.min(requestTimeout,deadline-Date.now()))}),{url:item.url});
+            let page=parsePage(fetched.html,routeUrl(fetched.url||item.url,publicUrl)),renderFailure='';
+            if(options.renderPage&&!page.readable&&deadline-Date.now()>1000){
+                try{const rendered=await telemetry.span('website.page_render',()=>options.renderPage(page.url,{timeoutMs:Math.max(1,Math.min(10000,deadline-Date.now()))}),{url:page.url});const richer=parsePage(rendered.html,routeUrl(rendered.url||page.url,publicUrl));if(richer.readable&&(richer.contacts.length>page.contacts.length||!page.readable))page=richer;}catch(error){renderFailure=String(error.message).slice(0,200);}
             }
-            if(options.renderPage&&(!page.readable||!page.contacts.length&&(item.root||routePriority(item)===0))&&deadline-Date.now()>1000){
-                try{const rendered=await options.renderPage(page.url,{timeoutMs:Math.max(1,Math.min(10000,deadline-Date.now()))});const richer=parsePage(rendered.html,routeUrl(rendered.url||page.url,publicUrl));if(richer.readable&&(richer.contacts.length>page.contacts.length||!page.readable))page=richer;}catch{/* normal bounded failure stays in crawl evidence */}
-            }
-            return { page };
+            return { page,renderFailure };
         }));
         for (let i = 0; i < results.length; i++) {
             const result = results[i], item = eligible[i], originalKey = routeKey(item.url);
@@ -168,9 +168,9 @@ async function crawlWebsiteRoutes(input, options) {
             }
             candidates.push(...page.contacts.map(contact => ({ ...contact, url: page.url, contactPage })));
             sources.push({ url: page.url, text: page.text, links: page.links, label: page.title || item.label, kind: 'WEBSITE', owned: false, observedAt: options.now });
-            const record = { url: page.url, label: page.title || item.label || 'Public route', status: page.readable ? 'inspected' : 'blocked', retryable: !page.readable && item.attempts < 3, attempts: item.attempts,
+            const record = { url: page.url, label: page.title || item.label || 'Public route', status: page.readable ? 'inspected' : 'blocked', retryable: false, attempts: item.attempts,
                 contactPage, hasDescription: page.description?.length >= 50,
-                note: page.readable ? 'Public page inspected for contact information and description.' : 'Page has too little readable text; JavaScript or access restrictions may hide content.' };
+                note: page.readable ? 'Public page inspected for contact information and description.' : 'Static HTML and bounded rendering could not provide readable evidence. Manual review required.'+(result.value.renderFailure?' '+result.value.renderFailure:'') };
             savePage(record, item.url);
             if (!page.readable) failed.set(key, page.url);
             for (const link of page.links) if (sameSite(link.url)) enqueue(link.url, link.text);
@@ -180,14 +180,16 @@ async function crawlWebsiteRoutes(input, options) {
     const contacts = [...new Map(candidates.map(contact => [contact.address + '|' + contact.url, contact])).values()];
     const blocked = pages.filter(page => page.status === 'blocked');
     const routeLimited = queue.size > 0 && attempted.size >= maxRoutes && [...queue.keys()].some(key => !attempted.has(key));
-    const retryable = !storageLimited && !routeLimited && (queue.size > 0 || blocked.some(page => page.retryable && page.attempts < 3));
-    const stoppedReason = storageLimited ? 'Website route storage limit reached; manual review is needed.'
+    const evidenceSufficient=sufficient(),elapsedMs=previousMs+Date.now()-started;
+    const budgetExhausted=Date.now()>=deadline||attempts>=attemptBudget||attempted.size>=maxRoutes&&queue.size>0;
+    const retryable = !evidenceSufficient&&!budgetExhausted&&!storageLimited && !routeLimited && (queue.size > 0 || blocked.some(page => page.retryable && page.attempts < 3));
+    const stoppedReason = evidenceSufficient?'Qualification evidence is sufficient; remaining website routes were skipped.':budgetExhausted?'Website page/time/attempt budget reached; saved evidence needs review.':storageLimited ? 'Website route storage limit reached; manual review is needed.'
         : routeLimited ? 'Website exceeds the ' + maxRoutes + '-route crawl limit; contact/about routes were prioritized. Manual review is needed.'
         : queue.size ? 'Pass budget reached; remaining discovered routes are saved.'
         : blocked.length ? blocked.length + ' website route(s) could not be read' + (retryable ? '; a bounded retry is available' : '; automatic retries stopped') + '. ' + blocked[0].url + ': ' + blocked[0].note : '';
     const inspected = pages.filter(page => page.status === 'inspected');
     return { pages, parsed, sources, description,
-        crawl: { version: 2, attributionVersion:3, complete: !queue.size && !failed.size && !storageLimited, retryable, maxRoutes, storageLimited, attempted: [...attempted.values()],
+        crawl: { version: 2, attributionVersion:3, complete: !queue.size && !failed.size && !storageLimited, retryable, maxRoutes, storageLimited,firstStartedAt,maxTimeMs,elapsedMs,budgetExhausted,evidenceSufficient, attempted: [...attempted.values()],
             visited: [...visited.values()], pending: [...queue.values()].map(item => item.url), failed: [...failed.values()], roots: [...roots], matchedHosts: [...matchedHosts],contactMatchedHosts:[...contactMatchedHosts],
             discovered: discovered.size, inspected: inspected.length, contactPages: inspected.filter(page => page.contactPage || routePriority(page) === 0).length,
             descriptionPages: inspected.filter(page => page.hasDescription).length, stoppedReason, candidates: contacts },

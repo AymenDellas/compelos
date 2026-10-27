@@ -1,4 +1,3 @@
-import { funnelFocusSchema } from '../../funnel-focus';
 import { z } from 'zod/v4';
 import type { ClientProject } from '../../business';
 import { legacyOfferName } from '../../offer-essentials';
@@ -12,7 +11,6 @@ export const onboardingBriefSchema = onboardingLinkSchema.extend({
   template: templateIdSchema,
   brief: briefSchema,
   context: copyContextSchema,
-  funnelFocus: funnelFocusSchema.optional(),
   source: importResultSchema.nullable().default(null),
 });
 export type OnboardingBrief = z.infer<typeof onboardingBriefSchema>;
@@ -26,7 +24,6 @@ export function toOnboardingBrief(project: ClientProject): OnboardingBrief | nul
     const reviewed = data.journey?.reviewSummaries || {};
   const offer = bounded(form.offer);
   return {
-    ...(data.funnelFocus ? { funnelFocus: data.funnelFocus } : {}),
     id: project.id,
     revision: project.revision,
     clientName: data.clientName.slice(0, 200),

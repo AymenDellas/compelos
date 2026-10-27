@@ -1,7 +1,4 @@
 'use server';
-import { requireWorker } from '@/lib/worker-availability';
-
-import { requireAdmin } from '@/lib/dashboard-auth';
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -97,7 +94,6 @@ function releaseSourceScanLock() {
 }
 
 export async function loadCaseStudyAction() {
-    await requireAdmin();
     return readCaseStudySnapshot();
 }
 
@@ -108,8 +104,6 @@ export async function queueCaseStudyProspectsAction(input: {
     warmthEvidence: string;
     targetTitles?: string[];
 }) {
-    await requireAdmin();
-    requireWorker();
     if (!WARMTH_SOURCES.includes(input.source)) throw new Error('Choose a valid warmth source.');
     if (!HUNTER_MODES.includes(input.mode)) throw new Error('Choose a valid hunter mode.');
     if (typeof input.warmthEvidence !== 'string' || input.warmthEvidence.length > 5000)
@@ -167,8 +161,6 @@ export async function queueCaseStudySourceScanAction(input: {
     targetTitles?: string[];
     limit?: number;
 }) {
-    await requireAdmin();
-    requireWorker();
     const scannable: WarmthSource[] = ['CONNECTION', 'FOLLOWER', 'PROFILE_VIEWER', 'ENGAGER'];
     if (!scannable.includes(input.source))
         throw new Error('Automatic source scans support connections, followers, engagers, and profile viewers.');
@@ -214,8 +206,6 @@ export async function queueCaseStudySourceScanAction(input: {
 }
 
 export async function stopCaseStudyRunAction() {
-    await requireAdmin();
-    requireWorker();
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.mkdirSync(QUEUE_DIR, { recursive: true });
     const tempPath = `${WORKER_CONTROL_FILE}.${process.pid}.tmp`;
@@ -246,8 +236,6 @@ export async function stopCaseStudyRunAction() {
 
 /** Explicit operator retry. This is the only path that intentionally bypasses the duplicate gate. */
 export async function retryCaseStudyProspectAction(id: string, options: { targetTitles?: string[]; onlyMissedCoach?: boolean; expectedMode?: HunterMode } = {}) {
-    await requireAdmin();
-    requireWorker();
     fs.mkdirSync(QUEUE_DIR, { recursive: true });
     return caseStudyTransaction(async (client) => {
         const existing = await client.query('SELECT * FROM case_study_prospects WHERE id=$1 FOR UPDATE', [id]);
@@ -292,8 +280,6 @@ export async function retryCaseStudyProspectAction(id: string, options: { target
 
 /** Recovery reuses existing rows and rechecks eligibility under the row lock. */
 export async function queueMissedCoachProfilesAction(input: { mode: HunterMode; targetTitles?: string[] }) {
-    await requireAdmin();
-    requireWorker();
     if (!HUNTER_MODES.includes(input.mode)) throw new Error('Choose a valid hunter mode.');
     const targetTitles = validateTargetTitles(input.targetTitles);
     const snapshot = await readCaseStudySnapshot();
@@ -312,7 +298,6 @@ export async function saveCaseStudyProspectAction(
     draft: CaseStudyProspectData,
     expectedRevision: number,
 ) {
-    await requireAdmin();
     if (draft.stage === 'MESSAGED' && draft.crmLeadId) await ensureDmColumn();
     return caseStudyTransaction(async (client) => {
         const existing = await client.query('SELECT * FROM case_study_prospects WHERE id=$1 FOR UPDATE', [id]);
@@ -357,7 +342,6 @@ export async function saveCaseStudyProspectAction(
 }
 
 export async function addCaseStudyNoteAction(id: string, note: string) {
-    await requireAdmin();
     if (typeof note !== 'string' || !note.trim() || note.length > 20000)
         throw new Error('Enter a note of up to 20,000 characters.');
     await caseStudyTransaction(async (client) => {

@@ -8,7 +8,6 @@ import { sectionWritingRole } from '../../src/lib/copy-studio/shared/persuasion'
 import { sectionAngleOptions, supportsRevision } from '../../src/lib/copy-studio/shared/revision-options';
 import { revisionSchema, type Draft } from '../../src/lib/copy-studio/shared/contracts';
 import { draft, input, strategy } from './fixtures';
-import { newFunnelFocus } from '../../src/lib/funnel-focus';
 
 const signal = () => new AbortController().signal;
 const generic = (): Draft => {
@@ -20,31 +19,6 @@ const finding = { sectionId: 'hero', quote: 'Gain clarity and confidence',
   problem: 'The PAS opening gives interchangeable benefits without recognizing why prospects hesitate.',
   change: 'Recognize that prospects struggle to understand the value of the coach’s existing offer.' };
 const pass = { findings: [] };
-
-test('practice-wide copy gets an independent specificity check and repairs generic benefits using the approved audience and problem', async () => {
-  const practice = { ...input, funnelFocus: { ...newFunnelFocus('practice_wide'),
-    services: [{ id: 'review', name: 'Messaging review', description: input.brief.deliverables, included: true,
-      evidence: [{ quote: input.brief.deliverables, url: 'https://example.com/' }] }] } };
-  const replies = [strategy, generic(), { findings: [finding] }, { sections: [draft.sections[0]] }, pass];
-  let reviews = 0;
-  const result = await generate(async (system, prompt) => {
-    assert.match(system, /Practice-wide does not mean generic/);
-    assert.match(system, /hero headline outcome-led/);
-    if (system.startsWith(PERSUASION_EDITOR)) {
-      reviews++;
-      assert.match(system, /Flag a generic practice-wide opening/);
-      assert.match(system, /without inventing a narrower niche/);
-      assert.match(prompt, /Messaging review/);
-      assert.match(prompt, /Prospects struggle to understand the value/);
-    }
-    return JSON.stringify(replies.shift());
-  }, practice, signal(), () => {});
-  assert.equal(reviews, 2);
-  assert.equal(replies.length, 0);
-  assert.equal(result.draft.sections[0].headline, 'Make your offer easier to understand');
-  assert.deepEqual(result.draft.sections.slice(1), draft.sections.slice(1));
-  assert.deepEqual(result.issues, []);
-});
 
 test('a separate editorial review repairs a generic PAS hero using actual cited copy, without changing the rest of the page', async () => {
   const replies = [strategy, generic(), { findings: [finding] }, { sections: [draft.sections[0]] }, pass];

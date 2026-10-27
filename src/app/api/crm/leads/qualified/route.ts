@@ -1,15 +1,16 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import { getAllLeads, isQualifiedStage, isProvenContacted, type LeadRecord } from '@/lib/db';
 import { isExportableUnverifiable, type SendTier } from '@/lib/send-tiers';
 import { hasFreshEmailVerification } from '@/lib/email-verification-proof';
+import { hasQualifiedEmail } from '@/lib/prospect-qualification.cjs';
+import { assessmentForLead, ensureProspectSchema } from '@/lib/prospect-store';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * The send list. This is the one place where the strict gate is applied, and it
- * stays strict on purpose: an address requires a safe provider verdict or direct
- * SMTP proof, and that verification must be fresh. Everything upstream is allowed
+ * stays strict on purpose: an address only qualifies if direct SMTP proved the
+ * mailbox exists and that proof has not expired. Everything upstream is allowed
  * to be permissive — leads keep their place in the CRM regardless of email
  * status — because nothing upstream actually sends mail.
  *
@@ -27,19 +28,15 @@ export const dynamic = 'force-dynamic';
  * whatever the export is handed to. Nothing here promotes a lead between tiers.
  */
 /**
- * Which of several leads sharing one address to keep. A personalised hook is worth
- * more than none, and a fresher verification is worth more than an older one — so
- * the surviving row is the one that makes the best email.
+ * Prefer stronger business evidence and fresher verification for shared addresses.
  */
 function rankForDedupe(lead: LeadRecord): number {
-    let rank = 0;
-    if (lead.hook) rank += 2;
+    let rank = (lead.prospect_assessment?.score || 0) / 100;
     if (lead.email_verification_expires_at) rank += 1;
     return rank;
 }
 
 export async function GET(req: Request) {
-    await requireAdmin();
     try {
         const { searchParams } = new URL(req.url);
         // Comma-separated so tiers compose (`?include=risky,unverifiable`), while
@@ -51,9 +48,11 @@ export async function GET(req: Request) {
         const includeRisky = include.has('risky');
         const includeUnverifiable = include.has('unverifiable');
 
-        const leads = await getAllLeads();
+        await ensureProspectSchema();
+        const leads = (await getAllLeads()).map(l => ({ ...l, prospect_assessment: assessmentForLead(l) }));
         const qualifiedLeads = leads.filter(l => {
             if (!isQualifiedStage(l.pipeline_status)) return false;
+            if (!hasQualifiedEmail(l)) return false;
             if (l.do_not_contact) return false;
             // Excluded for having actually been reached — not merely for having been
             // queued once. A bare `contacted` flag with no evidence behind it is a
@@ -88,7 +87,7 @@ export async function GET(req: Request) {
                     : 'UNVERIFIABLE';
 
         // Proof beats everything when the same address arrives from two tiers —
-        // otherwise a hook on an unproven duplicate could displace the row that
+        // otherwise an unproven duplicate could displace the row that
         // was actually verified.
         const tierWeight: Record<SendTier, number> = { PROVEN: 100, RISKY: 50, UNVERIFIABLE: 0 };
         const rank = (l: LeadRecord) => tierWeight[tierOf(l)] + rankForDedupe(l);
@@ -103,7 +102,8 @@ export async function GET(req: Request) {
         // The tier travels with the row. An export that mixes proven and unproven
         // addresses without saying which is which is how "verified" stopped
         // meaning anything the first time.
-        const deduped = [...byAddress.values()].map(l => ({ ...l, send_tier: tierOf(l) }));
+        const deduped = [...byAddress.values()].map(l => ({ ...l, send_tier: tierOf(l) }))
+            .sort((a, b) => (b.prospect_assessment?.score || 0) - (a.prospect_assessment?.score || 0));
 
         const counts = deduped.reduce<Record<string, number>>((acc, l) => {
             acc[l.send_tier] = (acc[l.send_tier] ?? 0) + 1;

@@ -138,7 +138,8 @@ export function normaliseLinkedinUrl(url: string): string | null {
     if (!url) return null;
     try {
         const urlObj = new URL(url);
-        if (!urlObj.hostname.includes('linkedin.com')) return null;
+        if (!['http:', 'https:'].includes(urlObj.protocol) || urlObj.username || urlObj.password
+            || !(urlObj.hostname === 'linkedin.com' || urlObj.hostname.endsWith('.linkedin.com'))) return null;
         
         // Return exactly https://linkedin.com/in/slug (or similar)
         const pathParts = urlObj.pathname.split('/').filter(Boolean);

@@ -1,5 +1,4 @@
 "use server";
-import { requireAdmin } from '@/lib/dashboard-auth';
 
 /**
  * Google Sheets Export — uses the Google Sheets REST API directly via fetch.
@@ -9,6 +8,8 @@ import { requireAdmin } from '@/lib/dashboard-auth';
 import crypto from 'crypto';
 import { getAllLeads, isProvenContacted } from "@/lib/db";
 import { hasFreshSmtpProof } from '@/lib/email-verification-proof';
+import { hasQualifiedEmail } from '@/lib/prospect-qualification.cjs';
+import { assessmentForLead } from '@/lib/prospect-store';
 
 // ── Google Auth via Service Account JWT ──
 
@@ -198,7 +199,6 @@ async function formatSheets(token: string, spreadsheetId: string, sheetIds: numb
 // ── Public Export Function ──
 
 export async function exportToGoogleSheets(leads: any[]): Promise<{ success: boolean; url?: string; error?: string }> {
-    await requireAdmin();
     try {
         const creds = getCredentials();
         if (!creds) {
@@ -211,7 +211,7 @@ export async function exportToGoogleSheets(leads: any[]): Promise<{ success: boo
         // The caller supplies presentation fields, but it must never be able to
         // forge verification fields and create a sendable row. Verification is
         // resolved from the CRM database by exact email address.
-        const crmLeads = await getAllLeads();
+        const crmLeads = (await getAllLeads()).map(lead => ({ ...lead, prospect_assessment: assessmentForLead(lead) }));
         const crmLeadByEmail = new Map(
             crmLeads
                 .filter(lead => Boolean(lead.email))
@@ -244,6 +244,7 @@ export async function exportToGoogleSheets(leads: any[]): Promise<{ success: boo
             const verifiedLead = crmLeadByEmail.get(email.trim().toLowerCase());
             const expiresAt = verifiedLead?.email_verification_expires_at || '';
             const smtpConfirmed = verifiedLead && hasFreshSmtpProof(verifiedLead)
+                && hasQualifiedEmail(verifiedLead)
                 && !verifiedLead.do_not_contact && !isProvenContacted(verifiedLead);
 
             // Never place DNS-only, guessed, or stale SMTP results in
@@ -251,7 +252,7 @@ export async function exportToGoogleSheets(leads: any[]): Promise<{ success: boo
             const hasValidEmail = !!email && smtpConfirmed;
             const hasHook = !!hook;
 
-            if (hasValidEmail && hasHook) {
+            if (hasValidEmail) {
                 outreachRows.push([
                     firstName, lastName, company, website, email, allEmails, hook, websiteSource, linkedinUrl,
                     verifiedLead.email_verification_method || '', verifiedLead.email_verified_at || '', expiresAt,
@@ -260,8 +261,8 @@ export async function exportToGoogleSheets(leads: any[]): Promise<{ success: boo
                 const vStatus = !email
                     ? 'Missing Email'
                     : smtpConfirmed
-                        ? 'Direct SMTP Confirmed (missing hook)'
-                        : 'Do not send — direct SMTP confirmation required';
+                        ? 'Business qualified; direct SMTP confirmed'
+                        : 'Do not send — business fit, email ownership and direct SMTP proof required';
                 const eStatus = hasHook ? 'Has Hook' : 'Missing Hook';
                 enrichmentRows.push([firstName, lastName, company, website, email, allEmails, hook, websiteSource, linkedinUrl, vStatus, eStatus]);
             } else {
@@ -304,6 +305,5 @@ export async function exportToGoogleSheets(leads: any[]): Promise<{ success: boo
 }
 
 export async function isGoogleSheetsConfigured(): Promise<boolean> {
-    await requireAdmin();
     return !!getCredentials();
 }

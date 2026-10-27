@@ -1,4 +1,3 @@
-import { funnelFocusSchema } from './funnel-focus';
 import { ESSENTIAL_MAX_LENGTH, ONBOARDING_ESSENTIAL_FIELDS } from './offer-essentials';
 import { validateJourney } from './onboarding-journey';
 import { importResultSchema } from './copy-studio/shared/contracts';
@@ -161,7 +160,6 @@ export function validateProject(d: ProjectData) {
     if (m.minimumIncrease === 0) throw new Error('The target must be an increase of at least one booking.');
     if (d.onboarding) {
         const o = d.onboarding;
-        if (o.funnelFocus) funnelFocusSchema.parse(o.funnelFocus);
         if (o.journey) {
             validateJourney(o.journey);
             if (o.journey.reference) importResultSchema.parse(o.journey.reference);

@@ -30,6 +30,7 @@
  *
  * Pure and side-effect free, so it can be exercised against saved SERP fixtures.
  */
+import { segmentsFromText } from './prospect-qualification.cjs';
 
 export interface ScoreReason {
     /** Stable weight id (A1…A11) so `fit_reasons` stays readable after a re-weighting. */
@@ -154,8 +155,14 @@ export function scoreDiscoveryResult(
 
     // ── Hard reject: blocklisted term in the headline ──
     if (headline) {
+        const declaredTargetCoach = segmentsFromText(headline).length > 0;
         for (const neg of negativeKeywords) {
-            if (wordMatch(headline, neg.toLowerCase())) return reject('negative_keyword');
+            if (wordMatch(headline, neg.toLowerCase())) {
+                // "Former recruiter | Career Coach" can be an excellent prospect.
+                // A declared target coaching role needs business review, not rejection on background.
+                if (!declaredTargetCoach) return reject('negative_keyword');
+                if (!reasons.some(r => r.id === 'A13')) reasons.push({ id: 'A13', w: -4, hit: 'mixed professional role; confirm independent practice' });
+            }
         }
     }
 

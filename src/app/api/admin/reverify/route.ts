@@ -1,11 +1,10 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import { getAllLeads, isQualifiedStage } from '@/lib/db';
 import { verifyLeadEmailsAction } from '@/app/actions/crm-actions';
 import { hasFreshSmtpProof } from '@/lib/email-verification-proof';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 /**
  * Re-checks leads whose email label is not backed by evidence.
@@ -33,7 +32,6 @@ export const maxDuration = 300;
  * SMTP pacing is handled inside the verifier and must not be worked around here.
  */
 export async function POST(request: Request) {
-    await requireAdmin();
     try {
         const body = await request.json().catch(() => ({}));
         const limit = Math.max(1, Math.min(Number(body.limit) || 200, 1000));

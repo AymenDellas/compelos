@@ -1,8 +1,10 @@
 "use strict";
 const store = require("./coach-prospecting-store.cjs");
-const {firstControl}=require("./linkedin-browser-page.cjs");
+const {firstControl,pressControl,controlPoint}=require("./linkedin-browser-page.cjs");
 const { researchProspect } = require("./prospect-research.cjs");
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function settleDiscovery(page){
+ await page.waitForFunction(()=>document.querySelector('main')&&!document.querySelector('main[aria-busy="true"],main [aria-busy="true"],main [role="progressbar"],main .artdeco-loader'),{timeout:12000,polling:'mutation'});
+}
 async function readDiscoveryState(page) {
   return page.evaluate(() => ({
     url: location.href,
@@ -18,7 +20,7 @@ async function scrollList(page) {
   try {
     for(const list of lists) {
       const scrollable=await list.evaluate(n=>n.getClientRects().length&&n.scrollHeight>n.clientHeight+100&&['auto','scroll'].includes(getComputedStyle(n).overflowY)&&n.querySelectorAll('a[href*="/in/"]').length>2);
-      if(scrollable){await list.hover();hovered=true;break;}
+      if(scrollable){const point=await controlPoint(list);await page.mouse.move(point.x,point.y);hovered=true;break;}
     }
     if(!hovered)await page.mouse.move(600,500);
     await page.mouse.wheel({deltaY:650});
@@ -27,7 +29,7 @@ async function scrollList(page) {
 async function nextSearchPage(page, urls, beforeCheck) {
   const next=await firstControl(page,'main button,main a,.artdeco-pagination button,.artdeco-pagination a',n=>/^next(?:\s+page)?$/i.test(n.label.replace(/\s+/g,' ').trim()));
   if(!next)return 'END';
-  try {await beforeCheck?.('discovery');await next.click();}
+  try {await beforeCheck?.('discovery');await pressControl(page,next);}
   finally {await next.dispose();}
   try {
     const changed = await page.waitForFunction(
@@ -48,7 +50,7 @@ async function nextSearchPage(page, urls, beforeCheck) {
           ).length >= Math.min(3, previous.length)
         );
       },
-      { timeout: 20000, polling: 250 },
+      { timeout: 20000, polling: 'mutation' },
       [
         ...new Set(
           urls.map((url) =>
@@ -79,7 +81,7 @@ function restriction(status, url, text = "") {
 async function discover(
   page,
   run,
-  { pool, owner, log = () => {}, pause = wait, beforeCheck },
+  { pool, owner, log = () => {}, afterScroll = settleDiscovery, beforeCheck },
 ) {
   let blocked = "";
   const watch = (response) => {
@@ -102,14 +104,12 @@ async function discover(
     );
     await page.waitForSelector("main", { timeout: 12000 }).catch(() => {});
     const search = run.source === "SEARCH";
-    let stopReason = search
-      ? "The search reached this run’s 50-page budget."
-      : "The visible list reached this run’s 12-pass budget.";
+    let stopReason = 'The rendered list has no more profiles.';
     let stagnant = 0,
       previous = run.data.seen?.length || 0;
     // People Search uses explicit Next pages; network lists use scrolling.
     // Follow rendered controls only, without inventing URLs or private API pagination.
-    for (let pass = 0; pass < (search ? 50 : 12); pass++) {
+    for (;;) {
       let state = await readDiscoveryState(page);
       if (!/^(?:.*\.)?linkedin\.com$/.test(new URL(state.url).hostname))
         throw Error(
@@ -139,10 +139,9 @@ async function discover(
       );
       if (run.status !== "RUNNING") return { done: true };
       if (search) {
-        if (pass === 49) break;
         await beforeCheck?.('discovery');
         await scrollList(page);
-        await pause(1400);
+        await afterScroll(page);
         if (!(await store.runIsActive(pool, run.id))) return { stopped: true };
         // Capture cards that rendered while scrolling before leaving this page.
         const settled = await readDiscoveryState(page);
@@ -188,7 +187,7 @@ async function discover(
       }
       await beforeCheck?.('discovery');
       await scrollList(page);
-      await pause(1400);
+      await afterScroll(page);
     }
     await store.sourceProgress(
       pool,
@@ -203,7 +202,7 @@ async function discover(
     );
     return { done: true };
   } catch (error) {
-    if(error.failure?.code==='WORKER_PAUSED'){await store.pauseAccount(pool,run.account_id,error.failure.reason);return {stopped:true};}
+    if(error.failure?.code==='WORKER_PAUSED'){await store.releaseSource(pool,run.id,owner);return {stopped:true};}
     if (blocked) {
       await store.pauseAccount(pool, run.account_id, blocked);
       return { paused: blocked };

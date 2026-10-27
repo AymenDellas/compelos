@@ -1,12 +1,9 @@
-import { agentRouterError, readAgentRouterError } from './agentrouter-error';
-import { AppError } from './errors';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import { normalizeStream } from './agentrouter-stream.mjs';
 import type { ProviderConfig } from './provider';
-import { responseTokenLimit } from './response-tokens';
 
 /** A private, short-lived transport adapter for the actual supported client.
  * Authentication headers originate in that client; only its local bearer token is replaced.
@@ -16,15 +13,11 @@ export async function startAgentRouterRelay(
   signal: AbortSignal,
   maxTokens: number,
 ) {
-  const responses = config.apiFormat === 'responses';
-  const endpoint = responses ? '/responses' : '/chat/completions';
-  let reportFailure!: (error: AppError) => void;
-  const failure = new Promise<AppError>(resolve => { reportFailure = resolve; });
   const localToken = randomBytes(32).toString('hex');
   const server = createServer(async (req, res) => {
     if (
       req.method !== 'POST' ||
-      req.url !== `/v1${endpoint}` ||
+      req.url !== '/v1/chat/completions' ||
       req.headers.authorization !== `Bearer ${localToken}`
     ) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
@@ -50,12 +43,8 @@ export async function startAgentRouterRelay(
       delete body.tool_choice;
       delete body.parallel_tool_calls;
       body.model = config.model;
-      if (responses) {
-        delete body.max_tokens; delete body.temperature;
-        body.max_output_tokens = responseTokenLimit(config, maxTokens);
-        body.store = false;
-        if (config.reasoningEffort) body.reasoning = { ...body.reasoning, effort: config.reasoningEffort };
-      } else { body.max_tokens = Math.max(maxTokens, 512); body.temperature = 0.55; }
+      body.max_tokens = Math.max(maxTokens, 512);
+      body.temperature = 0.55;
       const headers = new Headers();
       const hopHeaders = new Set([
         'host',
@@ -75,7 +64,7 @@ export async function startAgentRouterRelay(
       }
       headers.set('Authorization', `Bearer ${config.apiKey}`);
       headers.set('Content-Type', 'application/json');
-      const upstream = await fetch(`${config.baseUrl.replace(/\/$/, '')}${endpoint}`, {
+      const upstream = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -89,13 +78,6 @@ export async function startAgentRouterRelay(
             contentType: upstream.headers.get('content-type'),
           }),
         );
-      if (!upstream.ok) {
-        const error = await readAgentRouterError(upstream);
-        reportFailure(error);
-        res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: error.message } }));
-        return;
-      }
       res.writeHead(upstream.status, {
         'Content-Type': upstream.headers.get('content-type') || 'application/json',
         'Cache-Control': 'no-store',
@@ -106,26 +88,12 @@ export async function startAgentRouterRelay(
       }
       const stream =
         upstream.ok && upstream.headers.get('content-type')?.includes('text/event-stream')
-          ? normalizeStream(upstream.body, event => {
-            if (!event || typeof event !== 'object') return false;
-            const value = event as { type?: string; error?: { message?: string; code?: string }; message?: string; code?: string; response?: { error?: { message?: string; code?: string } } };
-            if (value.type === 'error' || value.type === 'response.failed') {
-              const error = value.error || value.response?.error || value;
-              reportFailure(agentRouterError(`${error.code || ''} ${error.message || ''}`, error.code === 'server_error' ? 503 : undefined));
-              return true;
-            }
-            if (value.type === 'response.incomplete') {
-              reportFailure(new AppError(502, 'The AI response was cut short. No partial draft was saved. Please try again.'));
-              return true;
-            }
-            return responses && value.type === 'response.completed';
-          })
+          ? normalizeStream(upstream.body)
           : upstream.body;
       const readable = Readable.fromWeb(stream as never);
       readable.on('error', () => res.destroy());
       readable.pipe(res);
     } catch {
-      if (!requestSignal.aborted) reportFailure(new AppError(502, 'AgentRouter could not be reached. Check the provider connection and retry.'));
       if (res.headersSent) {
         res.destroy();
         return;
@@ -144,7 +112,6 @@ export async function startAgentRouterRelay(
   return {
     baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`,
     localToken,
-    failure,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();

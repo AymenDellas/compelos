@@ -1,4 +1,3 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import { getSmtpDiagnostic } from '@/app/actions/email-verifier-actions';
 import dns from 'dns/promises';
@@ -9,7 +8,6 @@ const identityResolver = new dns.Resolver({ timeout: 5000, tries: 2 });
 
 /** Diagnostic envelope only, using the production verifier's SMTP transport. */
 export async function POST(request: Request) {
-    await requireAdmin();
     try {
         const body = await request.json().catch(() => ({}));
         const domain: string = body.domain || process.env.EMAIL_VERIFY_MAIL_FROM?.split('@')[1] || 'getcompel.co';

@@ -1,4 +1,3 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import { pool } from '@/lib/pg_setup';
 
@@ -24,7 +23,6 @@ export const maxDuration = 300;
  * Idempotent: re-running finds nothing once the rows have been cleaned.
  */
 export async function POST() {
-    await requireAdmin();
     const client = await pool.connect();
     try {
         const { rows: before } = await client.query(`

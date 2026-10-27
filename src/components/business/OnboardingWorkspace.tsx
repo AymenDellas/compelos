@@ -1,6 +1,5 @@
 'use client';
 
-import { isPracticeWide } from '@/lib/funnel-focus';
 import { useEffect, useMemo, useState } from 'react';
 import {
     Check,
@@ -672,7 +671,7 @@ function FormStep({ data, update }: StepProps) {
             {hint && <p className="text-sm text-[var(--text-dim)]">{hint}</p>}
             <div className="grid sm:grid-cols-2 gap-4">{fields.map(([key, label, multiline]) => {
                 const required = requiredKeys.includes(key);
-                return <div key={key} className={['offer', 'differentiation', 'unsuitableClients'].includes(key) ? 'sm:col-span-2' : undefined}><Field label={isPracticeWide(data.funnelFocus) && key === 'offerName' ? 'Practice or coach name' : isPracticeWide(data.funnelFocus) && key === 'offer' ? 'How does the practice help?' : required ? label : `${label} · Optional`} hint={key === 'offer' ? isPracticeWide(data.funnelFocus) ? 'Describe the practice overall, without inventing a combined package.' : FUNNEL_OFFER_HINT : undefined} required={required} multiline={multiline} value={data.form[key]} onChange={(value) => set(key, value)} /></div>;
+                return <div key={key} className={['offer', 'differentiation', 'unsuitableClients'].includes(key) ? 'sm:col-span-2' : undefined}><Field label={required ? label : `${label} · Optional`} hint={key === 'offer' ? FUNNEL_OFFER_HINT : undefined} required={required} multiline={multiline} value={data.form[key]} onChange={(value) => set(key, value)} /></div>;
             })}</div>
         </div>
     );
@@ -682,7 +681,7 @@ function FormStep({ data, update }: StepProps) {
             {group('Offer and business', [
                 ...REQUIRED_ONBOARDING_FORM_FIELDS.map(([key, label]): [FormTextKey, string, boolean] => [key, label, key !== 'offerName']),
                 ['differentiation', DIFFERENTIATION_QUESTION, true], ['unsuitableClients', UNSUITABLE_CLIENTS_QUESTION, true], ['trafficSources', 'Current traffic sources'],
-            ], isPracticeWide(data.funnelFocus) ? 'Confirm the existing practice name, its overall work, audience, problem and desired change. These are positioning facts, not a new program.' : `${FUNNEL_OFFER_QUESTION} ${FUNNEL_OFFER_HINT}`)}
+            ], `${FUNNEL_OFFER_QUESTION} ${FUNNEL_OFFER_HINT}`)}
             {group('Funnel information', [['landingPageUrl', 'Current landing page URL'], ['bookingUrl', 'Booking URL'], ['qualification', 'Current qualification'], ['nurture', 'Current nurture / follow-up'], ['traffic', 'Approximate traffic'], ['bookings', 'Approximate bookings'], ['showRate', 'Approximate show rate'], ['closeRate', 'Approximate clients / close rate']])}
             {group('Existing tools', [['bookingPlatform', 'Booking platform'], ['crm', 'CRM'], ['emailPlatform', 'Email platform'], ['analyticsPlatform', 'Analytics platform']])}
             {group('Deployment tools and access · Optional', DEPLOYMENT_TOOL_FIELDS.map(([key, label]) => [key, label]), DEPLOYMENT_TOOL_HINT)}

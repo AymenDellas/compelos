@@ -1,5 +1,4 @@
 'use server';
-import { requireAdmin } from '@/lib/dashboard-auth';
 
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -30,11 +29,9 @@ function parseInput<T>(schema: z.ZodType<T>, data: unknown): T {
     if (!result.success) throw new CallInputError(result.error.issues.map(issue => issue.message).join(' '));
     return result.data;
 }
-export async function loadDiscoveryCallsAction() {
-    await requireAdmin(); return readDiscoverySnapshot(); }
+export async function loadDiscoveryCallsAction() { return readDiscoverySnapshot(); }
 
 export async function createDiscoveryCallAction(data: DiscoveryCallData, sourceProspectId?: string) {
-    await requireAdmin();
     return actionResult(async () => {
     const snapshot = await readDiscoverySnapshot();
     if (sourceProspectId) {
@@ -54,7 +51,6 @@ export async function createDiscoveryCallAction(data: DiscoveryCallData, sourceP
     });
 }
 export async function saveDiscoveryCallAction(id: string, data: DiscoveryCallData, expectedRevision: number) {
-    await requireAdmin();
     return actionResult(async () => {
     uuid.parse(id); revision.parse(expectedRevision);
     const parsed = parseInput(discoveryCallSchema, data);
@@ -68,7 +64,6 @@ export async function saveDiscoveryCallAction(id: string, data: DiscoveryCallDat
     });
 }
 export async function saveDiscoveryTemplateAction(data: CallTemplateData, expectedRevision: number) {
-    await requireAdmin();
     return actionResult(async () => {
     revision.parse(expectedRevision);
     const parsed = parseInput(callTemplateSchema, data);
@@ -81,7 +76,6 @@ export async function saveDiscoveryTemplateAction(data: CallTemplateData, expect
     });
 }
 export async function startDiscoveryOnboardingAction(id: string, expectedRevision: number) {
-    await requireAdmin();
     return actionResult(async () => {
     uuid.parse(id); revision.parse(expectedRevision);
     await ensureDiscoverySchema();

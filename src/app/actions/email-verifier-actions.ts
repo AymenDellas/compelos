@@ -1,5 +1,4 @@
 "use server";
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { qevConfigured, verifyQevBatch, QEV_PROVIDER } from '@/lib/quickemailverification';
 
 import dns from "dns";
@@ -98,7 +97,6 @@ function rememberHostBlock(host: string, code: number, text: string): void {
 
 /** Reports which MX hosts are currently refusing this sender, for the UI/diagnostics. */
 export async function getBlockedHosts(): Promise<{ host: string; code: number; text: string }[]> {
-    await requireAdmin();
     const now = Date.now();
     return [...hostBlockCache.entries()]
         .filter(([, v]) => v.expiresAt > now)
@@ -176,7 +174,6 @@ export type VerificationResult = {
 
 /** Configuration readiness does not claim network reachability or reputation. */
 export async function getVerificationReadiness() {
-    await requireAdmin();
     if (qevConfigured()) return {
         ready: true, selfHostedReady: false, provider: QEV_PROVIDER,
         message: 'QuickEmailVerification is configured. Credits appear after each verification batch.',
@@ -195,7 +192,6 @@ export async function getVerificationReadiness() {
 
 /** Uses the production transport and records its dialogue without writing CRM data. */
 export async function getSmtpDiagnostic(email: string, helo = SMTP_HELO, mailFrom = SMTP_MAIL_FROM) {
-    await requireAdmin();
     const address = email.toLowerCase().trim();
     if (!isValidSyntax(address) || /[\r\n<>]/.test(helo + mailFrom)) throw new Error('Invalid diagnostic identity or recipient');
     const domain = address.split('@')[1];
@@ -315,7 +311,6 @@ function applySmtpResult(checks: EmailCheckResults, smtp: SmtpResult): void {
 }
 
 export async function verifyEmail(email: string, source?: string): Promise<VerificationResult> {
-    await requireAdmin();
     if (qevConfigured()) return (await verifyQevBatch([{ address: email, source }]))[0];
     const e = email.toLowerCase().trim();
 
@@ -368,7 +363,6 @@ export async function verifyEmail(email: string, source?: string): Promise<Verif
 export async function verifyEmailBatchFast(
     emails: (string | { address: string, source?: string })[]
 ): Promise<VerificationResult[]> {
-    await requireAdmin();
     if (emails.length > 100) throw new Error("A verification request may contain at most 100 emails");
     if (qevConfigured()) return verifyQevBatch(emails);
     const results: VerificationResult[] = new Array(emails.length);

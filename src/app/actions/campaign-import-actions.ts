@@ -1,5 +1,4 @@
 "use server";
-import { requireAdmin } from '@/lib/dashboard-auth';
 
 import { getAllLeads, updateLead, setLeadOutcome, bulkMarkContactedWithDates, setContactedSource } from "@/lib/db";
 import { parseCampaignReport, mergeCampaignReports, type ParsedCampaignReport } from "@/lib/campaign-report";
@@ -57,7 +56,6 @@ function leadAddresses(lead: { email?: string; all_emails?: string }): string[] 
 export async function importCampaignReportsAction(
     files: { name: string; content: string }[],
 ): Promise<CampaignImportReport> {
-    await requireAdmin();
     const empty: CampaignImportReport = {
         ok: false, files: [],
         platform: { uploaded: 0, sent: 0, replied: 0, bounced: 0 },

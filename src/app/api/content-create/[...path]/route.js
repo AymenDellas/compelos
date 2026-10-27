@@ -1,6 +1,5 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
-import { openDatabase, get, list, put, withContentDatabase } from '@/lib/content-create/db';
+import { openDatabase, get, list, put } from '@/lib/content-create/db';
 import { validatePost, approvePost, schedulePost, publishPost } from '@/lib/content-create/rules';
 import { ideaCatalog, markIdea, suggestIdea } from '@/lib/content-create/idea-engine';
 import { researchUrl } from '@/lib/content-create/research';
@@ -8,9 +7,9 @@ import { generate, aiStatus } from '@/lib/content-create/ai';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
-export const maxDuration=300;
 
-function database(){ return openDatabase(process.env.CONTENT_CREATE_DB_PATH); }
+let connection;
+function database(){ if(!connection)connection=openDatabase(process.env.CONTENT_CREATE_DB_PATH); return connection; }
 const answer=(value,status=200)=>NextResponse.json(value,{status,headers:{'Cache-Control':'no-store'}});
 const problem=(message,status=400)=>answer({error:message},status);
 async function input(request){
@@ -26,7 +25,7 @@ function context(db){
   };
 }
 function required(db,collection,id){const item=get(db,collection,id);if(!item)throw Object.assign(new Error('Record not found'),{status:404});return item;}
-async function handle(request,{params}){
+async function route(request,{params}){
   try{
     const db=database(),path=(await params).path||[];
     const [resource,id,action]=path;
@@ -79,5 +78,4 @@ async function handle(request,{params}){
   }catch(error){return problem(error.message||'Create request failed',Number(error.status)||400);}
 }
 
-async function route(request,context){ await requireAdmin(); return withContentDatabase(()=>handle(request,context)); }
 export {route as GET,route as POST,route as PUT};

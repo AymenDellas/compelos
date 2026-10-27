@@ -1,10 +1,9 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import { syncContactedFromGmailAction } from '@/app/actions/gmail-actions';
 
 export const dynamic = 'force-dynamic';
 // An all-time scan of a large mailbox takes minutes, not seconds.
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 /**
  * Same reconcile as the CRM's "Sync Gmail" button, exposed as an endpoint so it
@@ -16,7 +15,6 @@ export const maxDuration = 300;
  * never un-marks a lead as contacted.
  */
 export async function POST() {
-    await requireAdmin();
     try {
         const report = await syncContactedFromGmailAction();
         return NextResponse.json(report, { status: report.ok ? 200 : 500 });

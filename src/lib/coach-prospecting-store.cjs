@@ -127,11 +127,11 @@ async function queueProfiles(c, run, urls) {
       continue;
     }
     const id = "job_" + randomUUID();
-    const checkpoint = await core.cachedLinkedInProfile(c, url, run.account_id);
+    const checkpoint = run.source==='RECHECK'?null:await core.cachedLinkedInProfile(c, url, run.account_id);
     const payload = {
       jobId: id,
       linkedinUrl: url,
-      nativePostProcess: false,
+      nativePostProcess: false,...(run.source==='RECHECK'?{explicitRetry:true,followerRecheck:true}:{}),
       prospecting: {
         runId: run.id,
         accountId: run.account_id,
@@ -237,10 +237,10 @@ async function createRun(pool, input) {
 async function activeAccount(c, id, owner) {
   return (
     await c.query(
-      `SELECT a.* FROM compel_linkedin_accounts a JOIN compel_worker_sessions s ON s.account_id=a.id
+      `SELECT a.*,(SELECT count(*) FROM compel_worker_account_profiles p WHERE p.account_id=a.id AND p.day=compel_worker_day()) AS profile_count FROM compel_linkedin_accounts a JOIN compel_worker_sessions s ON s.account_id=a.id
  WHERE a.id=$1 AND a.enabled AND NOT a.archived AND a.signed_out_at IS NULL AND a.logout_requested_at IS NULL AND s.owner=$2 AND s.lease_until>NOW()
- AND a.processing_enabled IS TRUE AND a.processing_until>NOW() AND a.connected_at IS NOT NULL AND a.attention_reason=''
- AND a.id IN(SELECT id FROM compel_linkedin_accounts WHERE enabled AND NOT archived AND signed_out_at IS NULL AND logout_requested_at IS NULL AND processing_enabled IS TRUE AND processing_until>NOW() AND connected_at IS NOT NULL AND attention_reason='' ORDER BY position,id LIMIT(SELECT active_count FROM compel_worker_config WHERE id=1)) FOR SHARE OF a`,
+ AND a.processing_enabled IS TRUE AND a.connected_at IS NOT NULL AND a.attention_reason=''
+ AND (SELECT active_count FROM compel_worker_config WHERE id=1)>0 FOR SHARE OF a`,
       [id, owner],
     )
   ).rows[0];
@@ -248,7 +248,7 @@ async function activeAccount(c, id, owner) {
 async function claimSource(pool, accountId, owner) {
   return transaction(pool, async (c) => {
     const a = await activeAccount(c, accountId, owner);
-    if (!a) return null;
+    if (!a||Number(a.profile_count)>=a.daily_limit) return null;
     if (
       (
         await c.query(
@@ -258,33 +258,13 @@ async function claimSource(pool, accountId, owner) {
       ).rowCount
     )
       return null;
-    await c.query(
-      "INSERT INTO compel_worker_usage(account_id,day) VALUES($1,(NOW() AT TIME ZONE 'UTC')::date) ON CONFLICT DO NOTHING",
-      [accountId],
-    );
-    const usage = (
-      await c.query(
-        "SELECT count FROM compel_worker_usage WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date FOR UPDATE",
-        [accountId],
-      )
-    ).rows[0];
-    if (usage.count >= a.daily_limit) return null;
     const run = (
       await c.query(
-        "SELECT * FROM compel_prospect_runs WHERE account_id=$1 AND (status='PENDING' OR status='RUNNING' AND lease_until<NOW()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1",
+        "SELECT * FROM compel_prospect_runs WHERE account_id=$1 AND (status='PENDING') ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1",
         [accountId],
       )
     ).rows[0];
     if (!run) return null;
-    const reserved = await c.query(
-      "INSERT INTO compel_worker_profile_usage(day,profile_key,account_id,job_id,source) VALUES((NOW() AT TIME ZONE 'UTC')::date,$1,$2,$3,'network-discovery') ON CONFLICT DO NOTHING RETURNING profile_key",
-      ["source/" + run.id, accountId, run.id],
-    );
-    if (reserved.rowCount)
-      await c.query(
-        "UPDATE compel_worker_usage SET count=count+1 WHERE account_id=$1 AND day=(NOW() AT TIME ZONE 'UTC')::date",
-        [accountId],
-      );
     await c.query(
       "UPDATE compel_prospect_runs SET status='RUNNING',owner=$2,lease_until=NOW()+interval '5 minutes',updated_at=NOW() WHERE id=$1",
       [run.id, owner],
@@ -382,6 +362,11 @@ async function pauseAccount(pool, accountId, message) {
     );
   });
 }
+async function releaseSource(pool,runId,owner) {
+  // A global account pause suspends discovery without individually stopping
+  // that campaign. A user-cancelled/held run cannot be reactivated here.
+  return pool.query("UPDATE compel_prospect_runs SET status='PENDING',owner=NULL,lease_until=NULL,updated_at=NOW() WHERE id=$1 AND owner=$2 AND status='RUNNING'",[runId,owner]);
+}
 async function runIsActive(pool, id) {
   const r = await pool.query(
     "SELECT status FROM compel_prospect_runs WHERE id=$1",
@@ -428,7 +413,8 @@ async function finishProfile(pool, job, result, research) {
     const manual = old?.data.prospecting?.assessment;
     // A recheck refreshes evidence; only another operator review replaces a
     // recorded human decision. This also avoids relying on cross-host clocks.
-    const assessment = manual?.reason?.startsWith("Operator review:")
+    const follower=require("./follower-policy.cjs").followersDecision(research.followers||result.followers,(research.followers||result.followers)?.threshold??require("./follower-policy.cjs").minFollowers());
+    const assessment = follower.status==='CONTINUE'&&manual?.reason?.startsWith("Operator review:")
       ? manual
       : automatedAssessment;
     const base = old?.data || {
@@ -544,6 +530,7 @@ async function finishProfile(pool, job, result, research) {
         automatedAssessment,
         contact,
         about: String(result.about || "").slice(0, 10000),
+        followers:research.followers||result.followers,connections:research.connections||result.connections,
         runId: meta.runId,
         lastJobId: job.jobId,
         accountId: meta.accountId,
@@ -572,7 +559,7 @@ async function finishProfile(pool, job, result, research) {
         [id, url, core.json(next)],
       );
     await activity(c, id, "COACH_EVIDENCE", assessment.reason);
-    return { status: "PROSPECTED", assessment, prospectId: id };
+    return { status: follower.status==='CONTINUE'?'PROSPECTED':follower.status, assessment, prospectId: id };
   });
 }
 async function refreshRuns(pool) {
@@ -590,6 +577,7 @@ module.exports = {
   sourceProgress,
   changeRun,
   pauseAccount,
+  releaseSource,
   runIsActive,
   finishProfile,
   refreshRuns,

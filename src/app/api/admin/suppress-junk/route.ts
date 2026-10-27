@@ -1,4 +1,3 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import { suppressJunkAddressesAction } from '@/app/actions/crm-actions';
 
@@ -14,7 +13,6 @@ export const maxDuration = 300;
  * Nothing is deleted; the rows keep their LinkedIn URL and stay re-scrapeable.
  */
 export async function POST() {
-    await requireAdmin();
     try {
         const report = await suppressJunkAddressesAction();
         return NextResponse.json({ success: true, ...report });

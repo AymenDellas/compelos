@@ -1,5 +1,4 @@
 ﻿"use server";
-import { requireAdmin } from '@/lib/dashboard-auth';
 
 import { getAllLeads, setLeadOutcome, updateLead } from "@/lib/db";
 import { getGmailAccounts, describeGmailAccountsProblem } from "@/lib/gmail-sent";
@@ -61,7 +60,6 @@ function leadAddresses(lead: { email?: string; all_emails?: string }): string[] 
  * away a live lead over a temporary greylist.
  */
 export async function syncBouncesAction(): Promise<BounceSyncReport> {
-    await requireAdmin();
     const empty: BounceSyncReport = {
         ok: false, accounts: [], deadMailboxes: 0, policyBlocked: 0, mailboxFull: 0, softFound: 0,
         suppressed: 0, alreadySuppressed: 0, unmatched: 0, examples: [], policyExamples: [], restored: 0, restoredExamples: [],

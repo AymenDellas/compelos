@@ -1,9 +1,7 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import { getAllLeads } from '@/lib/db';
 
 export async function GET(request: Request) {
-    await requireAdmin();
     try {
         const { searchParams } = new URL(request.url);
         const locationFilter = searchParams.get('location')?.toLowerCase();

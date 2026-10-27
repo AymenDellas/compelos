@@ -1,45 +1,34 @@
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { AsyncLocalStorage } from 'node:async_hooks';
-import { pool } from '../pg_setup';
-
-const requestDatabase = new AsyncLocalStorage();
-export async function withContentDatabase(work) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(83472112)');
-    await client.query("CREATE TABLE IF NOT EXISTS compel_content_state (id TEXT PRIMARY KEY, data JSONB NOT NULL DEFAULT '{}'::jsonb, revision INTEGER NOT NULL DEFAULT 1, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
-    await client.query("INSERT INTO compel_content_state(id) VALUES('workspace') ON CONFLICT DO NOTHING");
-    const result = await client.query("SELECT data FROM compel_content_state WHERE id='workspace' FOR UPDATE");
-    const db = { data: result.rows[0].data, dirty: false };
-    const value = await requestDatabase.run(db, work);
-    if (value && typeof value.status === 'number' && value.status >= 400) {
-      await client.query('ROLLBACK');
-      return value;
-    }
-    if (db.dirty) await client.query("UPDATE compel_content_state SET data=$1,revision=revision+1,updated_at=NOW() WHERE id='workspace'", [JSON.stringify(db.data)]);
-    await client.query('COMMIT');
-    return value;
-  } catch (error) { await client.query('ROLLBACK'); throw error; }
-  finally { client.release(); }
-}
 
 const names = new Set(['posts', 'ideas', 'concepts', 'beliefs', 'settings', 'funnels', 'scoutRuns', 'ideaUsage', 'metrics', 'feedback']);
 
-export function openDatabase() {
-  const current = requestDatabase.getStore();
-  if (current) return current;
-  throw new Error('Create storage must use the shared database.');
+export function openDatabase(path = join(process.cwd(), 'data', 'content-studio.json')) {
+  path ||= join(process.cwd(), 'data', 'content-studio.json');
+  mkdirSync(dirname(path), { recursive:true });
+  if (!existsSync(path)) writeFileSync(path, '{}', { flag:'wx' });
+  return { path };
 }
 
 function table(name) { if (!names.has(name)) throw new Error('Invalid collection'); return name; }
 function read(db) {
-  if (db.data) return db.data;
-  throw new Error('Create storage is unavailable.');
+  const data = JSON.parse(readFileSync(db.path, 'utf8'));
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Create storage is invalid');
+  return data;
 }
 function write(db, data) {
-  if (db.data) { db.data = data; db.dirty = true; return; }
-  throw new Error('Create storage is unavailable.');
+  const temporary = `${db.path}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, JSON.stringify(data));
+  // Windows sync clients and virus scanners can briefly hold the destination
+  // after a save. Keep replacement atomic and retry only transient locks.
+  for (let attempt=0;attempt<6;attempt++) {
+    try {renameSync(temporary,db.path);return;}
+    catch (error) {
+      if (!['EPERM','EACCES','EBUSY'].includes(error.code) || attempt===5) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Math.min(200,25*2**attempt));
+    }
+  }
 }
 export function list(db, name) {
   const rows = read(db)[table(name)] || {};

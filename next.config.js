@@ -1,23 +1,38 @@
 /** @type {import('next').NextConfig} */
-module.exports = {
-  poweredByHeader: false,
-  serverExternalPackages: ['imapflow', '@qwen-code/qwen-code'],
-  outputFileTracingIncludes: { '/api/copy-studio/*': ['./node_modules/@qwen-code/qwen-code/**/*'] },
-  outputFileTracingExcludes: { '*': ['**/.env*', '**/.git/**', '**/tmp/**', '**/output/**', '**/data/**', '**/progress/**'] },
-  experimental: { serverActions: { bodySizeLimit: '10mb' } },
-  turbopack: { root: __dirname },
-  async headers() {
-    return [{
-      source: '/:path*',
-      headers: [
-        { key: 'Referrer-Policy', value: 'no-referrer' },
-        { key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' },
-        { key: 'Cache-Control', value: 'private, no-store' },
-        { key: 'X-Content-Type-Options', value: 'nosniff' },
-        { key: 'X-Frame-Options', value: 'DENY' },
-        { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
-        { key: 'Content-Security-Policy', value: "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" },
-      ],
-    }];
-  },
+const nextConfig = {
+    // Standalone output for Docker/VPS deployment
+    output: 'standalone',
+    outputFileTracingRoot: __dirname,
+    turbopack: { root: __dirname },
+
+    // Allow Node packages in server actions
+    serverExternalPackages: ['better-sqlite3', 'imapflow', '@qwen-code/qwen-code'],
+
+    outputFileTracingIncludes: {
+        '/api/copy-studio/*': ['./node_modules/@qwen-code/qwen-code/**/*'],
+    },
+
+    // Local sessions/evidence are runtime state, never deployment assets. Broad
+    // dynamic filesystem paths in Finder/Create must not package this PC's data.
+    outputFileTracingExcludes: {
+        '/*': [
+            './.browser-profiles*/**/*', './data/**/*', './progress/**/*',
+            './queue*/**/*', './case-study-queue/**/*', './case-study-results/**/*',
+            './scrape-results/**/*', './api-data/**/*', './backups/**/*',
+            './output/**/*', './tmp/**/*', './.git/**/*', './.env*',
+        ],
+    },
+
+    // Disable powered-by header for security
+    poweredByHeader: false,
+
+    // Increase server action body size limit for large CSV uploads
+    experimental: {
+        serverActions: {
+            bodySizeLimit: '10mb',
+        },
+    },
+
 };
+
+module.exports = nextConfig;

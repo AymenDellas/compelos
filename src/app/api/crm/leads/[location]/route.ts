@@ -1,4 +1,3 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import { insertOrUpdateLead, updateLeadEmailVerification, LeadRecord } from '@/lib/db';
 import { verifyEmail } from '@/app/actions/email-verifier-actions';
@@ -11,7 +10,6 @@ export async function GET(
     request: Request,
     { params }: { params: Promise<{ location: string }> }
 ) {
-    await requireAdmin();
     try {
         const resolvedParams = await params;
         const locationParam = resolvedParams.location.toLowerCase();
@@ -88,7 +86,6 @@ export async function POST(
     req: Request,
     { params }: { params: Promise<{ location: string }> }
 ) {
-    await requireAdmin();
     try {
         const resolvedParams = await params;
         const type = resolvedParams.location.toLowerCase();

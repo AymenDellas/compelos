@@ -137,7 +137,7 @@ export async function handleCopyStudio(
         ? { title: 'Pasted page copy', url: '', text: input.text, headings: [] }
         : readSource(input.url!, signal);
     }
-    const complete = completeOverride || createCompletion(providerConfig(operation === 'import' ? 'extraction' : 'writing'));
+    const complete = completeOverride || createCompletion(providerConfig());
     if (operation === 'generate')
       return generate(complete, generationSchema.parse(body), signal, progress);
     if (operation === 'revise') return revise(complete, revisionSchema.parse(body), signal);
@@ -152,7 +152,7 @@ export async function handleCopyStudio(
       'You are testing an API connection. Reply with OK only.',
       'Reply OK.',
       signal,
-      512,
+      32,
     );
     return { connected: true, model: providerConfig().model };
   };

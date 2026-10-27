@@ -1,7 +1,4 @@
 "use server";
-import { requireWorker } from '@/lib/worker-availability';
-
-import { requireAdmin } from '@/lib/dashboard-auth';
 
 import { spawn, ChildProcess } from "child_process";
 import fs from "fs";
@@ -37,8 +34,6 @@ export type PuppeteerProgress = {
 
 // ── Start a new Puppeteer scraping job ──
 export async function startPuppeteerJob(urls: string[]): Promise<{ success: boolean; error?: string }> {
-    await requireAdmin();
-    requireWorker();
     // Check if already running
     if (isPuppeteerRunning()) {
         return { success: false, error: "A scraping job is already running." };
@@ -79,8 +74,6 @@ export async function startPuppeteerJob(urls: string[]): Promise<{ success: bool
 
 // ── Resume an existing job ──
 export async function resumePuppeteerJob(): Promise<{ success: boolean; error?: string }> {
-    await requireAdmin();
-    requireWorker();
     if (isPuppeteerRunning()) {
         return { success: false, error: "A scraping job is already running." };
     }
@@ -108,8 +101,6 @@ export async function resumePuppeteerJob(): Promise<{ success: boolean; error?: 
 
 // ── Stop a running job ──
 export async function stopPuppeteerJob(): Promise<{ success: boolean }> {
-    await requireAdmin();
-    requireWorker();
     if (!fs.existsSync(PID_FILE)) return { success: false };
 
     try {
@@ -129,7 +120,6 @@ export async function stopPuppeteerJob(): Promise<{ success: boolean }> {
 
 // ── Poll for progress ──
 export async function getPuppeteerProgress(): Promise<PuppeteerProgress> {
-    await requireAdmin();
     const running = isPuppeteerRunning();
 
     // Read progress file
@@ -194,7 +184,6 @@ function isPuppeteerRunning(): boolean {
 
 // ── Get results as CSV string ──
 export async function getPuppeteerResultsCSV(): Promise<string> {
-    await requireAdmin();
     if (fs.existsSync(ALL_RESULTS_CSV)) {
         return fs.readFileSync(ALL_RESULTS_CSV, "utf8");
     }

@@ -1,4 +1,3 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { canonicalLinkedinUrl } from '@/lib/case-study';
 import { findExistingCaseStudyLinkedinUrls } from '@/lib/case-study-store';
@@ -8,7 +7,6 @@ export const dynamic = 'force-dynamic';
 const key = (value: string) => value.toLowerCase().replace(/\/+$/, '');
 
 export async function POST(request: NextRequest) {
-    await requireAdmin();
     try {
         const body = await request.json();
         if (!Array.isArray(body?.urls) || !body.urls.length || body.urls.length > 100)

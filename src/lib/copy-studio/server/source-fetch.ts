@@ -133,3 +133,4 @@ export async function fetchSourceDocument(
   if (fetched.redirect) return fetchSourceDocument(new URL(fetched.redirect, url), signal, kind, allowedOrigin, redirects + 1);
   return { html: fetched.html, url };
 }
+

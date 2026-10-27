@@ -1,4 +1,3 @@
-import { isPracticeWide } from '@/lib/funnel-focus';
 import { useEffect, useRef, useState } from 'react';
 import { LoaderCircle, X } from 'lucide-react';
 import { EXTRACTION_VERSION, type ImportResult, type Project } from '@/lib/copy-studio/shared/contracts';
@@ -28,16 +27,14 @@ export function EvidenceRecoveryDialog({ project, onClose, onContinue }: {
     setResult(null);
     const timer = setTimeout(() => request.abort(new DOMException('Timed out', 'TimeoutError')), 290000);
     // A current extraction can be reviewed without another crawl or AI call.
-    const practice = isPracticeWide(project.funnelFocus);
     const cached = !attempt && saved.extractionVersion === EXTRACTION_VERSION
       && saved.extraction.fields.proof?.trim()
-      && (practice || saved.selectedOffer?.toLowerCase().trim() === project.brief.offerName.toLowerCase().trim());
+      && saved.selectedOffer?.toLowerCase().trim() === project.brief.offerName.toLowerCase().trim();
     const task = cached ? Promise.resolve(saved) : importSource({
-      ...(practice ? { text: saved.source.text } : saved.source.url ? { url: saved.source.url } : { text: saved.source.text }),
-      targetOffer: practice ? '' : project.brief.offerName.slice(0, 200),
+      ...(saved.source.url ? { url: saved.source.url } : { text: saved.source.text }),
+      targetOffer: project.brief.offerName.slice(0, 200),
     }, request.signal);
     void task.then(value => {
-      if (practice && value.focusAnalysis) value = { ...value, extraction: { ...value.extraction, fields: { proof: value.focusAnalysis.positioning.fields.proof || '' } } };
       if (!request.signal.aborted) setResult(value);
     }).catch(err => {
       if (!request.signal.aborted || request.signal.reason?.name === 'TimeoutError')
@@ -60,7 +57,7 @@ export function EvidenceRecoveryDialog({ project, onClose, onContinue }: {
     </div>
     <p className="muted">This project has an original page attached, but its saved client evidence is empty.
       Review evidence for <strong>{project.brief.offerName}</strong> before generating. Your other answers stay as you wrote them.</p>
-    {busy ? <p role="status"><LoaderCircle className="spin" size={16} /> {isPracticeWide(project.funnelFocus) ? 'Checking the saved website copy…' : 'Checking the website and its testimonial routes…'}</p>
+    {busy ? <p role="status"><LoaderCircle className="spin" size={16} /> Checking the website and its testimonial routes…</p>
       : error ? <div className="notice error" role="alert">{error}</div>
       : proof ? <div className="extracted-field is-selected">
         <strong>Client results &amp; evidence</strong>
@@ -69,7 +66,7 @@ export function EvidenceRecoveryDialog({ project, onClose, onContinue }: {
     {result && <SourceCoverage source={result.source} />}
     <div className="dialog-footer">
       {busy ? <button className="button secondary" onClick={onClose}>Cancel check</button> : <>
-        <button className="button subtle" onClick={() => setAttempt(value => value + 1)}>{isPracticeWide(project.funnelFocus) ? 'Recheck saved copy' : 'Check website again'}</button>
+        <button className="button subtle" onClick={() => setAttempt(value => value + 1)}>Check website again</button>
         <button className="button secondary" onClick={() => onContinue(result, false)}>Generate without evidence</button>
         {proof && <button className="button primary" onClick={() => onContinue(result, true)}>Use evidence and generate</button>}
       </>}

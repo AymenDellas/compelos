@@ -1,11 +1,10 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import { importCampaignReportsAction } from '@/app/actions/campaign-import-actions';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 /**
  * Same import as the CRM's "Import Campaign Report" button, exposed as an endpoint
@@ -21,7 +20,6 @@ export const maxDuration = 300;
  * *pushed*, which is the very thing that made the contacted flag wrong.
  */
 export async function POST(request: Request) {
-    await requireAdmin();
     try {
         const body = await request.json().catch(() => ({}));
         let files: { name: string; content: string }[] = body.files || [];

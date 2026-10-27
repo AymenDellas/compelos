@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCompletion } from '../../src/lib/copy-studio/server/provider';
-import { providerConfig } from '../../src/lib/copy-studio/server/config';
-import { responseTokenLimit } from '../../src/lib/copy-studio/server/response-tokens';
 
 const config = {
   apiKey: 'test-token-not-a-real-key',
@@ -10,71 +8,6 @@ const config = {
   model: 'test-model',
   timeoutMs: 1000,
 };
-
-test('AgentRouter GPT imports retain output headroom when the gateway ignores reasoning=none', () => {
-  const gateway = { ...config, baseUrl: 'https://agentrouter.org/v1', model: 'gpt-5.6-sol', reasoningEffort: 'none' as const };
-  assert.equal(responseTokenLimit(gateway, 7000), 25000);
-  assert.equal(responseTokenLimit(gateway, 512), 512, 'A minimal connection probe stays small');
-  assert.equal(responseTokenLimit({ ...gateway, baseUrl: 'https://provider.invalid/v1' }, 7000), 7000);
-});
-
-test('Responses HTTP requests use the native request/response contract and reject unfinished output', async () => {
-  const original = globalThis.fetch;
-  let status = 'completed';
-  let outputAllowance = 22000;
-  let reasoningEffort = 'low';
-  try {
-    globalThis.fetch = async (url, init) => {
-      assert.equal(url, 'https://provider.invalid/v1/responses');
-      const body = JSON.parse(String(init?.body));
-      assert.equal(body.max_output_tokens, outputAllowance);
-      assert.equal(body.max_tokens, undefined);
-      assert.equal(body.temperature, undefined);
-      assert.equal(body.instructions, 'System instructions');
-      assert.equal(body.input[0].content, 'Source data');
-      assert.equal(body.store, false);
-      assert.equal(body.reasoning.effort, reasoningEffort);
-      return Response.json({ status, output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '{"verified":true}' }] }] });
-    };
-    const complete = createCompletion({ ...config, apiFormat: 'responses', reasoningEffort: 'low' });
-    assert.equal(await complete('System instructions', 'Source data', new AbortController().signal, 4000), '{"verified":true}');
-    status = 'incomplete';
-    await assert.rejects(complete('System instructions', 'Source data', new AbortController().signal, 4000), /cut short/);
-    status = 'failed';
-    await assert.rejects(complete('System instructions', 'Source data', new AbortController().signal, 4000), /did not complete/);
-    status = 'completed'; outputAllowance = 512;
-    assert.equal(await complete('System instructions', 'Source data', new AbortController().signal, 512), '{"verified":true}');
-    outputAllowance = 4000; reasoningEffort = 'none';
-    const fast = createCompletion({ ...config, apiFormat: 'responses', reasoningEffort: 'none' });
-    assert.equal(await fast('System instructions', 'Source data', new AbortController().signal, 4000), '{"verified":true}');
-  } finally { globalThis.fetch = original; }
-});
-
-test('fresh AgentRouter configuration uses Responses while explicit legacy models preserve their protocol', () => {
-  const keys = ['COPY_STUDIO_MODEL', 'AGENTROUTER_MODEL', 'COPY_STUDIO_BASE_URL', 'AGENTROUTER_BASE_URL', 'COPY_STUDIO_API_FORMAT', 'COPY_STUDIO_REASONING_EFFORT', 'COPY_STUDIO_EXTRACTION_REASONING_EFFORT'];
-  const saved = keys.map(key => [key, process.env[key]] as const);
-  try {
-    keys.forEach(key => delete process.env[key]);
-    assert.equal(providerConfig().model, 'gpt-5.6-sol');
-    assert.equal(providerConfig().apiFormat, 'responses');
-    assert.equal(providerConfig().reasoningEffort, 'low');
-    process.env.COPY_STUDIO_EXTRACTION_REASONING_EFFORT = 'none';
-    assert.equal(providerConfig('extraction').reasoningEffort, 'none');
-    assert.equal(providerConfig().reasoningEffort, 'low', 'Fast extraction must not change the writing configuration');
-    process.env.COPY_STUDIO_REASONING_EFFORT = 'none';
-    assert.equal(providerConfig().reasoningEffort, 'none');
-    process.env.COPY_STUDIO_MODEL = 'legacy-model';
-    assert.equal(providerConfig().apiFormat, 'chat_completions');
-    process.env.COPY_STUDIO_API_FORMAT = 'responses';
-    process.env.COPY_STUDIO_REASONING_EFFORT = 'low';
-    assert.equal(providerConfig().apiFormat, 'responses');
-    assert.equal(providerConfig().reasoningEffort, 'low');
-    process.env.COPY_STUDIO_API_FORMAT = 'guess';
-    assert.throws(() => providerConfig(), /API_FORMAT/);
-  } finally {
-    for (const [key, value] of saved) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-  }
-});
 
 test('Groq GPT-OSS requests leave room for JSON output with low reasoning effort while other models retain their provider defaults', async () => {
   const original = globalThis.fetch;

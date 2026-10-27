@@ -1,11 +1,116 @@
+# Dependencies
 node_modules/
+
+# Next.js build
 .next/
-.vercel/
-.browser-profiles/
-data/
+out/
+
+# Environment files (contain secrets)
+.env.local
+.env*.local
+
+# Progress/results data
+progress/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# ── Queue & Worker Data ──
 queue/
 queue-results/
-tmp/
-*.tsbuildinfo
-.env*
-!.env.example
+case-study-queue/
+case-study-results/
+scrape-results/
+.browser-profiles/
+.browser-profiles-case-study/
+_puppeteer-urls.txt
+
+# ── Debug/Test files (should never be committed) ──
+debug-*.cjs
+debug-*.png
+debug_*.html
+debug_*.txt
+debug_*.cjs
+test-*.cjs
+test-*.mjs
+test-*.html
+test-*.json
+test-*.png
+test_*.cjs
+test_*.mjs
+analyze_html.cjs
+inspect-*.cjs
+decode-*.cjs
+find-*.cjs
+check_*.cjs
+batch-*.cjs
+batch-*.txt
+quick-*.cjs
+scratch_*.cjs
+scratch_*.txt
+
+# ── Scraped data / HTML dumps ──
+*.html
+!src/**/*.html
+coach-jenn.html
+dave-home.html
+graphql-result.json
+kylie-feed.json
+result-*.json
+final-results*.txt
+
+# ── Legacy scraper files (archived) ──
+voyager-scraper.cjs
+voyager-browser.cjs
+voyager-test.cjs
+puppeteer-scraper.cjs
+
+# ── n8n workflow ──
+My workflow*.json
+
+# ── Misc ──
+*.log
+npm-debug.log*
+technical_summary.md.resolved
+api-data/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Local JSON DB / runtime data (worker-limits.json, legacy leads_db.json)
+data/
+
+# ── One-off / recovery / patch scripts (repo root) ──
+# Throwaway debugging scripts, not project source. Several have historically
+# been hand-edited with a live DATABASE_URL pasted in — never let one reach a commit.
+/check*.js
+/diagnose*.js
+/execute_recovery.js
+/fix_recovery.js
+/fix_all.js
+/fix_types*.js
+/patch*.js
+/promote_stuck.js
+/recover_leads.js
+/restore_db.py
+/summary.js
+/find_demoted.js
+/e2e_test.js
+/test2.js
+/test_filter.js
+/test_regex.js
+/unzip.py
+/scratch.py
+/inject_test_leads.js
+/post_lead.js
+
+# Database snapshots from `npm run backup` — real lead data, never committed
+/backups/
+
+# Copy Studio local validation artifacts
+/tmp/copy-studio-*

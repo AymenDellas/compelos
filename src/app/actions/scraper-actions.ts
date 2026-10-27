@@ -1,19 +1,18 @@
 "use server";
-import { requireAdmin } from '@/lib/dashboard-auth';
 
 import { cleanUrl, extractEmails, validateEmail, guessEmails, CONTACT_PAGE_PATHS, LINK_PRIORITY_KEYWORDS } from "@/lib/utils";
 import { verifyEmailDomain } from "@/lib/email-domain-server";
 import https from 'https';
 import fs from 'fs';
 import path from 'path';
-import { savedRuns } from '@/lib/saved-runs';
+import type { ProspectAssessment } from '@/lib/prospect-qualification.cjs';
 
 // ── Types ──
 
 export type Lead = {
-    prospectQualification?: import('@/lib/prospect-qualification.cjs').ProspectAssessment;
     url: string;
-    status: 'PENDING' | 'SCANNING' | 'QUALIFIED' | 'REJECTED' | 'ACTIVITY_FAILED' | 'ACTIVE_NO_CONTACT' | 'ERROR';
+    status: 'PENDING' | 'SCANNING' | 'QUALIFIED' | 'INVESTIGATE' | 'NURTURE' | 'REJECTED' | 'ACTIVITY_FAILED' | 'ACTIVE_NO_CONTACT' | 'REVIEW' | 'ERROR' | 'PROSPECTED' | 'CANCELLED';
+    prospectQualification?: ProspectAssessment;
     firstName?: string;
     headline?: string;
     activityStatus?: string;
@@ -33,47 +32,65 @@ export type SavedRun = {
     emailsFound: number;
 };
 
-// ── Progress Save/Load for crash recovery ──
+// Read-only legacy run archives; runtime recovery lives in PostgreSQL.
 const PROGRESS_DIR = path.join(process.cwd(), 'progress');
-
-export async function saveProgress(leads: Lead[], processedCount: number, totalCount: number): Promise<string> {
-    await requireAdmin();
-    const db = await savedRuns();
-    const cloudData = { savedAt: new Date().toISOString(), processedCount, totalCount, leads };
-    const filename = `results_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    await db.query("INSERT INTO compel_saved_runs(filename,data) VALUES($1,$2),('progress_latest.json',$2) ON CONFLICT(filename) DO UPDATE SET data=EXCLUDED.data,updated_at=NOW()", [filename, JSON.stringify(cloudData)]);
-    return filename;
-}
-
-export async function loadProgress(): Promise<{ leads: Lead[], processedCount: number, totalCount: number } | null> {
-    await requireAdmin();
-    const cloud = await (await savedRuns()).query("SELECT data FROM compel_saved_runs WHERE filename='progress_latest.json'");
-    return cloud.rows[0]?.data || null;
-}
 
 // ── Saved Runs Management ──
 
 export async function listSavedRuns(): Promise<SavedRun[]> {
-    await requireAdmin();
-    const cloud = await (await savedRuns()).query("SELECT filename,data FROM compel_saved_runs WHERE filename <> 'progress_latest.json' ORDER BY updated_at DESC LIMIT 20");
-    return cloud.rows.map(({filename,data}) => ({ filename, savedAt:data.savedAt, processedCount:data.processedCount || 0, totalCount:data.totalCount || 0, qualifiedCount:(data.leads || []).filter((lead: Lead)=>lead.status==='QUALIFIED').length, emailsFound:(data.leads || []).reduce((sum: number, lead: Lead)=>sum+(lead.emails?.length || 0),0) }));
+    try {
+        if (!fs.existsSync(PROGRESS_DIR)) return [];
+        const files = fs.readdirSync(PROGRESS_DIR)
+            .filter(f => f.endsWith('.json') && f !== 'progress_latest.json')
+            .sort().reverse();
+
+        const runs: SavedRun[] = [];
+        for (const filename of files.slice(0, 20)) {
+            try {
+                const raw = fs.readFileSync(path.join(PROGRESS_DIR, filename), 'utf-8');
+                const data = JSON.parse(raw);
+                runs.push({
+                    filename,
+                    savedAt: data.savedAt || '',
+                    processedCount: data.processedCount || 0,
+                    totalCount: data.totalCount || 0,
+                    qualifiedCount: (data.leads || []).filter((l: Lead) => l.status === 'QUALIFIED').length,
+                    emailsFound: (data.leads || []).reduce((acc: number, l: Lead) => acc + (l.emails?.length || 0), 0),
+                });
+            } catch { /* skip corrupt files */ }
+        }
+        return runs;
+    } catch {
+        return [];
+    }
 }
 
 export async function loadSavedRun(filename: string): Promise<{ leads: Lead[], processedCount: number, totalCount: number } | null> {
-    await requireAdmin();
-    const cloud = await (await savedRuns()).query('SELECT data FROM compel_saved_runs WHERE filename=$1', [path.basename(filename)]);
-    return cloud.rows[0]?.data || null;
+    try {
+        const safe = path.basename(filename);
+        const filePath = path.join(PROGRESS_DIR, safe);
+        if (!fs.existsSync(filePath)) return null;
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        const data = JSON.parse(raw);
+        return { leads: data.leads || [], processedCount: data.processedCount || 0, totalCount: data.totalCount || 0 };
+    } catch {
+        return null;
+    }
 }
 
 export async function deleteSavedRun(filename: string): Promise<boolean> {
-    await requireAdmin();
-    if (filename === 'progress_latest.json') return false;
-    const cloud = await (await savedRuns()).query('DELETE FROM compel_saved_runs WHERE filename=$1', [path.basename(filename)]);
-    return Boolean(cloud.rowCount);
+    try {
+        const safe = path.basename(filename);
+        if (safe === 'progress_latest.json') return false;
+        const filePath = path.join(PROGRESS_DIR, safe);
+        if (fs.existsSync(filePath)) { fs.unlinkSync(filePath); return true; }
+        return false;
+    } catch {
+        return false;
+    }
 }
 
 export async function exportResultsCSV(leads: Lead[]): Promise<string> {
-    await requireAdmin();
     const csvCell = (val: string) => `"${val.replace(/"/g, '""')}"`;
     const headers = ['LinkedIn URL', 'First Name', 'Status', 'Activity Status', 'Websites', 'Emails'];
     const rows = leads.map(l => [
@@ -99,7 +116,6 @@ export type WebsiteScrapeResult = {
 };
 
 export async function scrapeWebsiteEmails(websiteUrl: string): Promise<WebsiteScrapeResult> {
-    await requireAdmin();
     try {
         let url = websiteUrl.trim();
         if (!url.startsWith('http://') && !url.startsWith('https://')) url = 'https://' + url;

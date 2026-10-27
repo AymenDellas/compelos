@@ -1,10 +1,9 @@
 import { z } from 'zod/v4';
-import { funnelFocusSchema, focusAnalysisSchema } from '../../funnel-focus';
 import { OFFER_ESSENTIAL_KEYS, OFFER_ESSENTIAL_LABELS } from '../../offer-essentials';
 
 export const MAX_SOURCE_CHARACTERS = 240_000;
 export const MAX_PROOF_CHARACTERS = MAX_SOURCE_CHARACTERS * 2;
-export const EXTRACTION_VERSION = 4;
+export const EXTRACTION_VERSION = 3;
 
 const text = z.string().trim().max(6000);
 export const briefSchema = z.object({
@@ -82,7 +81,6 @@ export const generationSchema = z.object({
   formula: formulaSchema.default('recommended'),
   context: copyContextSchema.optional(),
   reference: referenceSchema.optional(),
-  funnelFocus: funnelFocusSchema.refine(f => Boolean(f.approvedAt), 'Confirm the funnel focus before generating.').optional(),
 });
 export type GenerationInput = z.infer<typeof generationSchema>;
 export const sectionSchema = z.object({
@@ -171,7 +169,7 @@ export const sourceSchema = z.object({
   }).optional(),
 });
 export type Source = z.infer<typeof sourceSchema>;
-export const importResultSchema = z.object({ source: sourceSchema, extraction: extractionSchema, selectedOffer: z.string().max(200).optional(), extractionVersion: z.number().int().optional(), focusAnalysis: focusAnalysisSchema.optional(), funnelFocus: funnelFocusSchema.optional() });
+export const importResultSchema = z.object({ source: sourceSchema, extraction: extractionSchema, selectedOffer: z.string().max(200).optional(), extractionVersion: z.number().int().optional() });
 export type ImportResult = z.infer<typeof importResultSchema>;
 export const revisionSchema = generationSchema.extend({
   draft: draftSchema,
@@ -196,7 +194,6 @@ export const projectSchema = z.object({
   evidenceReview: z.object({ signature: z.string().max(100), decision: z.enum(['included', 'excluded']) }).optional(),
   context: copyContextSchema.optional(),
   onboarding: onboardingLinkSchema.nullable().default(null),
-  funnelFocus: funnelFocusSchema.optional(),
   offerBriefs: z.object({ current: briefSchema.optional(), focused: briefSchema.optional(), new: briefSchema.optional() }).optional(),
   generatedFrom: z.string().nullable(),
   history: z.array(z.object({ result: resultSchema, generatedFrom: z.string().nullable() })).max(8),
@@ -220,7 +217,6 @@ export function generationPayload(input: CopyInput): GenerationInput {
   return {
     brief: input.brief, template: input.template, formula: input.formula,
     context: input.context,
-    ...(input.funnelFocus ? { funnelFocus: input.funnelFocus } : {}),
     ...(reference ? { reference: referenceSchema.parse(reference) } : {}),
   };
 }
@@ -233,7 +229,6 @@ export function fingerprint(input: CopyInput): string {
     brief: coachBio ? { ...existingBrief, coachBio } : existingBrief,
     template: input.template,
     formula: input.formula,
-    ...(input.funnelFocus ? { funnelFocus: input.funnelFocus } : {}),
     ...(context.mode !== 'current' || context.direction || context.background || context.mustKeep || context.avoid
       ? { context } : {}),
     ...(reference ? { reference } : {}),

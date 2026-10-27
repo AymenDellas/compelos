@@ -50,8 +50,7 @@ export function essentialsPresent(data: Pick<OnboardingData, 'form'>): boolean {
     return ['offerName', 'offer', 'audience', 'customerProblem', 'desiredOutcome'].every(key =>
         String(data.form[key as keyof OnboardingData['form']] || '').trim().length >= 3);
 }
-export function clientBriefReady(data: Pick<OnboardingData, 'form' | 'journey' | 'funnelFocus'>): boolean {
-    if (data.funnelFocus && !data.funnelFocus.approvedAt) return false;
+export function clientBriefReady(data: Pick<OnboardingData, 'form' | 'journey'>): boolean {
     return data.journey ? data.journey.briefPrepared || (Boolean(data.journey.sourceLabel || data.journey.reference) && essentialsPresent(data)) : essentialsPresent(data);
 }
 export function publishingReady(data: Pick<OnboardingData, 'journey'>): boolean {

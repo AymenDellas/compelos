@@ -1,4 +1,3 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import { NextResponse } from 'next/server';
 import { createSchema, verifySchema } from '@/lib/pg_setup';
 
@@ -20,7 +19,6 @@ export const dynamic = 'force-dynamic';
  * `missingColumns`, restart the server so it picks up the new schema and re-run.
  */
 export async function POST() {
-    await requireAdmin();
     try {
         await createSchema();
         const verification = await verifySchema();

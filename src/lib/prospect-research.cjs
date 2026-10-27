@@ -5,14 +5,15 @@ const https = require('node:https');
 const dns = require('node:dns/promises');
 const ipaddr = require('ipaddr.js');
 const cheerio = require('cheerio');
+const telemetry=require('./engine-telemetry.cjs');
 const {
     FACT_KEYS, normalText, hostOf, onDomain, isPlatformWebsite, isUnsafeContact, FREE_MAIL,
     segmentsFromText, emptyResearch, makeFact, groundedFact, validateResearch,
 } = require('./prospect-qualification.cjs');
 
-const MAX_PAGES = 200;
+const MAX_PAGES = 8;
 const MAX_BYTES = 4 * 1024 * 1024;
-const MAX_TOTAL_MS = 90000;
+const MAX_TOTAL_MS = 20000;
 const DEFAULT_RESEARCH_MODEL = 'openai/gpt-oss-120b';
 const MAX_AI_INPUT_CHARS = 8000;
 const publicAddress = address => { try { return ipaddr.process(address).range() === 'unicast'; } catch { return false; } };
@@ -40,6 +41,7 @@ function pageResponse(url,status,headers,body,options) {
 }
 // Validate every redirect and pin the validated DNS address to the request.
 async function fetchPublicPage(value, options = {}, redirects = 0) {
+    telemetry.countRequest('website');
     if (redirects > 4) throw new Error('Too many website redirects.');
     const url = publicUrl(value);
     const timeout = Math.min(options.timeoutMs || 10000, 12000);
@@ -446,6 +448,12 @@ async function researchProspect(input, options = {}) {
     const previousContacts=options.previousResearch?.contacts||[];
     const linkedinEmails=input.profileIdentityConfirmed&&input.emailSource==='linkedin'?(input.emails||[]).filter(e=>!isUnsafeContact(e)&&!previousContacts.some(c=>c.address===e.toLowerCase()&&c.source!=='linkedin')):[];
     const profileContacts=[...publishedProfileEmails(input),...linkedinEmails.map(address=>({address:address.toLowerCase(),source:'linkedin',url:input.linkedinUrl||input.url,ownership:'PUBLISHED'}))];
+    if(['followers','location','activity'].includes(input.decisionStage)){
+        research.contacts=profileContacts;deriveRules(input,research,sources,[]);return validateResearch(research);
+    }
+    if(options.qualificationFirst&&input.profileIdentityConfirmed&&activityAge>30&&Number.isFinite(activityAge)){
+        research.contacts=profileContacts;deriveRules(input,research,sources,[]);return validateResearch(research);
+    }
     if(options.qualificationFirst&&!options.previousResearch&&profileContacts.length&&activityAge>=0&&activityAge<=30){
         research.contacts=profileContacts;
         const roots=candidates.filter(u=>!isPlatformWebsite(u)).flatMap(u=>{try{return [publicUrl(u).href];}catch{return [];}});
@@ -453,13 +461,15 @@ async function researchProspect(input, options = {}) {
         research.crawl={version:2,attributionVersion:3,complete:!roots.length,retryable:!!roots.length,maxRoutes:600,storageLimited:false,attempted:[],visited:[],pending:roots,failed:[],roots,matchedHosts:[],contactMatchedHosts:[],discovered:roots.length,inspected:0,contactPages:0,descriptionPages:0,stoppedReason:roots.length?'Published profile email found; website research can continue separately.':'',candidates:[]};
         deriveRules(input,research,sources,[]);return validateResearch(research);
     }
-    const crawled = await crawlWebsiteRoutes(input, {
+    const crawled = await telemetry.span('website.crawl',()=>crawlWebsiteRoutes(input, {
         publicUrl, parsePage, ownedPage, contactMatchedPage, fetchPage: options.fetchPage || fetchPublicPage, now: researchedAt,
         maxPages: options.maxPages || MAX_PAGES, maxTimeMs: options.maxTimeMs || MAX_TOTAL_MS, maxRoutes: options.maxRoutes,
         previousResearch: options.previousResearch,
         renderPage:options.renderPage,
         rejectedHosts,
-    });
+        enoughEvidence:crawl=>input.profileIdentityConfirmed&&activityAge>=0&&activityAge<=30&&crawl.candidates.some(c=>
+            [...crawl.matchedHosts,...crawl.contactMatchedHosts].includes(hostOf(c.url))&&attributableCandidate(c,input)),
+    }));
     const pages = crawled.parsed;
     sources.push(...crawled.sources);
     research.pages = crawled.pages;

@@ -2,7 +2,6 @@ import type { z } from 'zod/v4';
 import { AppError } from './errors';
 import { createAgentRouterCompletion } from './agentrouter-client';
 import { setTimeout as delay } from 'node:timers/promises';
-import { responseTokenLimit } from './response-tokens';
 
 export type Completion = ((
   system: string,
@@ -10,7 +9,7 @@ export type Completion = ((
   signal: AbortSignal,
   maxTokens?: number,
 ) => Promise<string>) & { inputByteLimit?: number };
-export type ProviderConfig = { apiKey: string; baseUrl: string; model: string; timeoutMs: number; apiFormat?: 'chat_completions' | 'responses'; reasoningEffort?: 'none' | 'low' | 'medium' | 'high'; inputByteLimit?: number };
+export type ProviderConfig = { apiKey: string; baseUrl: string; model: string; timeoutMs: number; inputByteLimit?: number };
 
 /** Bound an optional multi-call stage without aborting the enclosing generation. */
 export function completionDeadline(complete: Completion, deadline: number): Completion {
@@ -76,7 +75,7 @@ export function createCompletion(config: ProviderConfig): Completion {
     try {
       let waited = 0;
       for (let attempt = 0; ; attempt++) {
-        response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/${config.apiFormat === 'responses' ? 'responses' : 'chat/completions'}`, {
+        response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
           method: 'POST',
           signal: combinedSignal,
           headers: {
@@ -87,14 +86,14 @@ export function createCompletion(config: ProviderConfig): Completion {
           body: JSON.stringify({
             model: config.model,
             stream: false,
-            ...(config.apiFormat === 'responses' ? {
-              instructions: system, input: [{ role: 'user', content: prompt }], max_output_tokens: responseTokenLimit(config, maxTokens), store: false,
-              ...(config.reasoningEffort ? { reasoning: { effort: config.reasoningEffort } } : {}),
-            } : { temperature: 0.55, max_tokens: maxTokens,
-              messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
-            }),
-            ...(config.apiFormat !== 'responses' && hostname === 'api.groq.com' && /^openai\/gpt-oss-(?:20|120)b$/.test(config.model)
+            temperature: 0.55,
+            max_tokens: maxTokens,
+            ...(hostname === 'api.groq.com' && /^openai\/gpt-oss-(?:20|120)b$/.test(config.model)
               ? { reasoning_effort: 'low' } : {}),
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: prompt },
+            ],
           }),
         });
         const retryAfter = response.headers.get('retry-after');
@@ -192,20 +191,11 @@ export function createCompletion(config: ProviderConfig): Completion {
         `The AI provider returned an error (${response.status}). Please retry in a moment.`,
       );
     }
-    let data: { choices?: { finish_reason?: string; message?: { content?: string } }[]; status?: string; output?: { type?: string; role?: string; content?: { type?: string; text?: string }[] }[] };
+    let data: { choices?: { finish_reason?: string; message?: { content?: string } }[] };
     try {
       data = (await response.json()) as typeof data;
     } catch {
       throw new AppError(502, 'The AI provider returned an unreadable response. Please retry.');
-    }
-    if (config.apiFormat === 'responses') {
-      if (data.status === 'incomplete') throw new AppError(502, 'The AI response was cut short. No partial draft was saved. Please try again.');
-      if (data.status !== 'completed') throw new AppError(502, 'The AI provider did not complete this response. Your saved work is unchanged.');
-      if (data.output?.some(item => /(?:function|tool)_call/.test(item.type || ''))) throw new AppError(502, 'The AI response requested an unsupported tool. No draft was saved.');
-      const text = (data.output || []).filter(item => item.type === 'message' && item.role === 'assistant')
-        .flatMap(item => (item.content || []).filter(part => part.type === 'output_text').map(part => part.text || '')).join('\n');
-      if (!text.trim()) throw new AppError(502, 'The AI provider returned an empty response. Please try again.');
-      return text;
     }
     const choice = data.choices?.[0];
     if (choice?.finish_reason === 'length')

@@ -1,4 +1,3 @@
-import type { FunnelFocus } from './funnel-focus';
 import { ESSENTIAL_MIN_LENGTH, OFFER_ESSENTIAL_LABELS, ONBOARDING_ESSENTIAL_FIELDS, legacyOfferName } from './offer-essentials';
 import { clientBriefReady, journeyFor, publishingReady, type OnboardingJourney } from './onboarding-journey';
 
@@ -234,7 +233,6 @@ export type AccessItem = {
     nonBlocking: boolean;
 };
 export type OnboardingData = {
-    funnelFocus?: FunnelFocus;
     journey?: OnboardingJourney;
     clientName: string;
     businessName: string;

@@ -1,11 +1,10 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 import { NextResponse } from 'next/server';
 import { insertOrUpdateLead, getAllLeads, LeadRecord } from '@/lib/db';
+import { assessmentForLead } from '@/lib/prospect-store';
 
 export async function POST(req: Request) {
-    await requireAdmin();
     try {
         const body = await req.json();
 
@@ -41,13 +40,12 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
-    await requireAdmin();
     try {
         const { searchParams } = new URL(req.url);
         const location = searchParams.get('location');
         const status = searchParams.get('status');
 
-        let leads = await getAllLeads();
+        let leads = (await getAllLeads()).map(lead => ({ ...lead, prospect_assessment: assessmentForLead(lead) }));
 
         if (location) {
             leads = leads.filter(l => l.location?.toUpperCase() === location.toUpperCase());

@@ -1,14 +1,10 @@
 import type { ProviderConfig } from './provider';
 import { AppError } from './errors';
 
-export function providerConfig(purpose: 'writing' | 'extraction' = 'writing'): ProviderConfig {
+export function providerConfig(): ProviderConfig {
   const inputByteLimit = process.env.COPY_STUDIO_INPUT_BYTES ? Number(process.env.COPY_STUDIO_INPUT_BYTES) : undefined;
   if (inputByteLimit !== undefined && (!Number.isInteger(inputByteLimit) || inputByteLimit < 8_000 || inputByteLimit > 200_000))
     throw new AppError(503, 'COPY_STUDIO_INPUT_BYTES must be between 8000 and 200000.');
-  const reasoningEffort = (purpose === 'extraction' ? process.env.COPY_STUDIO_EXTRACTION_REASONING_EFFORT : undefined)
-    || process.env.COPY_STUDIO_REASONING_EFFORT || undefined;
-  if (reasoningEffort !== undefined && reasoningEffort !== 'none' && reasoningEffort !== 'low' && reasoningEffort !== 'medium' && reasoningEffort !== 'high')
-    throw new AppError(503, 'COPY_STUDIO_REASONING_EFFORT must be none, low, medium or high.');
   const timeoutMs = Number(process.env.COPY_STUDIO_TIMEOUT_MS || 90000);
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 180000)
     throw new AppError(503, 'COPY_STUDIO_TIMEOUT_MS must be between 1000 and 180000.');
@@ -24,19 +20,11 @@ export function providerConfig(purpose: 'writing' | 'extraction' = 'writing'): P
   }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
     throw new AppError(503, 'COPY_STUDIO_BASE_URL must be an HTTP(S) endpoint.');
-  const explicitModel = process.env.COPY_STUDIO_MODEL || process.env.AGENTROUTER_MODEL;
-  const model = explicitModel || 'gpt-5.6-sol';
-  const agentRouter = url.hostname === 'agentrouter.org' || url.hostname.endsWith('.agentrouter.org');
-  const apiFormat = process.env.COPY_STUDIO_API_FORMAT || (agentRouter && !explicitModel ? 'responses' : 'chat_completions');
-  if (apiFormat !== 'chat_completions' && apiFormat !== 'responses')
-    throw new AppError(503, 'COPY_STUDIO_API_FORMAT must be chat_completions or responses.');
   return {
     apiKey: process.env.COPY_STUDIO_API_KEY || process.env.AGENTROUTER_API_KEY || '',
     baseUrl,
-    model,
+    model: process.env.COPY_STUDIO_MODEL || process.env.AGENTROUTER_MODEL || 'deepseek-v4-flash',
     timeoutMs,
-    apiFormat,
-    reasoningEffort: reasoningEffort || (agentRouter && apiFormat === 'responses' && /^gpt-(?:6\.1-sol|6-astra|5\.6-sol)$/.test(model) ? 'low' : undefined),
     inputByteLimit,
   };
 }

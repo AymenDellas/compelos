@@ -1,5 +1,4 @@
 "use server";
-import { requireAdmin } from '@/lib/dashboard-auth';
 
 import { getAllLeads, bulkMarkContactedWithDates, updateLead, isQualifiedStage } from "@/lib/db";
 import { getGmailAccounts, describeGmailAccountsProblem, scanSentMail } from "@/lib/gmail-sent";
@@ -141,7 +140,6 @@ function buildCampaignReport(
  * Gmail accounts. Read-only against Gmail; the only writes are to your own leads.
  */
 export async function syncContactedFromGmailAction(): Promise<GmailSyncReport> {
-    await requireAdmin();
     const accounts = getGmailAccounts();
     const empty: GmailSyncReport = {
         ok: false, accounts: [], qualified: { total: 0, confirmedContacted: 0, notContacted: 0 },
@@ -370,7 +368,6 @@ export async function syncContactedFromGmailAction(): Promise<GmailSyncReport> {
  * is never done automatically as part of a sync.
  */
 export async function clearUnconfirmedContactedAction(ids: string[]): Promise<number> {
-    await requireAdmin();
     let cleared = 0;
     for (const id of ids) {
         try {

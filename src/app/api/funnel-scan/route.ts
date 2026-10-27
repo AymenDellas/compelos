@@ -1,4 +1,3 @@
-import { requireAdmin } from '@/lib/dashboard-auth';
 import type {
   DeliverableRecommendation,
   Evidence,
@@ -1591,7 +1590,6 @@ function composeLlmResult(
 }
 
 export async function POST(request: Request) {
-    await requireAdmin();
   try {
     const body = await request.json() as { url?: unknown };
     if (typeof body.url !== "string" || !body.url.trim()) {

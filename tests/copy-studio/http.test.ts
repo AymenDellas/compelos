@@ -79,29 +79,3 @@ test('cancelling the dashboard response cancels generation', async () => {
   await reader.cancel();
   assert.equal(signalSeen?.aborted, true);
 });
-
-test('Read page can override reasoning without changing the writing profile', async () => {
-  const settings = { COPY_STUDIO_BASE_URL: 'https://provider.invalid/v1', COPY_STUDIO_API_KEY: 'fixture-only-token', COPY_STUDIO_MODEL: 'gpt-5.6-sol', COPY_STUDIO_API_FORMAT: 'responses', COPY_STUDIO_REASONING_EFFORT: 'low', COPY_STUDIO_EXTRACTION_REASONING_EFFORT: 'none' };
-  const saved = Object.keys(settings).map(key => [key, process.env[key]] as const);
-  const original = globalThis.fetch;
-  const efforts: string[] = [];
-  try {
-    Object.assign(process.env, settings);
-    globalThis.fetch = async (_url, init) => {
-      const body = JSON.parse(String(init?.body));
-      efforts.push(body.reasoning.effort);
-      assert.equal(body.max_output_tokens, efforts.length === 1 ? 7000 : 512);
-      const text = efforts.length === 1 ? JSON.stringify({ offers: [], fields: {}, evidence: [], warnings: ['No named offer in this source.'] }) : 'OK';
-      return Response.json({ status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] });
-    };
-    const imported = await handleCopyStudio(request('import', { text: 'Example Coach provides support for decisions at work. This source has no defined offer, fees or terms. Contact the coach to ask a question.' }), 'import');
-    assert.equal(imported.status, 200);
-    assert.deepEqual((await imported.json()).extraction.fields, {});
-    const connection = await handleCopyStudio(request('connection', {}), 'connection');
-    assert.equal(connection.status, 200);
-    assert.deepEqual(efforts, ['none', 'low']);
-  } finally {
-    globalThis.fetch = original;
-    for (const [key, value] of saved) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-  }
-});

@@ -2,6 +2,8 @@
 
 // Shared by the LinkedIn worker, server and browser. No network calls or CRM outcomes.
 const VERSION = 1;
+const QUALIFICATION_VERSION = 3;
+const {followersDecision,minFollowers}=require('./follower-policy.cjs');
 const RESEARCH_MAX_AGE_DAYS = 90;
 const ACTIVITY_MAX_AGE_DAYS = 30;
 const SEGMENTS = ['EXECUTIVE', 'CAREER', 'BUSINESS'];
@@ -73,9 +75,10 @@ function emptyResearch(input = {}, now = new Date().toISOString()) {
         version: VERSION, researchedAt: now, engine: 'rules', profileIdentityConfirmed: input.profileIdentityConfirmed === true,
         headline: normalText(input.headline).slice(0, 1000), about: normalText(input.about).slice(0, 5000),
         profileLocation: normalText(input.profileLocation).slice(0, 500),
+        targetLocationRequired: input.targetLocationRequired === true,
         latestPostText: normalText(input.latestPostText).slice(0, 2500), lastActivityAt: input.lastActivityAt || null,
         activityStatus: input.activityStatus==='Inactive'&&!input.lastActivityAt?'Unknown':['Active', 'Inactive', 'Unknown'].includes(input.activityStatus) ? input.activityStatus : 'Unknown',
-        activityEvidence:input.activityEvidence||null,
+        activityEvidence:input.activityEvidence||null,followers:input.followers||null,connections:input.connections||null,
         linkedinUrl: input.linkedinUrl || input.url || '', website: '', websiteStatus: 'NONE',
         segments: segmentsFromText(input.headline), segment: segmentsFromText(input.headline)[0] || 'UNKNOWN',
         facts: Object.fromEntries(FACT_KEYS.map(key => [key, emptyFact()])),
@@ -101,13 +104,17 @@ function validateResearch(value) {
     if (!Number.isFinite(Date.parse(value.researchedAt))) throw new Error('Research needs a valid date.');
     if (JSON.stringify(value).length > 1500000) throw new Error('Prospect research is too large.');
     const research = emptyResearch(value, value.researchedAt);
+    for(const key of ['followers','connections']){
+        const record=value[key];research[key]=record?{rawText:normalText(record.rawText).slice(0,200),count:Number.isSafeInteger(record.count)&&record.count>=0?record.count:null,
+            checkedAt:validDate(record.checkedAt)?record.checkedAt:research.researchedAt,...(key==='followers'?{threshold:Number.isSafeInteger(record.threshold)&&record.threshold>=0?record.threshold:minFollowers()}:{})}:null;
+    }
     research.linkedinUrl = typeof research.linkedinUrl === 'string' && validHttpUrl(research.linkedinUrl) ? research.linkedinUrl.slice(0, 2000) : '';
     research.lastActivityAt = validDate(value.lastActivityAt) ? value.lastActivityAt : null;
     if(!research.lastActivityAt)research.activityStatus='Unknown';
-    if(value.activityEvidence?.version===1){
+    if([1,2].includes(value.activityEvidence?.version)){
         const e=value.activityEvidence;
         const record=v=>v&&validDate(v.at)?{postUrn:normalText(v.postUrn).slice(0,200),authorUrn:normalText(v.authorUrn).slice(0,200),at:v.at,method:normalText(v.method).slice(0,40),association:normalText(v.association).slice(0,50),text:normalText(v.text).slice(0,2500)}:null;
-        research.activityEvidence={version:1,endpoint:normalText(e.endpoint).slice(0,100),profileUrn:normalText(e.profileUrn).slice(0,200),profileUrl:validHttpUrl(e.profileUrl)?e.profileUrl:'',checkedAt:validDate(e.checkedAt)?e.checkedAt:research.researchedAt,feedElements:Math.max(0,Number(e.feedElements)||0),unresolved:Math.max(0,Number(e.unresolved)||0),selected:record(e.selected),records:(Array.isArray(e.records)?e.records:[]).map(record).filter(Boolean).slice(0,10),reason:normalText(e.reason).slice(0,300)};
+        research.activityEvidence={version:e.version,endpoint:normalText(e.endpoint).slice(0,100),profileUrn:normalText(e.profileUrn).slice(0,200),profileUrl:validHttpUrl(e.profileUrl)?e.profileUrl:'',checkedAt:validDate(e.checkedAt)?e.checkedAt:research.researchedAt,feedElements:Math.max(0,Math.min(1000,Number(e.feedElements)||0)),unresolved:Math.max(0,Math.min(1000,Number(e.unresolved)||0)),...(e.version===2?{ignoredForeign:Math.max(0,Math.min(1000,Number(e.ignoredForeign)||0))}:{}),selected:record(e.selected),records:(Array.isArray(e.records)?e.records:[]).map(record).filter(Boolean).slice(0,10),reason:normalText(e.reason).slice(0,300)};
     }else research.activityEvidence=null;
     research.engine = ['rules', 'ai', 'manual'].includes(value.engine) ? value.engine : 'rules';
     research.website = typeof value.website === 'string' && validHttpUrl(value.website) ? value.website.slice(0, 2000) : '';
@@ -128,7 +135,8 @@ function validateResearch(value) {
         const c = value.crawl;
         research.crawl = { version: c.version, attributionVersion:[2,3].includes(c.attributionVersion)?c.attributionVersion:0, complete: c.complete === true, visited: urls(c.visited), pending: urls(c.pending), failed: urls(c.failed), roots: urls(c.roots), matchedHosts: (c.matchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
             contactMatchedHosts: (c.contactMatchedHosts || []).filter(host => /^[a-z\d.-]+$/i.test(host)).slice(0, 8),
-            ...(c.version === 2 ? { retryable: c.retryable === true, attempted: urls(c.attempted), maxRoutes: Math.max(1, Math.min(600, Number(c.maxRoutes) || 600)), storageLimited: c.storageLimited === true } : {}),
+            ...(c.version === 2 ? { retryable: c.retryable === true, attempted: urls(c.attempted), maxRoutes: Math.max(1, Math.min(600, Number(c.maxRoutes) || 600)), storageLimited: c.storageLimited === true,
+                firstStartedAt:Number.isFinite(Date.parse(c.firstStartedAt))?new Date(c.firstStartedAt).toISOString():null,maxTimeMs:Math.max(0,Number(c.maxTimeMs)||0),elapsedMs:Math.max(0,Number(c.elapsedMs)||0),budgetExhausted:c.budgetExhausted===true,evidenceSufficient:c.evidenceSufficient===true } : {}),
             discovered: Math.max(0, Number(c.discovered) || 0), inspected: Math.max(0, Number(c.inspected) || 0), contactPages: Math.max(0, Number(c.contactPages) || 0), descriptionPages: Math.max(0, Number(c.descriptionPages) || 0), stoppedReason: normalText(c.stoppedReason).slice(0, 500),
             candidates: (Array.isArray(c.candidates) ? c.candidates : []).slice(0, 150).filter(contact => contact && !isUnsafeContact(contact.address) && validHttpUrl(contact.url)).map(contact => ({ address: normalText(contact.address).toLowerCase(), url: contact.url.slice(0, 1000), explicit: contact.explicit === true, contactPage: contact.contactPage === true, businessContact: contact.businessContact === true,contactInvitation:contact.contactInvitation===true,sharedContact:contact.sharedContact===true,contactEvidenceVersion:contact.contactEvidenceVersion===1?1:0 })),
         };
@@ -221,19 +229,31 @@ function assessProspect(researchInput, context = {}) {
     const activity = activityAge !== null && activityAge >= 0 && activityAge <= ACTIVITY_MAX_AGE_DAYS ? 'RECENT'
         : activityAge !== null && activityAge > ACTIVITY_MAX_AGE_DAYS ? 'INACTIVE' : 'UNKNOWN';
     const attributableEmail = Boolean(email && !isUnsafeContact(email) && ownerConfirmed);
+    // Compatibility applies only when a reader explicitly displays a stored
+    // pre-v2 assessment. Fresh work and explicit rechecks never set this flag.
+    const legacyUnchecked=context.legacyFollowersUnchecked===true&&!research.followers;
+    const followerGate=legacyUnchecked?{status:'CONTINUE',reason:null,threshold:context.minFollowers??research.followers?.threshold??minFollowers()}:followersDecision(research.followers,context.minFollowers??research.followers?.threshold??minFollowers());
+    const location=research.targetLocationRequired?require('./discovery-location-evidence.cjs').parsePersonLocation(research.profileLocation):null;
+    const locationGate=!location?{status:'CONTINUE',reason:null,country:null}:research.profileIdentityConfirmed&&location.status==='OUTSIDE_TARGET'
+        ?{status:'REJECTED',reason:'LOCATION_OUTSIDE_TARGET',country:null}:research.profileIdentityConfirmed&&location.status==='CONFIRMED'
+        ?{status:'CONTINUE',reason:null,country:location.country}:{status:'REVIEW',reason:'LOCATION_UNCONFIRMED',country:null};
     if (!research.profileIdentityConfirmed) blockers.push('LinkedIn profile identity could not be confirmed; retry the scrape.');
     if (activity === 'INACTIVE') blockers.push('No LinkedIn activity within the last 30 days.');
     else if (activity === 'UNKNOWN') blockers.push('LinkedIn activity could not be confirmed; retry the activity check.');
     if (!attributableEmail) blockers.push(!email ? 'No attributable email found.' : 'Email ownership needs confirmation.');
-    const qualified = research.profileIdentityConfirmed && activity === 'RECENT' && attributableEmail;
+    const qualified = research.profileIdentityConfirmed && activity === 'RECENT' && attributableEmail && followerGate.status==='CONTINUE'&&locationGate.status==='CONTINUE';
     const incompleteEmail = activity !== 'INACTIVE' && !attributableEmail && research.crawl?.complete === false;
-    const needsAttention = incompleteEmail && research.crawl.retryable === false;
-    const needsRetry = !research.profileIdentityConfirmed || activity === 'UNKNOWN' || (incompleteEmail && !needsAttention);
-    const qualification = { policy: 'EMAIL_ACTIVITY_V1', qualified, activity, activityAgeDays: activityAge === null ? null : Math.floor(activityAge), attributableEmail, needsRetry, needsAttention };
-    const nextAction = qualified ? (context.emailProven ? 'Qualified: email found and recent activity confirmed.' : 'Qualified: email found and recent activity confirmed. Verify the email before sending.')
+    const needsAttention = !research.profileIdentityConfirmed||followerGate.status==='REVIEW'||locationGate.status==='REVIEW'||incompleteEmail && research.crawl.retryable === false;
+    const needsRetry = followerGate.status==='CONTINUE'&&locationGate.status==='CONTINUE'&&(!research.profileIdentityConfirmed || activity === 'UNKNOWN' || (incompleteEmail && !needsAttention));
+    if(followerGate.reason)blockers.unshift(followerGate.reason);
+    if(locationGate.reason)blockers.unshift(locationGate.reason);
+    const qualification = { policy: 'EMAIL_ACTIVITY_FOLLOWERS_LOCATION_V3', qualified, activity, activityAgeDays: activityAge === null ? null : Math.floor(activityAge), attributableEmail, needsRetry, needsAttention,
+        location:locationGate.status,locationReason:locationGate.reason,locationCountry:locationGate.country,
+        followers:followerGate.status,followersReason:followerGate.reason,followersThreshold:followerGate.threshold };
+    const nextAction = !research.profileIdentityConfirmed?'Review profile identity before applying follower or location evidence.':locationGate.status==='REJECTED'?'Not qualified: LOCATION_OUTSIDE_TARGET. Profile location: '+research.profileLocation+'.':followerGate.status==='REVIEW'?'Review the saved profile: '+followerGate.reason+'.':followerGate.status==='REJECTED'?'Not qualified: FOLLOWERS_BELOW_MIN. '+(research.followers?.rawText||research.followers?.count)+'; must be more than '+followerGate.threshold+'.':locationGate.status==='REVIEW'?'Review the saved profile location before qualification.':qualified ? (context.emailProven ? 'Qualified: email found and recent activity confirmed.' : 'Qualified: email found and recent activity confirmed. Verify the email before sending.')
         : needsAttention ? `Website needs attention: ${research.crawl.stoppedReason || 'Website could not be read; automatic retries stopped.'}`
         : needsRetry ? `Research incomplete: ${blockers[0] || 'continue crawling the remaining website routes.'}` : `Not qualified: ${blockers.join(' ')}`;
-    return { version: VERSION, researchedAt: research.researchedAt, tier, segment: research.segment, segments: research.segments,
+    return { version: legacyUnchecked?1:QUALIFICATION_VERSION, researchedAt: research.researchedAt, tier, segment: research.segment, segments: research.segments,
         score, businessFit: fit, qualification, readiness: qualified ? 'READY_TO_APPROACH' : activity === 'INACTIVE' ? 'EARLY' : 'NEEDS_REVIEW',
         engagementReady: tier === 'A' && observed('economics') && observed('capacity') && observed('marketingControl') && observed('demandSignals'),
         contact: { channel: contactability, ownership, email }, blockers, unknowns, cautions, nextAction, research, baseResearch };
@@ -242,7 +262,9 @@ function assessProspect(researchInput, context = {}) {
 function isContactNow(assessment) {
     const research = assessment?.research;
     const activityAge = research?.lastActivityAt ? (Date.now() - Date.parse(research.lastActivityAt)) / 86400000 : Infinity;
-    return Boolean(assessment?.version === VERSION && research?.profileIdentityConfirmed && activityAge >= 0 && activityAge <= ACTIVITY_MAX_AGE_DAYS);
+    const followersAllowed=assessment?.version===1||followersDecision(research?.followers,assessment?.qualification?.followersThreshold??research?.followers?.threshold??minFollowers()).status==='CONTINUE';
+    const locationAllowed=!research?.targetLocationRequired||require('./discovery-location-evidence.cjs').parsePersonLocation(research.profileLocation).status==='CONFIRMED';
+    return Boolean(Number.isInteger(assessment?.version)&&assessment.version>=VERSION&&assessment.version<=QUALIFICATION_VERSION && followersAllowed && locationAllowed && research?.profileIdentityConfirmed && activityAge >= 0 && activityAge <= ACTIVITY_MAX_AGE_DAYS);
 }
 function hasAttributableEmail(assessment) {
     return Boolean(assessment && isContactNow(assessment) && assessment.contact?.email && !isUnsafeContact(assessment.contact.email)
@@ -259,6 +281,14 @@ function hasQualifiedEmail(lead) {
         && (!lead.prospect_assessment || (hasAttributableEmail(lead.prospect_assessment) && lead.prospect_assessment.contact.email === email)));
 }
 function pipelineForAssessment(assessment) {
+    if(assessment?.version>=2){
+        if(!assessment.research?.profileIdentityConfirmed)return 'REVIEW';
+        if(assessment.qualification?.location==='REJECTED')return 'NOT_QUALIFIED';
+        const gate=followersDecision(assessment.research?.followers,assessment.qualification?.followersThreshold??assessment.research?.followers?.threshold??minFollowers());
+        if(gate.status==='REVIEW')return 'REVIEW';
+        if(gate.status==='REJECTED')return 'NOT_QUALIFIED';
+        if(assessment.qualification?.location==='REVIEW'||!assessment.research?.profileIdentityConfirmed||assessment.qualification?.activity==='UNKNOWN'||assessment.qualification?.needsAttention||assessment.qualification?.needsRetry)return 'REVIEW';
+    }
     return hasAttributableEmail(assessment) ? 'QUALIFIED' : 'NOT_QUALIFIED';
 }
 function extractMatchingProfile(response, slug) {
@@ -303,6 +333,6 @@ function extractProfileContactInfo(response, slug) {
         && (Array.isArray(item.websites) || item.emailAddress)) || {};
 }
 
-module.exports = { VERSION, RESEARCH_MAX_AGE_DAYS, SEGMENTS, SEGMENT_LABELS, DEFAULT_TITLES, FACT_KEYS, FACT_LABELS, STATES, STATE_LABELS, TIER_LABELS, PLATFORM_DOMAINS, FREE_MAIL,
+module.exports = { VERSION, QUALIFICATION_VERSION, RESEARCH_MAX_AGE_DAYS, SEGMENTS, SEGMENT_LABELS, DEFAULT_TITLES, FACT_KEYS, FACT_LABELS, STATES, STATE_LABELS, TIER_LABELS, PLATFORM_DOMAINS, FREE_MAIL,
     normalText, hostOf, onDomain, isPlatformWebsite, isUnsafeContact, segmentsFromText, emptyFact, makeFact, emptyResearch,
     groundedFact, validateResearch, validateReview, applyReview, assessProspect, isContactNow, hasAttributableEmail, isQualifiedRecord, hasQualifiedEmail, pipelineForAssessment, extractMatchingProfile, extractProfileLocation, extractProfileContactInfo };
