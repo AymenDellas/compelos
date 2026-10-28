@@ -81,7 +81,7 @@ class Response{
 }
 class ControlledPage extends EventEmitter{
  constructor(browser,root,client,targetId,frame){
-  super();this._browser=browser;this._root=root;this._clientSession=client;this._targetId=targetId;this._frameId=frame.id;this._url=frame.url;this._closed=false;this._disposed=false;this._global=null;this._generation=0;this._defaultTimeout=30000;this._interception=false;this._requests=new Map();this._pausedRequests=new Map();this._documents=new Map();this._handles=new Set();this._fault=null;this._lifecycleLog=[];
+  super();this._browser=browser;this._root=root;this._clientSession=client;this._targetId=targetId;this._frameId=frame.id;this._url=frame.url;this._closed=false;this._disposed=false;this._global=null;this._generation=0;this._defaultTimeout=30000;this._interception=false;this._requests=new Map();this._recentRequests=new Map();this._documents=new Map();this._handles=new Set();this._fault=null;this._lifecycleLog=[];
   this._frame={_id:frame.id,url:()=>this._url};
   this._target={_targetId:targetId,type:()=> 'page',url:()=>this._url,page:async()=>this,createCDPSession:()=>root.connection().createSession({targetId})};
   this._disconnect=()=>this._didClose();browser.on('disconnected',this._disconnect);
@@ -99,21 +99,22 @@ class ControlledPage extends EventEmitter{
  }
  _send(method,params={},options){if(this._fault)return Promise.reject(this._fault);if(this._disposed||this._closed)return Promise.reject(Error('Target closed'));return this._clientSession.send(method,params,options);}
  _event(kind){this._lifecycleLog.push(kind);if(this._lifecycleLog.length>20)this._lifecycleLog.shift();}
- _bounded(){if(this._requests.size>1024||this._pausedRequests.size>1024){this._fault=Error('Too many concurrent page requests');this._requests.clear();this._pausedRequests.clear();this.emit('controllererror',this._fault);return false;}return true;}
+ _bounded(){if(this._requests.size>1024){this._fault=Error('Too many concurrent page requests');this._requests.clear();this._recentRequests.clear();this.emit('controllererror',this._fault);return false;}return true;}
  _emitRequest(request){if(!request.emitted){request.emitted=true;this.emit('request',request);}}
  _request(e){
   if(this._fault)return;
-  let previous=this._requests.get(e.requestId);
+  // Fetch and Network are separate event streams. Retain a bounded recent tail
+  // so delayed redirect metadata still updates the observed response object.
+  let previous=this._requests.get(e.requestId)||this._recentRequests.get(e.requestId);
   if(e.redirectResponse&&previous){
    const old=previous._provisional?previous._previous:previous;
    if(old){this.emit('response',new Response(this,old,e.redirectResponse));this.emit('requestfinished',old);}
    if(previous._provisional&&previous.url()===e.request.url){previous.redirects=old?[...old.redirects,old].slice(-8):[];}
    else{const next=new Request(this,e.requestId,e);next.redirects=old?[...old.redirects,old].slice(-8):[];previous=next;}
   }
-  const request=previous||new Request(this,e.requestId,e);request.event=e;this._requests.set(e.requestId,request);
+  const request=previous||new Request(this,e.requestId,e);request.event=e;if(!request._finished)this._requests.set(e.requestId,request);
   request._provisional=false;request._previous=null;
   if(!this._bounded())return;
-  const paused=this._pausedRequests.get(e.requestId);if(paused&&paused.request.url===e.request.url){request.interceptId=paused.requestId;this._pausedRequests.delete(e.requestId);}
   if(!this._interception||request.interceptId)this._emitRequest(request);
  }
  _paused(e){
@@ -131,10 +132,11 @@ class ControlledPage extends EventEmitter{
   if(request.isNavigationRequest()&&request.frame()===this._frame){this._documents.set(e.loaderId,response);if(this._documents.size>16)this._documents.delete(this._documents.keys().next().value);}
   this.emit('response',response);
  }
- _finished(e,failed=false){const request=this._requests.get(e.requestId);if(!request)return;if(failed){request.error={errorText:e.errorText||'REQUEST_FAILED'};if(request.isNavigationRequest()&&request.frame()===this._frame)this.emit('_navigation',{kind:'failed',error:Error(request.error.errorText)});}this.emit(failed?'requestfailed':'requestfinished',request);this._requests.delete(e.requestId);this._pausedRequests.delete(e.requestId);}
+ _finished(e,failed=false){const request=this._requests.get(e.requestId);if(!request)return;if(failed){request.error={errorText:e.errorText||'REQUEST_FAILED'};if(request.isNavigationRequest()&&request.frame()===this._frame)this.emit('_navigation',{kind:'failed',error:Error(request.error.errorText)});}request._finished=true;this.emit(failed?'requestfailed':'requestfinished',request);this._requests.delete(e.requestId);this._recentRequests.set(e.requestId,request);if(this._recentRequests.size>64)this._recentRequests.delete(this._recentRequests.keys().next().value);}
  _didClose(){if(this._closed)return;this._closed=true;this._global=null;this._handles.clear();this.emit('close');}
  url(){return this._url;}
  isClosed(){return this._closed;}
+ isUsable(){return !this._closed&&!this._disposed&&!this._fault;}
  target(){return this._target;}
  mainFrame(){return this._frame;}
  workers(){return [];}
@@ -209,7 +211,7 @@ class ControlledPage extends EventEmitter{
  async title(){return this.evaluate(()=>document.title);}
  async bringToFront(){await this._send('Page.bringToFront');}
  async close(){if(this._closed)return;await this._root.send('Target.closeTarget',{targetId:this._targetId});this._didClose();await this.dispose();}
- async dispose(){if(this._disposed)return;this._browser.off('disconnected',this._disconnect);await this._clientSession.send('Runtime.releaseObjectGroup',{objectGroup:'compelos-page'}).catch(()=>{});this._disposed=true;await this._clientSession.detach().catch(()=>{});await this._root.detach().catch(()=>{});this._requests.clear();this._pausedRequests.clear();this._documents.clear();this._handles.clear();this.removeAllListeners();}
+ async dispose(){if(this._disposed)return;this._browser.off('disconnected',this._disconnect);await this._clientSession.send('Runtime.releaseObjectGroup',{objectGroup:'compelos-page'}).catch(()=>{});this._disposed=true;await this._clientSession.detach().catch(()=>{});await this._root.detach().catch(()=>{});this._requests.clear();this._recentRequests.clear();this._documents.clear();this._handles.clear();this.removeAllListeners();}
 }
 async function existingTarget(browser,targetId){
  const session=await browser.target().createCDPSession();try{const {targetInfos}=await session.send('Target.getTargets');return targetInfos.find(t=>t.targetId===targetId&&t.type==='page')||null;}finally{await session.detach();}

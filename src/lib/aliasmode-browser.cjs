@@ -3,19 +3,20 @@ const {profileId,providerError}=require('./aliasmode-client.cjs');
 const ownership=new Map();
 function targetFilter(target){
  // Puppeteer 24.38.0 exposes dedicated CDP workers as public type "other".
- // Read its pinned target info so only worker targets are excluded.
+ // Read its pinned target info to exclude automatic page/worker attachment.
  const type=target._getTargetInfo?.()?.type||target.type();
- return !['worker','service_worker','shared_worker'].includes(type);
+ return !['page','tab','background_page','worker','service_worker','shared_worker'].includes(type);
 }
-// Keep Puppeteer's page Runtime.enable: execution-context tracking requires it.
-// Filter worker attachment instead; do not patch CDP commands or page globals.
-function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('puppeteer'),onDisconnect=()=>{},onStage=()=>{}}){
+// Native Puppeteer Pages require Runtime.enable for their context tracking.
+// Leave that library intact. Account tabs instead use explicit manual contexts
+// in aliasmode-page.cjs, without automatic page/worker attachment or spoofing.
+function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('puppeteer'),pageController=require('./aliasmode-page.cjs'),onDisconnect=()=>{},onStage=()=>{}}){
  const id=profileId(account.aliasmode_profile_id),store=provider.store,api=provider.client;
  let entry=null,opening=null,openingMode=null,closing=null,cancelled=false;
  const assertOwner=()=>store.assertOwner(pool,account,owner);
- const isOpen=()=>!!entry?.browser?.isConnected()&&!entry.page?.isClosed();
+ const isOpen=()=>!!entry?.browser?.isConnected()&&!entry.page?.isClosed()&&entry.page?.isUsable?.()!==false;
  async function persist(){if(entry)await store.saveSession(pool,account,owner,{managed:entry.managed,headless:entry.headless,pid:entry.pid,targetId:entry.targetId});}
- async function detach(release=true){if(entry){entry.expected=true;if(entry.listener)entry.browser?.off?.('disconnected',entry.listener);try{await entry.browser?.disconnect();}catch{}entry=null;}if(release&&ownership.get(id)===owner)ownership.delete(id);}
+ async function detach(release=true){if(entry){entry.expected=true;if(entry.listener)entry.browser?.off?.('disconnected',entry.listener);try{await entry.page?.dispose?.();}catch{}try{await entry.browser?.disconnect();}catch{}entry=null;}if(release&&ownership.get(id)===owner)ownership.delete(id);}
  async function stopProfile(force=false){
   await assertOwner();if(!force&&!entry?.managed){await detach();await store.finishSession(pool,account,owner);return;}
   // The lease/binding fence is required even when Chrome/CDP is disconnected.
@@ -54,9 +55,9 @@ function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('
      // A saved managed flag alone cannot authorize closing a replacement human
      // browser. Verify both its live PID and our recorded worker target first.
      browser=await puppeteer.connect({browserWSEndpoint:state.endpoint,defaultViewport:null,protocolTimeout:30000,targetFilter});await check();
-     const pid=await resolvePid(browser),target=browser.targets().find(t=>t.type()==='page'&&t._targetId===previous.target_id);
+     const pid=await resolvePid(browser),target=await pageController.existingTarget(browser,previous.target_id);
      if(pid!==previous.pid||!target)throw modeConflict();
-     entry={browser,page:await target.page(),pid,managed:true,headless:state.headless,targetId:previous.target_id,expected:true};
+     entry={browser,page:await pageController.openPage(browser,{targetId:target.targetId}),pid,managed:true,headless:state.headless,targetId:previous.target_id,expected:true};
      await stopProfile(false);ownership.set(id,owner);browser=null;previous=null;state={active:false};
     }
     await check();if(!state.active){onStage('PROFILE_OPENING',headless?'Opening the saved AliasMode profile headlessly.':'Opening the saved AliasMode profile visibly for manual review.');
@@ -77,8 +78,8 @@ function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('
     const pid=await resolvePid(browser);await check();
     // Reuse only the recorded worker target. Never close or adopt arbitrary
     // restored tabs, and never create an incognito context without its cookies.
-    const target=previous?.target_id?browser.targets().find(t=>t.type()==='page'&&t._targetId===previous.target_id):null;
-    const page=target?await target.page():(createdPage=await browser.newPage());await check();
+    const target=previous?.target_id?await pageController.existingTarget(browser,previous.target_id):null;
+    const page=await pageController.openPage(browser,{targetId:target?.targetId});if(!target)createdPage=page;await check();
     const managed=started||previous?.managed===true&&previous.pid===pid&&!!target;
     entry={browser,page,pid,managed,headless:state.headless,targetId:page.target()._targetId,expected:false};
     entry.listener=()=>{if(entry?.browser===browser&&!entry.expected)onDisconnect(providerError('ALIASMODE_CDP_DISCONNECTED','AliasMode browser connection closed. The same profile will be reconciled; checkpoints are retained.'));};
@@ -97,7 +98,7 @@ function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('
  }
  async function disconnect(){cancelled=true;if(opening)await opening.catch(()=>{});await detach();}
  function close(){if(closing)return closing;cancelled=true;closing=(async()=>{if(opening)await opening.catch(()=>{});await detach();})();const task=closing;task.finally(()=>{if(closing===task)closing=null;}).catch(()=>{});return task;}
- return {provider:'ALIASMODE',open,close,disconnect,isOpen,isHeadless:()=>entry?.headless??null,pid:()=>entry?.pid||null,
+ return {provider:'ALIASMODE',controlMethod:require('./browser-control-version.cjs'),open,close,disconnect,isOpen,isHeadless:()=>entry?.headless??null,pid:()=>entry?.pid||null,
   get:()=>isOpen()?{browser:entry.browser,page:entry.page}:null,
   heartbeat:()=>{},recycle:()=>stopProfile(false),stop:()=>stopProfile(true),
   adopt:async()=>{await assertOwner();if(!entry)throw providerError('ALIASMODE_CDP_DISCONNECTED','The AliasMode session is disconnected.');entry.managed=true;await persist();},

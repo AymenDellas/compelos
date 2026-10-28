@@ -16,6 +16,14 @@ test('incomplete diagnostics, stale binding evidence and fingerprint drift block
  a.session_evidence.drift={before:'one',after:'two'};assert.equal(p.lifecycle(a,{now}).state,'HOLD');
  a.attention_reason='Exact saved LinkedIn notice';assert.equal(p.lifecycle(a,{now}).reason,a.attention_reason);
 });
+
+test('reports from the previous controller cannot authorize the new controller or erase an account hold',()=>{
+ const a=ready();a.processing_enabled=false;
+ const old=require('node:crypto').createHash('sha256').update(JSON.stringify([a.aliasmode_profile_id,a.binding_revision,a.session_revision,a.engine,a.launch_mode,a.proxy_id])).digest('hex');
+ assert.notEqual(old,p.evidenceKey(a));a.session_evidence.gate.key=old;
+ assert.equal(p.lifecycle(a,{now}).state,'PROVISION');assert.equal(a.processing_enabled,false);
+ a.attention_reason='Exact existing 401 hold';assert.equal(p.lifecycle(a,{now}).state,'HOLD');assert.equal(p.lifecycle(a,{now}).reason,'Exact existing 401 hold');
+});
 test('warmup requires observed distinct local days and elapsed time; ramp never exceeds saved account ceiling',()=>{
  const a=ready();a.session_evidence.warmupDays=['2026-10-23','2026-10-24','2026-10-25','2026-10-26'];a.session_evidence.rampStartedAt=new Date(now).toISOString();
  assert.equal(p.lifecycle(a,{now}).limit,15);assert.equal(p.lifecycle(a,{now:now+7*86400000}).limit,30);assert.equal(p.lifecycle(a,{now:now+14*86400000}).limit,60);assert.equal(p.lifecycle(a,{now:now+21*86400000}).limit,100);

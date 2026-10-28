@@ -32,3 +32,21 @@ The third isolated trial compared the previous control with the explicit-context
 Focused evidence is stored privately in `data/engine-v2/control-transport-v3/comparison-423c248c-fdd1-460a-b8a9-5d279093f66b.json`, with PostgreSQL benchmark `control-transport-v3-40130917-e567-4379-83a7-550bd3ec488d`. Its endpoint-specific acceptance passed. The generic seven-site comparator correctly remains incomplete for this one-site experiment. This result is not a full detector battery, authenticated LinkedIn validation or restriction-cause finding.
 
 Before behavior changes, 50 decided CRM records and their stored reasons/evidence were frozen under ignored `data/engine-v2/control-transport-20261028/`; candidate-phase replay has zero decision/evidence changes and zero errors, with account controls and the complete CRM digest unchanged. A fresh integration snapshot was also frozen under ignored `data/engine-v2/control-integration-20261029/` as PostgreSQL manifest `session-control-20261029-b2d35d3f-db5b-462a-b9a6-ad889dc8da31`.
+
+## Production integration
+
+Both AliasMode connections apply the same target filter. Only the saved, owner-fenced target ID can be restored; otherwise the controller creates its own tab. PID/mode checks, human tabs, profile sign-in and confirmed provider stop remain protected. Controller failures invalidate that page for reuse and use account-local connection recovery. Late redirect metadata reconciles against a bounded 64-request completion history rather than losing an observed response after loading finishes.
+
+The evidence key includes `CDP_EXPLICIT_CONTEXT_V1`. Reports from the previous controller cannot authorize this one. This invalidates admission without rewriting saved evidence, clearing a hold, resetting warmup history or starting an account. Each configured profile needs a current check after its proxy/mode/identity are configured.
+
+Native-header and SPA fixtures now exercise the actual explicit controller. Disposable browser fixtures retain saved-session and three-browser isolation assertions using their synthetic cookie stores; the production controller adds no cookie-reading/export API. The existing Voyager fixture still performs its six declared reads on one feed document with unchanged member/follower/location ordering.
+
+Run the repeatable anonymous comparison separately from tests/builds:
+
+```powershell
+node scripts/engine-context-comparison.cjs --run
+```
+
+It creates one new blank AliasMode Chromium profile, runs the previous Page controller and the production controller in the same visible mode, and uses the unchanged detector/parser/verdict code. Acceptance requires measured main/worker/isBot signals to change from true to false, unchanged other DeviceAndBrowserInfo flags/direct checks/browser identity/version, and a completed passing seven-endpoint candidate battery. Original account controls and the profile roster must remain unchanged; the temporary profile must be confirmed stopped/deleted. Partial runs are retained in PostgreSQL as `DIAGNOSTIC_PARTIAL`, never reported as passes.
+
+The two initial timed-out prototypes are additionally retained under PostgreSQL IDs `control-transport-partial-3563a3e7-6eef-49d8-bdbd-1941e0ee2d96` and `control-transport-partial-455bf042-6d6f-4faf-8bf3-9bf60c5a71c0`. Both preserve their timeout outcomes, unchanged controls and confirmed temporary-profile cleanup.

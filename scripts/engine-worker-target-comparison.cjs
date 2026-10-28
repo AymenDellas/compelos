@@ -36,13 +36,29 @@ function compare(before,after){
   ja3Observations:[before,after].map(r=>r?.sites?.find(s=>s.kind==='tls')?.tls||null),
   acceptance:completed&&worker.before===true&&worker.after===false&&differences.length===0};
 }
-async function main(){
+function compareContexts(before,after){
+ const original=compare(before,after),device=run=>run?.sites?.find(s=>s.kind==='device'),a=device(before),b=device(after),left=a?.external?.flags||{},right=b?.external?.flags||{};
+ const expected=['isAutomatedWithCDP','isAutomatedWithCDPInWebWorker','isBot'];
+ const keys=Object.keys(left).filter(k=>!expected.includes(k)).sort(),next=Object.keys(right).filter(k=>!expected.includes(k)).sort();
+ const otherFlagsUnchanged=keys.length>0&&JSON.stringify(keys)===JSON.stringify(next)&&keys.every(k=>typeof left[k]==='boolean'&&left[k]===right[k]);
+ const identityFields=['origin','userAgent','platform','chrome','plugins','screen','timezone','locale','hardwareConcurrency','deviceMemory','webglVendor','webglRenderer'];
+ const identity=site=>Object.fromEntries(identityFields.map(k=>[k,site?.probe?.[k]]));
+ const browserIdentityUnchanged=!!a?.probe&&!!b?.probe&&JSON.stringify(identity(a))===JSON.stringify(identity(b));
+ const browserVersionUnchanged=typeof before?.browserVersion==='string'&&before.browserVersion.length>0&&before.browserVersion===after?.browserVersion;
+ const signalsCleared=expected.every(k=>left[k]===true&&right[k]===false);
+ const candidateDevicePass=b?.external?.verdict==='PASS'&&Object.keys(right).length>=expected.length&&Object.values(right).every(v=>v===false);
+ const candidateBatteryPass=after?.verdict==='PASS'&&after?.sites?.length===7&&after.sites.every(s=>s.verdict==='PASS')&&!after.error;
+ return {...original,expectedSignalChanges:expected.map(name=>({name,before:left[name]??null,after:right[name]??null})),otherDeviceFlagsUnchanged:otherFlagsUnchanged,otherDeviceFlagCount:keys.length,browserIdentityUnchanged,browserVersionUnchanged,signalsCleared,candidateDevicePass,candidateBatteryPass,
+  acceptance:original.completed&&signalsCleared&&otherFlagsUnchanged&&browserIdentityUnchanged&&browserVersionUnchanged&&original.deviceDirectChecksUnchanged&&candidateDevicePass&&candidateBatteryPass};
+}
+async function main({variant='worker'}={}){
+ if(!['worker','contexts'].includes(variant))throw Error('Unsupported comparison scope.');
  if(process.env.VERCEL||process.argv.slice(2).join(' ')!=='--run')throw Error('Run locally with --run for one NEW BLANK profile only.');
  const support=verifySupport();require('./test-env.cjs');
  const {Pool}=require('pg'),production=new Pool({connectionString:process.env.DATABASE_URL,max:1,connectionTimeoutMillis:10000,ssl:{rejectUnauthorized:false}});
  const core=require('../src/lib/linkedin-workers.cjs'),store=require('../src/lib/aliasmode-store.cjs'),checks=require('../src/lib/stealth-self-test.cjs'),helper=require('../src/lib/aliasmode-cli.cjs');
- const dir=path.resolve(__dirname,'../data/engine-v2/worker-target-filter');fs.mkdirSync(dir,{recursive:true});
- const file=path.join(dir,'comparison-'+randomUUID()+'.json'),report={at:new Date().toISOString(),version:checks.VERSION,support,scope:'One new blank AliasMode Chromium profile; same headful mode; production adapter; unfiltered baseline followed by worker-filtered connection; no LinkedIn navigation/authentication',runs:[],cleanup:[]};
+ const dir=path.resolve(__dirname,variant==='contexts'?'../data/engine-v2/context-comparison':'../data/engine-v2/worker-target-filter');fs.mkdirSync(dir,{recursive:true});
+ const file=path.join(dir,'comparison-'+randomUUID()+'.json'),report={at:new Date().toISOString(),version:checks.VERSION,support,scope:variant==='contexts'?'One new blank AliasMode Chromium profile; same headful mode; legacy Page control then production explicit-context controller; unchanged detector assessments; no LinkedIn navigation/authentication':'One new blank AliasMode Chromium profile; same headful mode; production adapter; unfiltered baseline followed by worker-filtered connection; no LinkedIn navigation/authentication',variant,resultTimeoutMs:variant==='contexts'?10000:8000,runs:[],cleanup:[]};
  const save=()=>{fs.writeFileSync(file,JSON.stringify(report,null,2));fs.writeFileSync(path.join(dir,'comparison-latest.json'),JSON.stringify(report,null,2));};
  const accounts=async()=>createHash('sha256').update(JSON.stringify((await production.query('SELECT id,processing_enabled,attention_reason,login_requested_at,logout_requested_at,close_requested_at,session_evidence FROM compel_linkedin_accounts WHERE NOT archived ORDER BY id')).rows)).digest('hex');
  let api,db,created,accountId,owner,browser,heartbeat,heartbeatError,beforeProfiles,beforeAccounts;
@@ -62,14 +78,15 @@ async function main(){
    // The control strips only the requested option; every other adapter option,
    // engine, mode, profile and unchanged detector assessment stays identical.
    const puppeteer=filtered?require('puppeteer'):{connect:options=>{const {targetFilter:ignored,...rest}=options;void ignored;return require('puppeteer').connect(rest);}};
-   browser=require('../src/lib/aliasmode-browser.cjs').createAliasModeBrowser({account,owner,pool:db.pool,provider:{client:api,store},puppeteer});
-   let value={filtered,mode:'headful'};
+   const legacyPage=variant==='contexts'&&!filtered?{existingTarget:async(b,id)=>{const t=b.targets().find(t=>t.type()==='page'&&t._targetId===id);return t?{targetId:t._targetId}:null;},openPage:async(b,{targetId}={})=>targetId?b.targets().find(t=>t._targetId===targetId).page():b.newPage()}:undefined;
+   browser=require('../src/lib/aliasmode-browser.cjs').createAliasModeBrowser({account,owner,pool:db.pool,provider:{client:api,store},puppeteer,...(legacyPage?{pageController:legacyPage}:{})});
+   let value={filtered,mode:'headful',controlMethod:legacyPage?'PUPPETEER_PAGE':browser.controlMethod};
    try{
     await assertActive();const surface=await browser.open({headless:false});let requests=0,linkedinBlocked=0;
     await surface.page.setRequestInterception(true);surface.page.on('request',r=>{requests++;let hostname='';try{hostname=new URL(r.url()).hostname;}catch{}
      if(/(^|\.)(?:linkedin\.com|licdn\.com)$/.test(hostname)){linkedinBlocked++;forbiddenNavigation||=r.isNavigationRequest()&&r.frame()===surface.page.mainFrame();void r.abort().catch(()=>{});}else void r.continue().catch(()=>{});
     });
-    value={...value,browserVersion:await surface.browser.version(),...await checks.run(surface.page,{assertActive}),requests,linkedinBlocked};
+    value={...value,browserVersion:await surface.browser.version(),...await checks.run(surface.page,{assertActive,resultTimeoutMs:report.resultTimeoutMs}),requests,linkedinBlocked};
    }catch(error){value={...value,error:error.code||error.name,message:error.failure?.reason||'Diagnostic failed; inspect bounded local evidence.'};}
    finally{await browser.recycle();await browser.close();browser=null;}
    report.runs.push(value);save();console.log(JSON.stringify({filtered,verdict:value.verdict,counts:value.counts,workerFlag:value.sites?.find(s=>s.kind==='device')?.external?.flags?.[WORKER_FLAG],error:value.error}));
@@ -88,10 +105,11 @@ async function main(){
    if(accountId&&owner)await core.releaseSession(db.pool,accountId,owner,{status:'offline',runtimeVersion:'SESSION_V2'});
    if(beforeAccounts)report.accountsUnchanged=beforeAccounts===await accounts();
    if(beforeProfiles)report.originalRosterRestored=JSON.stringify(beforeProfiles)===JSON.stringify((await api.list()).profiles.map(p=>p.id).sort());
-   report.comparison=compare(...report.runs);save();
-   if(report.runs.length===2&&!report.runs.some(r=>r.error)&&report.accountsUnchanged&&report.originalRosterRestored){
-    report.databaseReportId='worker-target-filter-'+randomUUID();await production.query(require('./engine-benchmark.cjs').BATCH_SCHEMA);
-    await production.query("INSERT INTO compel_engine_batches(id,account_id,profiles,state,requested_count,started_at,finished_at,report) VALUES($1,'ANONYMOUS_DIAGNOSTIC',$2,'DIAGNOSTIC_COMPLETE',2,$3,NOW(),$4::jsonb)",[report.databaseReportId,checks.URLS,report.at,JSON.stringify({manifest:{kind:'worker-target-comparison',runs:2,leadJobs:0},...report})]);save();
+   report.comparison=(variant==='contexts'?compareContexts:compare)(...report.runs);save();
+   if(report.runs.length){
+    const complete=report.runs.length===2&&!report.runs.some(r=>r.error)&&report.accountsUnchanged&&report.originalRosterRestored;
+    report.databaseReportId=(variant==='contexts'?'context-comparison-':'worker-target-filter-')+randomUUID();await production.query(require('./engine-benchmark.cjs').BATCH_SCHEMA);
+    await production.query("INSERT INTO compel_engine_batches(id,account_id,profiles,state,requested_count,started_at,finished_at,report) VALUES($1,'ANONYMOUS_DIAGNOSTIC',$2,$5,2,$3,NOW(),$4::jsonb)",[report.databaseReportId,checks.URLS,report.at,JSON.stringify({manifest:{kind:variant==='contexts'?'context-comparison':'worker-target-comparison',runs:report.runs.length,leadJobs:0},...report}),complete?'DIAGNOSTIC_COMPLETE':'DIAGNOSTIC_PARTIAL']);save();
    }
   }finally{save();await api?.idle();await db?.close();await production.end();}
  }
@@ -99,4 +117,4 @@ async function main(){
  if(!report.comparison?.acceptance||!report.accountsUnchanged||!report.originalRosterRestored)throw Error('Measurement did not prove every acceptance condition; preserve and disclose the saved differences.');
 }
 if(require.main===module)main().catch(error=>{console.error(error.code||error.name,error.failure?.reason||error.message);process.exitCode=1;});
-module.exports={main,verifySupport,stableObservation,compare};
+module.exports={main,verifySupport,stableObservation,compare,compareContexts};

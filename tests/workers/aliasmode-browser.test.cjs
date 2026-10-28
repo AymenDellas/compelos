@@ -11,18 +11,25 @@ function fixture({active=false,saved=null,headless=true}={}){
  browser.newPage=async()=>{calls.push('newPage');return page;};browser.target=()=>({createCDPSession:async()=>({send:async()=>({processInfo:[{type:'browser',id:12345}]}),detach:async()=>{}})});
  const store={assertOwner:async()=>{if(!allowed)throw Object.assign(Error('Ownership changed'),{failure:{stage:'provider'},code:'ALIASMODE_OWNERSHIP_CHANGED'});},session:async()=>row,saveSession:async(_p,a,o,value)=>{row={account_id:a.id,owner:o,...value,target_id:value.targetId};},finishSession:async()=>{if(row)row.closed_at='closed';}};
  const api={active:async()=>{calls.push('active');return {active,...(active?{headless,endpoint:'ws://127.0.0.1:9222/devtools/browser/fixture'}:{})};},start:async(_id,options)=>{headless=options.headless;calls.push('start');if(startGate)await startGate;active=true;return {active:true,headless,endpoint:'ws://127.0.0.1:9222/devtools/browser/fixture'};},stop:async()=>{calls.push('stop');if(stopWorks)active=false;}};
- const options={account,owner,pool:{},provider:{store,client:api},puppeteer:{connect:async settings=>{calls.push('connect');assert.equal(settings.defaultViewport,null);
+ const pageController={existingTarget:async(b,id)=>{const found=b.targets().find(t=>t.type()==='page'&&t._targetId===id);return found?{targetId:found._targetId}:null;},openPage:async(b,{targetId}={})=>targetId?b.targets().find(t=>t._targetId===targetId).page():b.newPage()};
+ const options={account,owner,pool:{},provider:{store,client:api},pageController,puppeteer:{connect:async settings=>{calls.push('connect');assert.equal(settings.defaultViewport,null);
   assert.equal(typeof settings.targetFilter,'function');
-  for(const type of ['worker','service_worker','shared_worker']){
+  for(const type of ['page','tab','background_page','worker','service_worker','shared_worker']){
    assert.equal(settings.targetFilter({type:()=>type}),false);
    assert.equal(settings.targetFilter({type:()=>type==='worker'?'other':type,_getTargetInfo:()=>({type})}),false);
   }
-  for(const type of ['page','tab','browser','background_page','other'])assert.equal(settings.targetFilter({type:()=>type}),true);
+  for(const type of ['browser','other'])assert.equal(settings.targetFilter({type:()=>type}),true);
   if(connectError)throw Error('Connection refused');connected=true;return browser;}}};
  return {account,options,calls,browser,page,get row(){return row;},get active(){return active;},set allowed(v){allowed=v;},set stopWorks(v){stopWorks=v;},set connectError(v){connectError=v;},set startGate(v){startGate=v;}};
 }
 test('visible is the default and explicit headless configuration remains supported',async()=>{
  const f=fixture();delete f.account.launch_mode;const b=createAliasModeBrowser(f.options);await b.open();assert.equal(b.isHeadless(),false);await b.open({headless:false});assert.equal(f.calls.filter(v=>v==='connect').length,1);await b.recycle();
+});
+test('a failed page controller is detached before restoring only the recorded worker target',async()=>{
+ const f=fixture(),b=createAliasModeBrowser(f.options);await b.open();f.page.isUsable=()=>false;assert.equal(b.isOpen(),false);
+ // The mock factory returns a usable fixture object after reattachment.
+ f.page.isUsable=()=>f.calls.filter(c=>c==='connect').length>1;
+ await b.open();assert.equal(f.calls.filter(c=>c==='connect').length,2);assert.equal(f.calls.filter(c=>c==='newPage').length,1);assert.equal(b.isOpen(),true);await b.recycle();
 });
 test('closed profiles start through AliasMode and concurrent opens share one CDP connection and tab',async()=>{
  const f=fixture(),b=createAliasModeBrowser(f.options);const [one,two]=await Promise.all([b.open(),b.open()]);assert.equal(one,two);assert.equal(b.pid(),12345);assert.equal(b.isHeadless(),true);assert.deepEqual(f.calls,['active','start','connect','newPage']);await b.close();assert.equal(f.active,true);

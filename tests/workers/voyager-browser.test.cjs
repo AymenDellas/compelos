@@ -21,7 +21,8 @@ test('a real restored browser reads two leads by API on one feed document, witho
    request.respond({status:200,contentType:'application/json',body:JSON.stringify(data)}).catch(()=>{});
   });
   await page.goto('https://www.linkedin.com/feed/',{waitUntil:'domcontentloaded'});
-  await page.setCookie({name:'JSESSIONID',value:'"fixture-csrf-value"',domain:'.linkedin.com',secure:true});
+  // Only this disposable intercepted fixture receives a synthetic CSRF cookie.
+  await f.browsers.get('one').defaultBrowserContext().setCookie({name:'JSESSIONID',value:'"fixture-csrf-value"',domain:'.linkedin.com',secure:true});
   for(let n=0;n<2;n++){
    const checkpoints=[],result=await reader.captureProfile(page,person,{accountId:'fixture',now,requireTargetLocation:true,beforeCheck:async()=>{},onCheckpoint:async value=>checkpoints.push(value)});
    assert.equal(result.followers.count,2345);assert.equal(result.activityStatus,'Active');assert.equal(result.primaryEmail,'ava@practice.test');assert.equal(result.linkedinCapture.complete,true);

@@ -32,21 +32,23 @@ async function fixture(){
   response.end('<!doctype html><title>Local fixture</title><main style="height:3500px">'+link+'</main><img src="/slow-resource.svg" onload="window.fixtureLoaded=true"><script>window.fixtureScrollCount=0;const originalScroll=window.scrollBy.bind(window);window.scrollBy=(...args)=>{window.fixtureScrollCount++;return originalScroll(...args)};document.addEventListener("pointermove",event=>{const link=location.pathname==="/feed/"?document.querySelector("a"):null;if(!link)return;const r=link.getBoundingClientRect();sessionStorage.setItem("fixtureLinkMove",JSON.stringify({x:event.clientX,y:event.clientY,left:r.left,top:r.top,bottom:r.bottom,width:r.width,height:r.height,viewport:innerHeight}));});fetch("/li/track",{method:"POST",body:"fixture-page-view"}).then(()=>window.fixtureTelemetryFinished=true);document.querySelector("#spa")?.addEventListener("click",event=>{event.preventDefault();history.pushState({},"","/in/spa-fixture/")});</script>');
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
- let browser;
+ let browser,page,launcher;
  try{
   // Chromium resolves the original HTTPS origin directly to the local server.
   // Request interception or URL rewriting would omit/change Fetch Metadata;
   // no headers are injected. Every other hostname is unresolvable and aborted.
-  browser=await require('puppeteer').launch({headless:true,acceptInsecureCerts:true,args:[
+  const puppeteer=require('puppeteer');launcher=await puppeteer.launch({headless:true,acceptInsecureCerts:true,args:[
    '--no-proxy-server','--host-resolver-rules=MAP www.linkedin.com 127.0.0.1:'+server.address().port+', MAP * ~NOTFOUND',
   ]});
-  const page=await browser.newPage();await page.setRequestInterception(true);
+  const endpoint=launcher.wsEndpoint();await launcher.disconnect();
+  browser=await puppeteer.connect({browserWSEndpoint:endpoint,acceptInsecureCerts:true,defaultViewport:null,targetFilter:target=>!['page','tab','background_page','worker','service_worker','shared_worker'].includes(target._getTargetInfo?.()?.type||target.type())});
+  page=await require('../../src/lib/aliasmode-page.cjs').openPage(browser);await page.setRequestInterception(true);
   page.on('request',request=>{
    let permitted=false;try{permitted=new URL(request.url()).origin==='https://www.linkedin.com';}catch{}
    void (permitted?request.continue():request.abort()).catch(()=>{});
   });
-  return {page,requests,close:async()=>{await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}};
- }catch(error){await browser?.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));throw error;}
+  return {page,requests,close:async()=>{await page.close().catch(()=>{});await browser.close();await launcher.close().catch(()=>{});server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}};
+ }catch(error){await browser?.close().catch(()=>{});await launcher?.close().catch(()=>{});server.closeAllConnections();await new Promise(resolve=>server.close(resolve));throw error;}
 }
 
 function clock(){let at=0;return {now:()=>at,sleep:async duration=>{at+=duration;}};}

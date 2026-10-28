@@ -87,6 +87,7 @@ function createAccountRuntime(options) {
    try{if([401,403,429,999].includes(response.status())||response.request().isNavigationRequest()&&response.frame()===page.mainFrame())check(response.url(),response.status());}catch{/* Target replaced during navigation. */}
   });
   page.on?.('close',()=>{if(watched===page)disconnected(new Error('The account tab was closed. Use Open session to reopen it.'));});
+  page.on?.('controllererror',error=>{if(watched===page)disconnected(error);});
  }
  async function open(headless=false) {
   if(browserOwner.isOpen()&&typeof browserOwner.isHeadless==='function'&&typeof browserOwner.isHeadless()==='boolean'&&browserOwner.isHeadless()!==headless){
