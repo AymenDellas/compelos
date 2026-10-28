@@ -31,3 +31,38 @@ Native pointer ordering is observed inside the synthetic fixture without wrappin
 ## Preserved evidence
 
 Before behavior changes, a fresh 50-record decided-lead snapshot was preserved under ignored `data/engine-v2/checklist-audit-20261028/`. PostgreSQL manifest `session-checklist-20261028-48bc7515-0baa-4492-9e68-c7602aa57d90` stores the regression reports. Baseline and implementation-phase replay each have zero decision changes, evidence changes or errors; the saved account controls/holds and complete CRM digest are unchanged. Qualification policy, follower/location routing, proxy configuration and consumed experiment history are untouched.
+
+## Completed offline gates
+
+| Gate | Result |
+| --- | --- |
+| `npx tsc --noEmit` | Passed before the full test command |
+| `npm run test:workers -- tests/prospects/*.test.cjs tests/coach-prospecting/*.test.cjs` | **454 passed, 0 failed, 0 skipped** in a clean complete run |
+| `CRM_TEST_POSTGRES=1 npm run test:crm` | **14 passed, 0 failed, 0 skipped** |
+| ESLint on changed source/tests | Passed |
+| `npm run lint` | 6 existing errors / 4 warnings in untouched UI files in this clean checkout |
+
+The npm worker script expands to the required sequential Node command over all three test folders. Its complete passing output is retained in ignored `engine-tests.tap`; CRM and lint output are retained beside it. No gate is inferred from a partial test run.
+
+The six workspace lint errors are in teleprompter, WorkspaceCommandMenu, business CoachProspectingWorkspace, business OnboardingWorkspace, EvidenceRecoveryDialog and copy-studio OnboardingDialog. These UI sources are unchanged from the audited main commit. The earlier report's 5 errors / 7 warnings came from the original working checkout with separate uncommitted UI work; this audit reports the clean destination checkout's actual result.
+
+## Fresh anonymous detector evidence
+
+Both measurements ran after all fixture/type/lint commands finished, with new blank AliasMode Chromium profiles, the production adapter, isolated PostgreSQL diagnostic leases and blocked LinkedIn navigation. The control removes only `targetFilter`; the filtered pass uses the unchanged normal adapter. No mapped account browser, proxy configuration or detector verdict logic was changed.
+
+The first fresh seven-endpoint battery returned a completed worker flag `true` in the control, but its filtered DeviceAndBrowserInfo page did not produce completed vendor JSON in the normal eight-second result window. Its worker flag is **null/UNKNOWN**, not false. That incomplete result and the other external differences remain preserved in PostgreSQL benchmark `worker-target-filter-d843b844-fbb0-4182-a9d2-325cdc437d4c` and ignored `data/engine-v2/worker-target-filter/comparison-5139d3a9-e02f-4dac-8dbf-657f270f1613.json`.
+
+One separate focused comparison then observed only DeviceAndBrowserInfo, with the same 60-second load and 60-second vendor-result deadlines in both passes. It reuses the existing exported `siteResult`, `probe` and `assessSite` functions; production detector/parser/verdict code and normal battery deadlines remain unchanged. The private harness records this different observation window rather than replacing the incomplete battery result.
+
+| Focused DeviceAndBrowserInfo result | Control | Worker filter |
+| --- | --- | --- |
+| `isAutomatedWithCDPInWebWorker` | **true** | **false** |
+| All 22 other boolean fields | Identical | Identical |
+| All seven direct checks | Identical | Identical |
+| `isAutomatedWithCDP` | true | true |
+| `isBot` | true | true |
+| Site verdict | FAIL | FAIL |
+
+The focused scope passed its explicit `focusedAcceptance` condition. The generic seven-endpoint comparator retains `completed: false` and `acceptance: false` for that one-endpoint run, because it did not execute all seven endpoints; these fields are not changed into a full-battery pass. This proves the requested worker flag and stable other DeviceAndBrowserInfo fields in the focused measurement, not an unchanged or passing complete battery.
+
+PostgreSQL benchmark `worker-target-focused-a169377e-04ee-46f0-b5f0-01724103f002` stores the focused report with zero lead jobs. Full evidence is ignored at `data/engine-v2/checklist-worker-focused/comparison-2eaad181-5941-4b40-9753-c6b9d88678eb.json`; the bounded private runner is retained in the checklist audit directory. Both diagnostic profiles were confirmed stopped and deleted through the supported CLI. Both reports confirm unchanged account-control hashes and restoration of the original AliasMode profile roster. John's hold and consumed experiment history remain unchanged; no authenticated LinkedIn validation or agent restart occurred.
