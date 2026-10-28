@@ -39,7 +39,7 @@ async function feed(page,{assertActive=async()=>{}}={}){
 async function visit(page,url,{assertActive=async()=>{},onNavigationEvidence}={}){
  const canonical=profileUrl(url);if(!canonical)throw Error('Rendered session visit requires a canonical person profile.');
  const state=observeTelemetry(page);state.navigationStartRequests=state.observedRequests;
- return require('./linkedin-browser-page.cjs').navigateProfile(page,canonical,{assertActive,onNavigationEvidence,timeout:20000});
+ return require('./linkedin-browser-page.cjs').navigateProfile(page,canonical,{assertActive,onNavigationEvidence});
 }
 async function settle(page,{assertActive=async()=>{},timeoutMs=8000,quietMs=750,now=Date.now,sleep:pause=sleep}={}){
  const state=observeTelemetry(page),started=now();

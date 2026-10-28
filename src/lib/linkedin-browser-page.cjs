@@ -119,7 +119,7 @@ async function clickControl(page, selector, match, kind, options={}) {
  }
  return false;
 }
-async function navigateProfile(page,person,{assertActive=async()=>{},onNavigationEvidence,timeout=45000}={}) {
+async function navigateProfile(page,person,{assertActive=async()=>{},onNavigationEvidence,timeout=60000}={}) {
  const expected=profileUrl(person);
  if(!expected)throw problem('PROFILE_IDENTITY','The requested LinkedIn profile URL is invalid.');
  await assertActive();
@@ -155,6 +155,8 @@ async function navigateProfile(page,person,{assertActive=async()=>{},onNavigatio
    // Register before input: a rendered link may perform a full document load
    // or LinkedIn's native same-document routing. Both retain browser semantics.
    const navigation=page.waitForNavigation({waitUntil:'load',timeout});
+   // Handle an early rejection while input is in flight, then await the ORIGINAL
+   // promise below. A timeout must propagate; never turn it into a null response.
    navigation.catch(()=>{});
    if(el){method='rendered-link';await pressControl(page,el);}
    else await page.evaluate(url=>location.assign(url),expected);

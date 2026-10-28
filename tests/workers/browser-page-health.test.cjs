@@ -33,7 +33,22 @@ test('scrolling does not wait for an animation frame that the page never schedul
  await human.interact(page,{random:a=>a});assert.deepEqual(calls,['pointer','scroll']);
 });
 test('rendered visit retains its navigation response for the caller to classify',async()=>{
- const response={status:()=>503};let active=0;assert.equal(await human.visit({$$:async()=>[],waitForNavigation:async options=>{assert.equal(options.waitUntil,'load');return response;},evaluate:async()=>{},waitForFunction:async()=>{},goto:()=>assert.fail('Profile navigation cannot use goto')},person,{assertActive:async()=>active++}),response);assert.ok(active>=2);
+ const response={status:()=>503};let active=0;assert.equal(await human.visit({$$:async()=>[],waitForNavigation:async options=>{assert.equal(options.waitUntil,'load');assert.equal(options.timeout,60000);return response;},evaluate:async()=>{},waitForFunction:async()=>{},goto:()=>assert.fail('Profile navigation cannot use goto')},person,{assertActive:async()=>active++}),response);assert.ok(active>=2);
+});
+
+test('profile load timeouts reject both navigation entrypoints before readiness, evidence or inspection',async()=>{
+ for(const navigate of [reader.navigateProfile,human.visit]){
+  const timeout=Object.assign(Error('Fixture navigation timed out after 60000ms'),{name:'TimeoutError'}),calls=[];
+  const page={$$:async()=>[],waitForNavigation:options=>{assert.deepEqual(options,{waitUntil:'load',timeout:60000});return Promise.reject(timeout);},evaluate:async(fn,url)=>{assert.equal(url,person);assert.match(fn.toString(),/location\.assign/);calls.push('assign');},waitForFunction:()=>assert.fail('No readiness check on a half-loaded page')};
+  await assert.rejects(navigate(page,person,{onNavigationEvidence:()=>assert.fail('No successful visit evidence on timeout')}),error=>error===timeout);
+  assert.deepEqual(calls,['assign']);
+ }
+});
+
+test('rendered control bounds and pointer input follow completed scrollIntoView',async()=>{
+ const calls=[],el={scrollIntoView:async()=>{calls.push('scroll');},boundingBox:async()=>{assert.deepEqual(calls,['scroll']);calls.push('bounds');return{x:10,y:20,width:80,height:40};}};
+ await reader.pressControl({mouse:{click:async(x,y)=>{assert.deepEqual(calls,['scroll','bounds']);assert.deepEqual({x,y},{x:50,y:40});calls.push('click');}}},el);
+ assert.deepEqual(calls,['scroll','bounds','click']);
 });
 test('ordinary warmup cannot save an observed day for a failed page',async()=>{
  const guard=require('../../src/lib/account-session-guard.cjs').createSessionGuard({pool:{query:()=>assert.fail('No evidence write for an unavailable page')},owner:'fixture',core:{reserveProfile:async()=>({nextProfileAt:new Date().toISOString()})}});

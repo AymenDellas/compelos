@@ -3,6 +3,9 @@
 const {randomUUID,randomInt}=require('node:crypto');
 const ID='john-rendered-warmup-20261028-20',PROFILE='k1ierfk4',COUNT=20,COMMAND='warmup-experiment';
 const MIN_SESSION_MS=20*60*1000,MAX_SESSION_MS=40*60*1000;
+// Leave room for 60s profile load, 8s settle, 90s dwell, observed headers and
+// the final feed's 30s load before the existing session target ends.
+const PROFILE_AND_FEED_BUDGET_MS=190000;
 const terminal=state=>!['WARMUP_PREPARED','WARMUP_AUTHORIZED','WARMUP_RUNNING'].includes(state);
 const problem=(reason,code='WARMUP_STOPPED')=>Object.assign(Error(reason),{code});
 async function load(pool){return (await pool.query('SELECT * FROM compel_engine_batches WHERE id=$1',[ID])).rows[0]||null;}
@@ -130,7 +133,7 @@ function create({pool,accountId,owner,core,guard,now=Date.now,sleep,random=rando
    }
    lastAction='profile_claim';b=await assertActive();
    if(b.report.attempts.length>=COUNT)return await finishSession(page,assertActive,inspect,'Twenty authorized rendered profile starts completed; normal qualification remains paused.');
-   if(now()>=Date.parse(b.report.sessionPlan.sessionEnd)||now()+120000>=Date.parse(b.report.sessionPlan.maximumEnd))return await finishSession(page,assertActive,inspect,'The rendered session reached its target duration; normal qualification remains paused.');
+   if(now()>=Date.parse(b.report.sessionPlan.sessionEnd)||now()+PROFILE_AND_FEED_BUDGET_MS>=Date.parse(b.report.sessionPlan.maximumEnd))return await finishSession(page,assertActive,inspect,'The rendered session reached its target duration; normal qualification remains paused.');
    const url=b.profiles[b.report.attempts.length],jobId='warmup_'+randomUUID(),c=await pool.connect();
    try{await c.query('BEGIN');await c.query('SELECT id FROM compel_linkedin_accounts WHERE id=$1 FOR UPDATE',[accountId]);b=await authority(c,{accountId,owner,version:a.control_version,lock:true});
     const inserted=await c.query(`INSERT INTO compel_worker_jobs(id,profile_key,payload,status,account_id,owner,lease_until,checkpoint) VALUES($1,$2,$3::jsonb,'processing',$4,$5,NOW()+interval '15 minutes',$6::jsonb) ON CONFLICT DO NOTHING RETURNING id`,[jobId,url,JSON.stringify({jobId,linkedinUrl:url,warmupExperimentId:ID,nativePostProcess:false}),accountId,owner,JSON.stringify({warmupExperimentId:ID,url,stage:'RESERVING'})]);

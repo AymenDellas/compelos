@@ -10,10 +10,11 @@ test('bounded log-normal profile intervals retain a 90s median and long tail',()
  let seed=11235813;
  const random=(min,max)=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return min+Math.floor(seed/4294967296*(max-min));};
  const samples=Array.from({length:20000},()=>human.profileIntervalMs({random})).sort((a,b)=>a-b);
+ const p50=samples[Math.floor(samples.length*.5)],p90=samples[Math.floor(samples.length*.9)],p99=samples[Math.floor(samples.length*.99)];
  assert.ok(samples.every(x=>Number.isInteger(x)&&x>=60000&&x<=400000));
- assert.ok(samples[10000]>87000&&samples[10000]<93000);
- assert.ok(samples[18000]>195000&&samples[18000]<220000);
- assert.ok(samples[19800]>360000,'The upper percentile extends well past the old 150s cap');
+ assert.ok(p50>87000&&p50<93000,'p50 must remain approximately 90 seconds');
+ assert.ok(p90>195000&&p90<220000,'p90 must retain the log-normal long tail');
+ assert.ok(p99>360000,'p99 extends well past the old 150s cap');
  assert.equal(samples.at(-1),400000);
  // Interior log quantiles are symmetric about log(median), as the requested
  // distribution requires. A uniform interval cannot satisfy these quantiles.

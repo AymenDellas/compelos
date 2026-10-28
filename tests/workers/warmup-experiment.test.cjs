@@ -25,7 +25,7 @@ test('one-time rendered experiment performs at most 20 visits with real atomic s
   const b=await exp.load(f.pool);assert.equal(b.state,'WARMUP_COMPLETE');assert.equal(b.report.visits.length,20);assert.equal(b.report.attempts.length,20);assert.deepEqual(h.seen,urls);assert.equal(b.report.scriptedQualificationRequests,0);
   assert.equal(h.page.navigations[0],'https://www.linkedin.com/feed/');assert.equal(h.page.navigations.at(-1),'https://www.linkedin.com/feed/');assert.equal(b.report.finalPage.path,'/feed/');
   assert.ok(b.report.feedDwell.dwellMs>=20000&&b.report.feedDwell.dwellMs<=60000);assert.equal(b.report.sessionSummary.targetMet,true);
-  for(const visit of b.report.visits){assert.equal(visit.navigationMethod,'location.assign');assert.equal(visit.secFetchSite,'same-origin');assert.ok(visit.referer);assert.ok(visit.dwellMs>=30000&&visit.dwellMs<=90000);assert.ok(visit.scrollCount>=2&&visit.scrollCount<=4);assert.equal(visit.intervalMs,90000);assert.equal(visit.settle.telemetryFlushConfirmed,false);}
+  for(const [index,visit] of b.report.visits.entries()){assert.equal(visit.navigationMethod,'location.assign');assert.equal(visit.secFetchSite,'same-origin');assert.equal(visit.referer,index===0?'https://www.linkedin.com/feed/':urls[index-1]);assert.ok(visit.dwellMs>=30000&&visit.dwellMs<=90000);assert.ok(visit.scrollCount>=2&&visit.scrollCount<=4);assert.equal(visit.intervalMs,90000);assert.equal(visit.settle.telemetryFlushConfirmed,false);}
   assert.equal((await f.pool.query('SELECT count(*)::int AS n FROM compel_worker_account_profiles WHERE account_id=$1',[f.id])).rows[0].n,20);
   assert.equal((await f.pool.query("SELECT count(*)::int AS n FROM compel_worker_jobs WHERE status='cancelled' AND payload->>'warmupExperimentId'=$1",[exp.ID])).rows[0].n,20);
   const a=await core.readRuntimeAccount(f.pool,f.id);assert.equal(a.attention_reason,'');assert.ok(a.session_evidence.recoveryUntil);assert.equal(a.session_evidence.gate,null);
@@ -34,10 +34,10 @@ test('one-time rendered experiment performs at most 20 visits with real atomic s
  }finally{await f.close();}
 });
 
-test('the session target finishes on the feed without consuming another profile slot',async()=>{
+for(const finish of ['target','bounded-profile-time'])test('the session '+finish+' finishes on the feed without consuming another profile slot',async()=>{
  const f=await fixture();try{
   const h=harness(f);await h.runner.step(await core.readRuntimeAccount(f.pool,f.id),h.callbacks);const before=await exp.load(f.pool);
-  h.setClock(Date.parse(before.report.sessionPlan.sessionEnd));await h.runner.step(await core.readRuntimeAccount(f.pool,f.id),h.callbacks);
+  h.setClock(finish==='target'?Date.parse(before.report.sessionPlan.sessionEnd):Date.parse(before.report.sessionPlan.maximumEnd)-150000);await h.runner.step(await core.readRuntimeAccount(f.pool,f.id),h.callbacks);
   const after=await exp.load(f.pool);assert.equal(after.state,'WARMUP_COMPLETE');assert.equal(after.report.attempts.length,1);assert.equal(after.report.visits.length,1);assert.equal(h.page.url(),'https://www.linkedin.com/feed/');assert.equal(after.report.sessionSummary.targetMet,true);
  }finally{await f.close();}
 });

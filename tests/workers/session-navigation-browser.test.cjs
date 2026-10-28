@@ -29,7 +29,7 @@ async function fixture(){
   if(request.url==='/li/track')return void setTimeout(()=>{response.writeHead(204);response.end();},60);
   response.writeHead(200,{'content-type':'text/html; charset=utf-8'});
   const link=request.url==='/feed/'?'<a href="/in/rendered-fixture/">Rendered member</a>':request.url==='/in/assigned-fixture/'?'<a id="spa" href="/in/spa-fixture/">SPA member</a>':'';
-  response.end('<!doctype html><title>Local fixture</title><main style="height:3500px">'+link+'</main><img src="/slow-resource.svg" onload="window.fixtureLoaded=true"><script>window.fixtureScrollCount=0;const originalScroll=window.scrollBy.bind(window);window.scrollBy=(...args)=>{window.fixtureScrollCount++;return originalScroll(...args)};fetch("/li/track",{method:"POST",body:"fixture-page-view"}).then(()=>window.fixtureTelemetryFinished=true);document.querySelector("#spa")?.addEventListener("click",event=>{event.preventDefault();history.pushState({},"","/in/spa-fixture/")});</script>');
+  response.end('<!doctype html><title>Local fixture</title><main style="height:3500px">'+link+'</main><img src="/slow-resource.svg" onload="window.fixtureLoaded=true"><script>window.fixtureScrollCount=0;const originalScroll=window.scrollBy.bind(window);window.scrollBy=(...args)=>{window.fixtureScrollCount++;return originalScroll(...args)};document.addEventListener("pointermove",event=>{const link=location.pathname==="/feed/"?document.querySelector("a"):null;if(!link)return;const r=link.getBoundingClientRect();sessionStorage.setItem("fixtureLinkMove",JSON.stringify({x:event.clientX,y:event.clientY,left:r.left,top:r.top,bottom:r.bottom,width:r.width,height:r.height,viewport:innerHeight}));});fetch("/li/track",{method:"POST",body:"fixture-page-view"}).then(()=>window.fixtureTelemetryFinished=true);document.querySelector("#spa")?.addEventListener("click",event=>{event.preventDefault();history.pushState({},"","/in/spa-fixture/")});</script>');
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
  let browser;
@@ -62,7 +62,17 @@ test('offline HTTPS session opens the feed, observes native same-origin link/ass
   // A profile must never use goto: feed remains the only permitted use here.
   const goto=page.goto.bind(page);page.goto=()=>assert.fail('Profile navigation must use a rendered link or location.assign');
   for(const [index,url] of ['https://www.linkedin.com/in/rendered-fixture/','https://www.linkedin.com/in/assigned-fixture/'].entries()){
+   if(index===0)assert.ok(await page.evaluate(()=>document.querySelector('a').getBoundingClientRect().bottom<0),'feed scroll puts the rendered link outside the viewport');
    await human.visit(page,url,{onNavigationEvidence:value=>evidence.push(value)});
+   if(index===0){
+    // The synthetic fixture records the actual pointer event before navigation;
+    // do not wrap/delay Puppeteer's input commands to measure their ordering.
+    const pointer=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('fixtureLinkMove')));
+    assert.ok(pointer,'a native pointer move was observed on the feed');
+    assert.ok(pointer.top>=0&&pointer.bottom<=pointer.viewport,'scrollIntoView completed before the native pointer move');
+    assert.ok(pointer.x>=pointer.left&&pointer.x<=pointer.left+pointer.width);
+    assert.ok(pointer.y>=pointer.top&&pointer.y<=pointer.bottom);
+   }
    assert.equal(page.url(),url);assert.equal(await page.evaluate(()=>document.readyState),'complete');assert.equal(await page.evaluate(()=>window.fixtureLoaded),true);
    const settle=await human.settle(page,{quietMs:25,timeoutMs:2000});assert.equal(settle.settled,true);assert.equal(settle.pendingRequests,0);assert.equal(settle.telemetryFlushConfirmed,false);
    assert.equal(await page.evaluate(()=>window.fixtureTelemetryFinished),true,'the observed fixture telemetry request completed before dwell');
@@ -74,8 +84,9 @@ test('offline HTTPS session opens the feed, observes native same-origin link/ass
   for(const [index,value] of evidence.entries()){
    const path=index===0?'/in/rendered-fixture/':'/in/assigned-fixture/',observed=f.requests.find(request=>request.path===path);
    assert.equal(value.httpNavigation,true);assert.equal(value.headerSource,'Network.requestWillBeSentExtraInfo');
-   assert.equal(value.secFetchSite,'same-origin');assert.equal(value.referer,observed.headers.referer);
-   assert.equal(observed.headers['sec-fetch-site'],'same-origin');assert.ok(observed.headers.referer,'the local HTTPS server received the native Referer');
+   const expectedReferer=index===0?'https://www.linkedin.com/feed/':'https://www.linkedin.com/in/rendered-fixture/';
+   assert.equal(value.secFetchSite,'same-origin');assert.equal(value.referer,expectedReferer);
+   assert.equal(observed.headers['sec-fetch-site'],'same-origin');assert.equal(observed.headers.referer,expectedReferer,'the local HTTPS server received the exact native Referer');
   }
   page.goto=goto;await human.feed(page);assert.equal(page.url(),'https://www.linkedin.com/feed/');
   assert.equal(f.requests.filter(request=>request.path==='/feed/'||request.path.startsWith('/in/')).at(-1).path,'/feed/');

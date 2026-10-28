@@ -37,6 +37,17 @@ test('ramp ceiling and randomized start spacing are reserved atomically in Postg
   const slot=await daily.reserve(pool,{accountId:id,owner:'owner',profileUrl:'https://www.linkedin.com/in/spacing/',jobId:'spacing'});
   const row=(await pool.query('SELECT EXTRACT(EPOCH FROM(next_profile_at-clock_timestamp()))*1000 AS wait_ms FROM compel_linkedin_accounts WHERE id=$1',[id])).rows[0];
   assert.ok(slot.intervalMs>=60000&&slot.intervalMs<=150000);assert.ok(Number(row.wait_ms)>55000&&Number(row.wait_ms)<=150000,'spacing uses the PostgreSQL clock, independent of worker clock skew');
+  await pool.query('UPDATE compel_linkedin_accounts SET next_profile_at=NULL WHERE id=$1',[id]);
+  const usedBefore=(await daily.usage(pool,id)).used;
+  const concurrent=await Promise.all([1,2].map(n=>daily.reserve(pool,{accountId:id,owner:'owner',profileUrl:`https://www.linkedin.com/in/concurrent-tail-${n}/`,jobId:'tail-'+n,intervalMs:400000})));
+  const winner=concurrent.find(result=>result.charged),loser=concurrent.find(result=>result.paced);
+  assert.equal(concurrent.filter(result=>result.charged).length,1,'only one concurrent profile may reserve the start');
+  assert.equal(concurrent.filter(result=>result.paced).length,1,'the other profile observes the committed database deadline');
+  assert.equal(new Date(loser.resumeAt).getTime(),new Date(winner.nextProfileAt).getTime());
+  assert.equal((await daily.usage(pool,id)).used,usedBefore+1,'the paced loser consumes no daily slot');
+  const tail=(await pool.query('SELECT next_profile_at,EXTRACT(EPOCH FROM(next_profile_at-clock_timestamp()))*1000 AS wait_ms FROM compel_linkedin_accounts WHERE id=$1',[id])).rows[0];
+  assert.equal(new Date(tail.next_profile_at).getTime(),new Date(winner.nextProfileAt).getTime());
+  assert.ok(Number(tail.wait_ms)>390000&&Number(tail.wait_ms)<=400000,'the 400-second tail remains a database-clock reservation');
  }finally{await db.close();}
 });
 test('human review approves only the exact current unclear report and never clears holds or starts processing',async()=>{
