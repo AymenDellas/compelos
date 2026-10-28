@@ -193,7 +193,9 @@ class ControlledPage extends EventEmitter{
    cancel=error=>{cleanup();reject(error);};
    const event=e=>{
     if(e.kind==='failed'){cleanup();reject(e.error);return;}
-    if(e.kind==='same-document'){cleanup();resolve(null);return;}
+    // A newly committed document can replace/push its own URL while parsing.
+    // Its real HTTP response and requested lifecycle still belong to this wait.
+    if(e.kind==='same-document'&&!committed){cleanup();resolve(null);return;}
     if(e.kind==='commit'){loader=e.loaderId;committed=true;return;}
     if(committed&&e.kind===kind&&e.loaderId===loader){cleanup();resolve(this._documents.get(loader)||null);}
    };

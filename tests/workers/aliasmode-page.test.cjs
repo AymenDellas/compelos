@@ -7,6 +7,7 @@ async function fixture(){
   if(req.url==='/worker-data'){res.writeHead(200);return res.end('worker-completed');}
   if(req.url==='/denied'){res.writeHead(401);return res.end('Fixture 401');}
   if(req.url==='/redirect'){res.writeHead(302,{location:'/second'});return res.end();}
+  if(req.url==='/early-route'){res.writeHead(200,{'content-type':'text/html'});return res.end('<!doctype html><script>history.replaceState({},"","/early-routed");</script><title>Early route loaded</title>');}
   if(req.url==='/error'){res.writeHead(503);return res.end('<title>Fixture 503</title>');}
   res.writeHead(200,{'content-type':'text/html'});res.end('<!doctype html><title>'+req.url+'</title><main style="height:2400px"><h1>'+req.url+'</h1><a id="next" href="/second">Next</a><a id="spa" href="/same-document">SPA</a></main><script>document.querySelector("#spa").onclick=e=>{e.preventDefault();history.pushState({},"","/same-document");document.querySelector("h1").textContent="SPA";};</script>');
  });
@@ -27,6 +28,7 @@ test('explicit page contexts survive navigation, native clicks, SPA changes and 
   assert.equal(second.status(),200);assert.equal(await p.evaluate(()=>document.querySelector('h1').textContent),'/second');
   const spa=await p.$('#spa'),changed=p.waitForNavigation({waitUntil:'load',timeout:5000});await spa.click();assert.equal(await changed,null);await spa.dispose();assert.equal(await p.evaluate(()=>document.querySelector('h1').textContent),'SPA');assert.ok(p.url().endsWith('/same-document'));
   const message=await p.evaluate(()=>new Promise((resolve,reject)=>{const worker=new Worker('/worker.js');worker.onmessage=e=>{worker.terminate();resolve(e.data);};worker.onerror=()=>reject(Error('Worker fixture failed'));}));assert.equal(message,'worker-completed');
+  const routed=await p.goto(f.url+'/early-route',{waitUntil:'domcontentloaded',timeout:5000});assert.equal(routed.status(),200);assert.equal(p.url(),f.url+'/early-routed');assert.equal(await p.title(),'Early route loaded');
   for(let i=0;i<5;i++){await p.goto(f.url+'/context-'+i,{waitUntil:'domcontentloaded',timeout:5000});assert.equal(await p.evaluate(()=>document.querySelector('h1').textContent),'/context-'+i);}
   assert.ok(f.methods.includes('Runtime.callFunctionOn'));assert.ok(!f.methods.includes('Runtime.enable'));assert.ok(!f.methods.includes('Runtime.disable'));assert.equal((await f.browser.pages()).length,0,'Puppeteer does not own an instrumented Page alongside the explicit controller');
  }finally{await f.close();}
