@@ -54,3 +54,26 @@ The two initial timed-out prototypes are additionally retained under PostgreSQL 
 The first integrated seven-endpoint comparison independently confirmed the same three cleared DeviceAndBrowserInfo flags, all other 20 flags unchanged, identical direct checks and browser identity/version. Its candidate battery remained UNKNOWN: Sannysoft timed out in both controls, while BrowserScan and Incolumitas exposed missing HTTP response metadata in the new controller. These outcomes remain unchanged in PostgreSQL `context-comparison-1c50ddc1-257c-4281-b3ef-4236b3a74960` and ignored `data/engine-v2/context-comparison/comparison-8b4a0e4a-d133-4eb0-ba50-f6fd3eaf0476.json`. Account controls/roster were unchanged and the diagnostic profile was confirmed closed/deleted.
 
 A document can call `history.replaceState` while parsing, before its requested load event. That same-document event previously resolved the document navigation as null. After a full-document commit, the controller now retains its real response and waits for the requested lifecycle. True SPA-only navigation still returns null. A local early-routing fixture requires the literal HTTP 200 response and completed title; the existing SPA/header fixtures remain passing. No detector assessment or endpoint is changed to accommodate the UNKNOWN results.
+
+## Completed offline gates
+
+| Gate | Result |
+| --- | --- |
+| Complete sequential engine/prospect/coach suite | **460 passed, 0 failed, 0 skipped** |
+| PostgreSQL CRM suite | **14 passed, 0 failed, 0 skipped** |
+| TypeScript | Passed, including the production build's check |
+| Lint on changed source/tests | Passed |
+| Full workspace lint | Existing 6 errors / 4 warnings in untouched UI sources |
+| Default `npm run build` | Passed |
+| Deployment trace privacy | **45 manifests, 0 private runtime entries** |
+| Frozen 50-record replay through the navigation correction | Zero decision/evidence changes or errors; complete CRM and account controls unchanged |
+
+The final clean engine output is retained privately as `control-integration-20261029/engine-tests-certified.tap`; CRM output is `crm-final.tap` and the successful default build is `build-certified.log`. An earlier full run had one Chrome fixture startup crash; its three-case file passed on rerun, and the later complete 460-case run passed without failures. Earlier fixture-interface/redirect failures were corrected and are not counted as passes.
+
+The verification checkout initially shared dependencies through a directory junction, which Turbopack rejected. The alternative webpack builder also rejected the existing PostCSS module export. A physical copy of the same installed dependencies allowed the unchanged default builder to complete; no package versions, browser library or permanent build-root settings changed. The packaging audit then found the worktree's `.git` metadata file in two Finder route traces. Excluding the root file as well as Git directories removes both entries; the subsequent complete default build and privacy audit pass. No environment file was copied or included.
+
+## Configuring a profile after installation
+
+Anonymous diagnostic results cannot approve another profile. Configure the dedicated proxy credentials in AliasMode, bind its reference and expected exit IP/country/timezone in CompelOS, then obtain fresh browser/network/identity evidence for that exact configured profile. Manual sign-in confirms the intended member and leaves processing paused. Confirmed failures and LinkedIn holds still block processing; exact current UNKNOWN reports retain the existing human-review/recovery policy.
+
+Use an explicit Start only after the displayed prerequisites are satisfied. Existing rendered warmup, ramp, daily ceilings and reactive stops still apply. John's restriction and consumed experiments remain untouched. This work creates no LinkedIn account and makes no authenticated LinkedIn test or assurance that a future account will avoid restriction.

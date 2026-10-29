@@ -19,7 +19,7 @@ const nextConfig = {
             './.browser-profiles*/**/*', './data/**/*', './progress/**/*',
             './queue*/**/*', './case-study-queue/**/*', './case-study-results/**/*',
             './scrape-results/**/*', './api-data/**/*', './backups/**/*',
-            './output/**/*', './tmp/**/*', './.git/**/*', './.env*',
+            './output/**/*', './tmp/**/*', './.git', './.git/**/*', './.env*',
         ],
     },
 

@@ -1,5 +1,13 @@
 # Account session controls and diagnostic evidence
 
+## Explicit account-tab contexts — 29 October 2026
+
+The user authorized replacing account-tab context tracking to address the remaining browser-control signal. The [explicit-context controller](engine-explicit-contexts.md) keeps AliasMode, installed Puppeteer and CDP, with explicitly owned page contexts instead of an automatically constructed Puppeteer Page. It adds no stealth plugin, browser-global spoofing, detector-verdict change or new browser library.
+
+The fresh integrated blank-profile comparison observed main/worker CDP and overall bot flags change from true to false, with all other 20 DeviceAndBrowserInfo flags, direct checks and browser identity/version unchanged. Its first complete battery remains UNKNOWN, with the actual endpoint and controller-navigation limitations retained in the linked report. A focused detector pass is not proof against LinkedIn restriction. Existing holds and consumed John experiments remain unchanged; no authenticated LinkedIn trial or replacement-account creation was performed.
+
+The controller version is part of diagnostic admission. A configured profile needs fresh proxy/identity/browser checks under this controller; the anonymous diagnostic profile cannot supply its approval. Settings saves and installation still leave processing paused. Existing warmup/ramp/recovery and reactive-stop policies remain in force.
+
 ## Rendered session and worker targets — 28 October 2026
 
 The latest implementation request adds [native rendered navigation and session evidence](engine-session-navigation.md) and [worker-target filtering with measured detector results](engine-worker-targets.md). The new 60–400-second log-normal timing applies to the experimental runner only; ordinary qualification policy is unchanged. Both consumed John manifests and his exact hold remain unchanged. The blank-profile measurement observed the worker CDP flag change from true to false while all other flags on that detector stayed unchanged; the overall gate remains FAIL. No authenticated LinkedIn run or account restart was performed.
