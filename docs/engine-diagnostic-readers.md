@@ -1,5 +1,7 @@
 # Diagnostic readers and timezone evidence — 29 October 2026
 
+**Clock assessment corrected:** [the current IANA reference](engine-clock-reference.md) confirms AliasMode's Casablanca UTC+0 is correct. Node's outdated tzdb supplied the erroneous UTC+1 expectation used below. The reference is now pinned to tzdb 2026f, and the unchanged managed browser passes both clocks and all 14 main/worker samples. Earlier raw readings remain retained; their clock interpretation is superseded. The modification warning remains unresolved.
+
 **Later investigation:** [provider repair evidence](engine-provider-repair.md) identifies a reproducible readback-noise cause for the prior modification warning and rejects a Date-only clock workaround. Current preflight uses `DIRECT_SIGNALS_V4` and requires both Date and Intl offsets to agree with the configured timezone. The V3 measurements below are retained as history. The user chose to keep AliasMode; no supported complete provider repair or all-clear has been demonstrated.
 
 The user requested the remaining local repairs before buying a proxy and configuring fresh profiles. The earlier anonymous browser comparisons are retained in [the follow-up report](engine-detector-followup.md).

@@ -1,8 +1,10 @@
 # AliasMode provider repair evidence — 29 October 2026
 
+**Clock assessment superseded:** [the clock reference correction](engine-clock-reference.md) establishes that AliasMode's Casablanca UTC+0 is correct under current IANA rules. Our old Node reference incorrectly expected UTC+1. The clock-only managed check now passes without browser changes. The remaining provider issue in this report is the image-noise modification warning. Historical raw readings and original assessments are preserved below; there is no account-operation all-clear.
+
 **Not cleared for account operation.** The user chose to keep AliasMode after an ordinary Chromium reference passed the focused browser checks. No provider replacement, profile migration, proxy purchase, account start or hold clearing is authorized by this study.
 
-The required provider repair is now narrower: make native readback noise optional without changing existing profile identities, and correct the browser's timezone rules. The first has a repeatable positive/negative control. A complete supported managed repair has not been installed or demonstrated.
+The remaining provider repair is to make native readback noise optional without changing existing profile identities. It has a repeatable positive/negative control. A supported managed correction for that feature has not been installed or demonstrated. The earlier request to repair the browser's timezone rules was mistaken; that portion is resolved by correcting our reference.
 
 ## Ordinary Chromium reference
 
@@ -53,7 +55,7 @@ For a provider reproduction, the common identity arguments were:
 
 Each trial also used its own newly generated temporary data directory, a nonzero localhost debugging port, `--no-first-run` and `--no-default-browser-check`. The positive control adds `--fingerprint-noise`; the negative control omits it. Never use a managed account's real data directory for this reproduction. The raw site values and screenshots are retained privately; no detector response or browser property was altered.
 
-## Clock fault and rejected workaround
+## Historical clock diagnosis — superseded
 
 The installed browser is AliasMode Chromium `155.0.8059.85-aliasmode.4`, also the latest published Windows release inspected for this study. Installed executable and library hashes match the downloaded build manifest:
 
@@ -66,24 +68,24 @@ The installed browser is AliasMode Chromium `155.0.8059.85-aliasmode.4`, also th
 
 Windows and the local Node timezone reference both report Casablanca at UTC+1 on 29 October. Local blank-page trials isolated the browser's two clock surfaces:
 
-| Native diagnostic configuration | Date clock | Intl formatted clock | Complete repair? |
+| Native diagnostic configuration | Date clock | Intl formatted clock | Original assessment with stale reference |
 | --- | --- | --- | --- |
 | Default host mode | UTC+0 | UTC+0 | FAIL |
 | Explicit ICU timezone data | UTC+0 | UTC+0 | FAIL |
 | Windows timezone data for Date | UTC+1 | UTC+0 | **FAIL; clocks disagree** |
 
-The last setting is a failed workaround, not a clock repair. It was never applied to a managed profile. The provider needs timezone rules that produce the correct local time consistently through Date, Intl and workers. A proxy purchase does not change these browser rules.
+The last setting was never applied to a managed profile. It introduces a stale Windows Date reading while Intl remains correct. The original UTC+1 expectation in this table came from old host rules; current IANA data requires UTC+0, which the default browser already supplies. The corrected managed verification is in the linked clock report.
 
 The local preflight previously checked the timezone name and Date offset alone. It now also records and verifies the Intl offset. A known mismatch in either clock fails; absent readings remain UNKNOWN. Reports use `DIRECT_SIGNALS_V4`, so older approvals cannot authorize the stronger check. Frozen fingerprint fields, saved evidence, exact holds and processing intent remain unchanged. The seven direct detector assessments and vendor verdict logic are unchanged.
 
 ## Required supported repair and verification
 
 1. Expose a persistent per-profile noise setting in AliasMode, preserving existing profile identities. Demonstrate the disabled setting through its actual CLI-managed launch. Disabling noise can make readback values shared across profiles on one computer; passing this check does not prove that accounts cannot be linked.
-2. Ship a browser core with correct timezone data. Verify Date, Intl and an unattached worker against current timezone rules, including Casablanca and daylight-saving transitions. Both clocks must agree; changing only the displayed timezone name is insufficient.
+2. **Clock portion resolved:** the unchanged browser passes Date, Intl and an unattached worker against the corrected current IANA reference. No browser-core clock patch is required. Both clocks must still match the configured timezone and current rules; the old raw assessments remain retained.
 3. Repeat the same failing diagnostic identity, then the full unchanged battery through the production managed path. Preserve failures, missing results and raw vendor warnings. The previous legacy Incolumitas WebDriver FAIL remains visible and is not exempted here.
 4. Verify the exact future proxy/profile setup after configuration. This study uses the existing connection, whose country/timezone estimate still disagrees with the browser's zone. No proxy has been bought or validated.
 
-CloakBrowser through AliasMode previously had a correct clock but retained the tampering warning. AliasMode also documents that CloakBrowser profiles on one computer may be linkable. It is not selected as an all-pass alternative. [AliasMode documentation](https://aliasmode.com/docs/).
+CloakBrowser through AliasMode previously matched the old host clock but retained the tampering warning. Matching that outdated reference did not establish a correct current clock; see the clock correction above. AliasMode also documents that CloakBrowser profiles on one computer may be linkable. It is not selected as an all-pass alternative. [AliasMode documentation](https://aliasmode.com/docs/).
 
 No message or issue has been sent to the provider. This report is the reproducible repair handoff; a provider release and managed-path verification are still required before an all-clear.
 

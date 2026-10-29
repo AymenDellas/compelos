@@ -2,6 +2,14 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),core=require('../../src/lib/linkedin-workers.cjs'),alias=require('../../src/lib/aliasmode-store.cjs'),store=require('../../src/lib/account-session-store.cjs'),{database}=require('./db-fixture.cjs');
 const input=id=>({accountId:id,revision:0,engine:'aliasmode-chromium',launchMode:'headful',proxyId:'dedicated-one',proxyHost:'proxy.test',proxyPort:8000,proxyCountry:'GB',proxyTimezone:'Europe/London',expectedExitIp:'192.0.2.10',policy:{}});
 
+test('Casablanca network preflight accepts both correct UTC+0 clocks using current IANA data and remains paused',async()=>{
+ const db=await database(),pool=db.pool,{createSessionGuard}=require('../../src/lib/account-session-guard.cjs');try{
+  await core.ensure(pool);await alias.ensure(pool);const id=await alias.importProfile(pool,{profileId:'current-clock',name:'Current clock',expectedMemberName:'Current clock'});await store.configure(pool,{...input(id),proxyCountry:'MA',proxyTimezone:'Africa/Casablanca'});await core.acquireSession(pool,id,'owner');
+  const guard=createSessionGuard({pool,owner:'owner',core,now:()=>Date.parse('2026-10-29T12:00:00Z'),checks:{network:async()=>({ip:'192.0.2.10',country:'MA',timezone:'Africa/Casablanca'}),probe:async()=>({timezone:'Africa/Casablanca',timezoneOffsetMinutes:0,timezoneIntlOffsetMinutes:0})}});
+  await store.request(pool,id,'preflight');const a=await core.readRuntimeAccount(pool,id),r=await guard.command(a,{});assert.equal(r.session_evidence.network.verdict,'PASS');assert.equal(r.session_evidence.network.clock.expectedOffsetMinutes,0);assert.equal(r.session_evidence.network.clock.referenceVersion,'IANA_TZDB_2026f');assert.equal(r.processing_enabled,false);assert.equal(r.attention_reason,'');
+ }finally{await db.close();}
+});
+
 test('network preflight rejects a correct timezone name with the wrong clock and preserves prior gate evidence',async()=>{
  const db=await database(),pool=db.pool,{createSessionGuard}=require('../../src/lib/account-session-guard.cjs');try{
   await core.ensure(pool);await alias.ensure(pool);const id=await alias.importProfile(pool,{profileId:'clock',name:'Clock',expectedMemberName:'Clock'});await store.configure(pool,input(id));await core.acquireSession(pool,id,'owner');

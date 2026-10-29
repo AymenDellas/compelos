@@ -1,5 +1,9 @@
 # Account session controls and diagnostic evidence
 
+## Clock reference correction — 29 October 2026
+
+The [clock repair](engine-clock-reference.md) corrects the preceding diagnosis: AliasMode already reports the correct Casablanca UTC+0 under current IANA rules. Node's older tzdb incorrectly expected UTC+1. The reference now uses pinned tzdb 2026f; a fresh CLI-managed blank profile passes both native clocks and all 14 main/worker samples without browser changes. The modification warning remains unchanged, and no account start or all-clear is authorized. Earlier clock assessments below are historical and superseded.
+
 ## Reader and clock repairs — 29 October 2026
 
 The [latest repair and provider measurements](engine-diagnostic-readers.md) correct obsolete result readers, expose vendor warnings, bind approvals to the reader version and reject a matching timezone name with an incorrect clock offset. The full V3 comparison preserves the legacy WebDriver FAIL. Fresh AliasMode Chromium profiles also show a UTC-offset inconsistency and a recurring Fingerprint tampering warning; a native clock correction did not work. A focused CloakBrowser profile has the correct clock and all 23 automation flags clear, but still reports tampering. No clock override, compatibility exception, engine migration, account start or all-clear is enabled. The earlier three clear Fingerprint observations below remain historical evidence; the warning subsequently recurred.

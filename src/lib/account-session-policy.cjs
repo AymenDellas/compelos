@@ -1,5 +1,5 @@
 'use strict';
-const {createHash,randomInt}=require('node:crypto');
+const {createHash,randomInt}=require('node:crypto'),clock=require('./clock-reference.cjs');
 const DAY=86400000;
 const DEFAULTS=Object.freeze({warmupDays:4,warmupProfilesPerDay:10,rampStepDays:7,recoveryDays:7,minIntervalSeconds:60,maxIntervalSeconds:150,staggerSeconds:120,renderEvery:10});
 const integer=(value,name,min,max)=>{if(!Number.isInteger(value)||value<min||value>max)throw Error(`${name} must be ${min}–${max}.`);return value;};
@@ -21,7 +21,7 @@ function fingerprint(probe,metadata={}){
 }
 // A report captured by obsolete result readers cannot authorize this setup.
 // Invalidate by key; preserve saved evidence, fingerprint fields and all holds.
-function evidenceKey(account){return createHash('sha256').update(JSON.stringify([account.aliasmode_profile_id,Number(account.binding_revision||0),Number(account.session_revision||0),account.engine,account.launch_mode,account.proxy_id,require('./browser-control-version.cjs'),require('./stealth-self-test.cjs').VERSION])).digest('hex');}
+function evidenceKey(account){return createHash('sha256').update(JSON.stringify([account.aliasmode_profile_id,Number(account.binding_revision||0),Number(account.session_revision||0),account.engine,account.launch_mode,account.proxy_id,require('./browser-control-version.cjs'),require('./stealth-self-test.cjs').VERSION,clock.VERSION])).digest('hex');}
 function localDay(now,timezone='UTC'){return new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));}
 function dayNumber(day){return Math.floor(Date.parse(day+'T00:00:00Z')/DAY);}
 function lifecycle(account,{now=Date.now(),day=localDay(now,account.proxy_timezone||'UTC')}={}){
@@ -47,17 +47,12 @@ function clockVerdict(probe,timezone,now=Date.now()){
  const validOffset=value=>Number.isInteger(value)&&Math.abs(value)<=840;
  const observedOffsetMinutes=validOffset(probe?.timezoneOffsetMinutes)?probe.timezoneOffsetMinutes:null;
  const observedIntlOffsetMinutes=validOffset(probe?.timezoneIntlOffsetMinutes)?probe.timezoneIntlOffsetMinutes:null;
- let expectedOffsetMinutes;
- try{
-  const name=new Intl.DateTimeFormat('en-US',{timeZone:timezone,timeZoneName:'longOffset'}).formatToParts(new Date(now)).find(p=>p.type==='timeZoneName')?.value;
-  const m=name?.match(/^GMT([+-])(\d{2}):(\d{2})$/);
-  expectedOffsetMinutes=name==='GMT'?0:m?(m[1]==='+'?-1:1)*(Number(m[2])*60+Number(m[3])):null;
- }catch{expectedOffsetMinutes=null;}
+ const expectedOffsetMinutes=clock.offsetMinutes(timezone,now);
  if(expectedOffsetMinutes===null)return {verdict:'UNKNOWN',reason:'The configured timezone clock offset could not be verified.'};
- const details={timezone,observedOffsetMinutes,observedIntlOffsetMinutes,expectedOffsetMinutes};
+ const details={timezone,observedOffsetMinutes,observedIntlOffsetMinutes,expectedOffsetMinutes,referenceVersion:clock.VERSION};
  // A known clock mismatch wins over another clock being unavailable. Native
- // V8 --no-icu-timezone-data fixed Date but left Intl wrong in the measured
- // AliasMode core; accepting only the former would hide the remaining fault.
+ // V8 --no-icu-timezone-data made Date use stale Windows rules while Intl
+ // stayed current. Both must match current IANA rules, not the host clock.
  if([observedOffsetMinutes,observedIntlOffsetMinutes].some(value=>value!==null&&value!==expectedOffsetMinutes))return {...details,verdict:'FAIL',reason:'The browser reports a local time that does not match its timezone. Correct the AliasMode profile timezone or browser core before rerunning the network check.'};
  if(observedOffsetMinutes===null||observedIntlOffsetMinutes===null)return {...details,verdict:'UNKNOWN',reason:'Both browser clock readings could not be verified. Run the network check again.'};
  return {...details,verdict:'PASS',reason:'Both browser clock readings match the configured timezone.'};

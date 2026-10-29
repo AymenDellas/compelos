@@ -1,5 +1,7 @@
 # Session checklist audit — 28 October 2026
 
+**Latest clock correction:** [current IANA clock reference](engine-clock-reference.md). The earlier UTC+1 expectation was outdated; AliasMode's Casablanca UTC+0 is correct from 20 September 2026. The unchanged managed browser passes both clocks and all 14 main/worker samples with the corrected reference. Browser tampering remains a separate unresolved issue; there is no account-operation all-clear. Earlier clock claims below are superseded.
+
 **Latest provider investigation:** [reproduced image-noise warning and clock fault](engine-provider-repair.md). Disabling the provider's readback-noise feature cleared the previously failing diagnostic identity in both controlled repetitions; enabling it reproduced the warning in both. Ordinary Chromium passed the focused reference checks, but the user chose to keep AliasMode. A supported provider repair is still required. No all-clear or account start is authorized.
 
 **Latest repair:** [reader corrections and clock evidence](engine-diagnostic-readers.md) make the regular checks retain current/legacy results, all Sannysoft rows and Fingerprint warnings. Timezone preflight now checks the actual clock offset. The latest provider studies reproduce a clock inconsistency in AliasMode Chromium and browser tampering on fresh profiles in both supported cores; a native clock correction failed. These are unresolved findings. No account is cleared, and no compatibility exception or production browser override is enabled.

@@ -37,6 +37,7 @@
     "ipaddr.js": "^2.5.0",
     "lucide": "latest",
     "lucide-react": "latest",
+    "moment-timezone": "0.6.6",
     "next": "latest",
     "papaparse": "^5.5.3",
     "pg": "^8.23.0",
