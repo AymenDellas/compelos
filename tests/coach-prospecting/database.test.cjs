@@ -72,12 +72,14 @@ test("prospecting shares account leases and budgets, persists jobs and protects 
       null,
       "a discovery run cannot use another account",
     );
-    const [run, duplicate] = await Promise.all([
+    const claims = await Promise.all([
       store.claimSource(pool, "legacy-0", "owner-one"),
       store.claimSource(pool, "legacy-0", "owner-one"),
     ]);
-    assert.ok(run);
-    assert.equal(duplicate, null);
+    assert.equal(claims.filter(Boolean).length, 1, "exactly one concurrent claimant wins");
+    assert.equal(claims.filter(value => value === null).length, 1);
+    const run = claims.find(Boolean);
+    assert.equal(run.id, runId);
     assert.equal(
       (await core.settings(pool)).accounts[0].dailyCount,
       0,

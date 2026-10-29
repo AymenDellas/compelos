@@ -1,6 +1,6 @@
 'use strict';
 // Read-only measurements. Never patch navigator, export cookies or make Node TLS requests.
-const VERSION='DIRECT_SIGNALS_V4',IDENTITY_URL='https://browserscan.net/';
+const VERSION='DIRECT_SIGNALS_V5',IDENTITY_URL='https://browserscan.net/';
 const BATTERY=Object.freeze([
  {url:'https://www.browserscan.net/bot-detection',kind:'browserscan'},
  {url:'https://bot.incolumitas.com/',kind:'incolumitas'},
@@ -17,7 +17,7 @@ async function probe(page,{checkCDP=false}={}){
   let gl,debug;try{gl=document.createElement('canvas').getContext('webgl');debug=gl?.getExtension('WEBGL_debug_renderer_info');}catch{errors.webgl='unavailable';}
   const clock=new Date();
   const p={origin:location.origin,secureContext:isSecureContext,
-   webdriver:read('webdriver',()=>navigator.webdriver),userAgent:read('userAgent',()=>navigator.userAgent),platform:read('platform',()=>navigator.platform),
+   webdriver:read('webdriver',()=>navigator.webdriver),webdriverPropertyPresent:read('webdriverPropertyPresent',()=> 'webdriver' in navigator),userAgent:read('userAgent',()=>navigator.userAgent),platform:read('platform',()=>navigator.platform),
    chrome:read('chrome',()=>window.chrome===null?'null':typeof window.chrome),plugins:read('plugins',()=>navigator.plugins.length),
    screen:read('screen',()=>({width:screen.width,height:screen.height})),timezone:read('timezone',()=>Intl.DateTimeFormat().resolvedOptions().timeZone),timezoneOffsetMinutes:read('timezoneOffsetMinutes',()=>clock.getTimezoneOffset()),
    timezoneIntlOffsetMinutes:read('timezoneIntlOffsetMinutes',()=>{
@@ -160,6 +160,7 @@ async function run(page,{assertActive=async()=>{},now=Date.now,urls=URLS,resultT
      try{const h=await page.waitForFunction(siteResult,{timeout:resultTimeoutMs,polling:'mutation'},kind);try{external=await h.jsonValue();}finally{await h.dispose();}}catch{/* Direct measurements remain available if the site UI is unsupported/slow. */}
     }
     e.external=external||{verdict:'UNKNOWN',reason:'No completed supported site result; direct checks are independent.'};
+    if(kind==='incolumitas'&&external){await assertActive();try{e.external={...e.external,sourceHashes:await sourceHashes(page)};}catch{e.sourceVerificationError='Public scanner source hashes unavailable; no compatibility exception can apply.';}}
     await assertActive();stage='direct-probe';e.probe=await probe(page,{checkCDP:true});e={...e,...assessSite(e)};
     // Raw page text is supporting evidence, not a required detector signal.
     // Failure to capture it cannot erase a completed PASS or confirmed FAIL.
@@ -173,7 +174,19 @@ async function run(page,{assertActive=async()=>{},now=Date.now,urls=URLS,resultT
   await assertActive();sites.push({...e,durationMs:now()-at});
  }
  const overall=verdict(sites),counts={PASS:0,FAIL:0,UNKNOWN:0};for(const s of sites)counts[s.verdict]++;
- return {version:VERSION,verdict:overall,reason:overall==='PASS'?'All required direct browser and TLS capture/coherence checks passed; no available site result reported failure.':overall==='FAIL'?'Measured browser signals or a completed site test reported failure.':'One or more required browser/TLS signals could not be read.',scope:'Browser signal heuristics and browser-routed TLS capture/coherence; not proof of an undetectable browser.',controlTransport:'CDP',checkedAt:new Date(now()).toISOString(),durationMs:now()-start,counts,sites};
+ const admission=require('./diagnostic-admission.cjs').assess(sites);
+ return {version:VERSION,verdict:admission.verdict,reason:admission.reason,measurementVerdict:overall,admission,scope:admission.scope,controlTransport:'CDP',checkedAt:new Date(now()).toISOString(),durationMs:now()-start,counts,countsScope:'Raw direct/site/TLS results; compatibility does not rewrite these counts.',sites};
+}
+async function sourceHashes(page){
+ return page.evaluate(async()=>{
+  if(location.origin!=='https://bot.incolumitas.com')throw Error('Wrong scanner origin');
+  const entries=await Promise.all([['fpScanner','/fpScanner.js'],['fpCollect','/fpCollect.min.js']].map(async([name,path])=>{
+   const response=await fetch(path,{credentials:'omit',cache:'force-cache',signal:AbortSignal.timeout(5000)});if(!response.ok)throw Error('Source unavailable');
+   const reader=response.body.getReader(),parts=[];let size=0;for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>262144){await reader.cancel();throw Error('Source too large');}parts.push(value);}
+   const body=new Uint8Array(size);let offset=0;for(const part of parts){body.set(part,offset);offset+=part.length;}
+   const digest=await crypto.subtle.digest('SHA-256',body);return [name,Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('')];
+  }));return Object.fromEntries(entries);
+ });
 }
 async function network(page,{assertActive=async()=>{}}={}){
  const readings=[];
@@ -186,4 +199,4 @@ async function network(page,{assertActive=async()=>{}}={}){
  }
  await assertActive();return {...readings[0],rotating:new Set(readings.map(v=>v.ip)).size!==1,readings};
 }
-module.exports={VERSION,BATTERY,URLS,probe,identityProbe,assessProbe,assessSite,siteResult,assessTLS,run,network};
+module.exports={VERSION,BATTERY,URLS,probe,identityProbe,assessProbe,assessSite,siteResult,assessTLS,run,network,sourceHashes};

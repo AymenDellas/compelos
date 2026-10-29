@@ -50,22 +50,26 @@ function createAliasModeClient({config={},fetch:fetcher=globalThis.fetch,timeout
   const state=await active(id);if(!state.active)return state;
   const mode=await helper.status(id),again=await active(id);
   if(!mode.running||mode.state!=='running'||!again.active||again.endpoint!==state.endpoint||Number(new URL(state.endpoint).port)!==mode.port)throw providerError('ALIASMODE_INSTANCE_CHANGED','AliasMode CLI and Local API did not confirm the same running browser. Check the API address and profile before retrying.');
-  return {...state,headless:mode.headless};
+  const readback=await helper.readback(id);return {...state,headless:mode.headless,readback};
  }
  async function start(id,{headless=true}={}){
   if((await active(id)).active)throw providerError('ALIASMODE_PROFILE_BUSY','The profile is already open. Reconcile its mode before starting.');
+  const readback=await helper.readback(id);
   const opened=await helper.open(id,{headless});
   try{
    const state=await inspect(id);
    if(!state.active||state.headless!==headless||Number(new URL(state.endpoint).port)!==opened.port)throw providerError('ALIASMODE_MODE_UNVERIFIED','AliasMode did not confirm the requested browser mode. Check its runtime before retrying.');
+   if(JSON.stringify(state.readback)!==JSON.stringify(readback))throw providerError('ALIASMODE_READBACK_UNVERIFIED','The rendering configuration changed while AliasMode was opening the profile.');
    return state;
   }catch(error){error.startedProfilePort=opened.port;throw error;}
  }
  async function list(){let profiles=[],truncated=false;for(let page=1;page<=2;page++){const data=await request('/api/v1/user/list?'+new URLSearchParams({page:String(page),page_size:'100'}));if(!Array.isArray(data.list))throw providerError('ALIASMODE_API_RESPONSE','AliasMode did not return a supported profile list.');profiles.push(...data.list.map(publicProfile).filter(Boolean));if(data.list.length<100)break;if(page===2)truncated=true;}return {profiles:[...new Map(profiles.map(p=>[p.id,p])).values()],truncated};}
- async function createProfile({name,engine='aliasmode-chromium'}){
-  if(typeof name!=='string'||!name.trim()||name.length>80||!['aliasmode-chromium','cloakbrowser'].includes(engine))throw providerError('ALIASMODE_PROFILE_CONFIG','Enter a profile name and supported Chromium engine.');
+ async function createProfile({name,engine='aliasmode-chromium',nativeReadback=true}){
+  if(typeof name!=='string'||!name.trim()||name.length>80||!['aliasmode-chromium','cloakbrowser'].includes(engine)||typeof nativeReadback!=='boolean')throw providerError('ALIASMODE_PROFILE_CONFIG','Enter a profile name and supported Chromium engine.');
+  if(engine==='aliasmode-chromium'&&nativeReadback)await helper.readbackCapability();
   const result=await request('/api/v1/user/create',{method:'POST',body:{name:name.trim(),engine:'chromium',chromium_runtime:engine==='aliasmode-chromium'?'aliasmode':'cloakbrowser',fingerprint_config:{screen_resolution:'1920_1080'}}});
-  return {id:profileId(result.id),name:name.trim(),engine};
+  const id=profileId(result.id);if(engine==='aliasmode-chromium'&&nativeReadback)try{await helper.readback(id,'native');}catch{const error=providerError('ALIASMODE_READBACK_CONFIG','The blank profile was created, but native rendering was not confirmed. The profile was retained for review.');error.createdProfileId=id;throw error;}
+  return {id,name:name.trim(),engine};
  }
  return {health:()=>request('/status'),capabilities:async()=>({helperVersion:await helper.version(),headless:true}),createProfile,list,active,inspect,start,stop:async id=>{await request('/api/v1/browser/stop?user_id='+encodeURIComponent(profileId(id)),{timeout:90000});},idle:async()=>{await helper.idle();await queue.idle();},request};
 }

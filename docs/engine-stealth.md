@@ -1,5 +1,9 @@
 # Account session controls and diagnostic evidence
 
+## Gate and provider repair — 29 October 2026
+
+The user authorized [correcting local admission and repairing the modification warning](engine-gate-repair.md). A narrowly source-verified legacy property check remains a raw FAIL but is a documented compatibility finding. Actual modification warnings now block admission. A published local AliasMode patch makes native image readback an explicit opt-in for new profiles; existing profiles and identity hashes remain unchanged. Two fresh default-native confirmation passes completed with no bot/modification warning, all 23 automation flags false, and correct clocks. An earlier Sannysoft timeout remains recorded. This clears the local repair, not a future proxy/profile or account start; actual bindings, reviews, recovery and holds remain authoritative. Earlier unresolved-provider assessments below are historical and superseded by the repair report.
+
 ## Clock reference correction — 29 October 2026
 
 The [clock repair](engine-clock-reference.md) corrects the preceding diagnosis: AliasMode already reports the correct Casablanca UTC+0 under current IANA rules. Node's older tzdb incorrectly expected UTC+1. The reference now uses pinned tzdb 2026f; a fresh CLI-managed blank profile passes both native clocks and all 14 main/worker samples without browser changes. The modification warning remains unchanged, and no account start or all-clear is authorized. Earlier clock assessments below are historical and superseded.

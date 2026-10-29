@@ -28,8 +28,8 @@ function pageFixture({p=normal(),tlsData=tls(),ui=null}={}){
   evaluate:async(_fn,arg)=>typeof arg==='boolean'?p:url===checks.URLS.at(-1)?tlsData:{title:'Fixture test',text:'Example marketing JSON: {"cdpDetected":false}'},
  };
 }
-test('complete direct/TLS signals produce PASS even without vendor UI; positives always produce FAIL',async()=>{
- const page=pageFixture(),report=await checks.run(page,{resultTimeoutMs:1});assert.equal(report.verdict,'PASS');assert.equal(report.version,checks.VERSION);assert.equal(report.controlTransport,'CDP');assert.equal(report.sites.length,7);assert.equal(report.sites.at(-1).tls.ja4,tls().ja4);assert.deepEqual(page.calls,checks.URLS);
+test('complete direct/TLS signals retain raw PASS while missing required vendor results stay UNKNOWN; positives always FAIL',async()=>{
+ const page=pageFixture(),report=await checks.run(page,{resultTimeoutMs:1});assert.equal(report.measurementVerdict,'PASS');assert.equal(report.verdict,'UNKNOWN');assert.equal(report.version,checks.VERSION);assert.equal(report.controlTransport,'CDP');assert.equal(report.sites.length,7);assert.equal(report.sites.at(-1).tls.ja4,tls().ja4);assert.deepEqual(page.calls,checks.URLS);
  assert.equal((await checks.run(pageFixture({p:{...normal(),cdpDetected:true}}),{resultTimeoutMs:1})).verdict,'FAIL');
  assert.equal((await checks.run(pageFixture({ui:{verdict:'FAIL'}}),{resultTimeoutMs:1})).verdict,'FAIL');
  assert.equal((await checks.run(pageFixture({p:{...normal(),webglVendor:null}}),{resultTimeoutMs:1})).verdict,'UNKNOWN');
@@ -37,7 +37,7 @@ test('complete direct/TLS signals produce PASS even without vendor UI; positives
  const badProbe=pageFixture({ui:{verdict:'FAIL'}}),evaluate=badProbe.evaluate;badProbe.evaluate=async(fn,arg)=>{if(typeof arg==='boolean')throw Error('Fixture probe unreadable');return evaluate(fn,arg);};
  const retained=await checks.run(badProbe,{resultTimeoutMs:1});assert.equal(retained.verdict,'FAIL');assert.equal(retained.sites[1].verdict,'FAIL');assert.equal(retained.sites[0].failureStage,'direct-probe');assert.match(retained.sites[0].reason,/Fixture probe unreadable/);
  const noText=pageFixture(),read=noText.evaluate;noText.evaluate=async(fn,arg)=>{if(arg===undefined&&noText.url()!==checks.URLS.at(-1))throw Error('Optional text unavailable');return read(fn,arg);};
- assert.equal((await checks.run(noText,{resultTimeoutMs:1})).verdict,'PASS');
+ const partial=await checks.run(noText,{resultTimeoutMs:1});assert.equal(partial.measurementVerdict,'PASS');assert.equal(partial.verdict,'UNKNOWN');
 });
 test('dashboard summary includes TLS as the seventh bounded detector entry',()=>{
  const state=require('../../src/lib/account-session-store.cjs').publicState({daily_limit:300,session_evidence:{gate:{verdict:'UNKNOWN',sites:checks.URLS.map(url=>({url,verdict:'UNKNOWN'}))}}});

@@ -12,7 +12,7 @@ test('visible/headless browser fixtures read real JS signals, actual result elem
    const report=await checks.run(page,{resultTimeoutMs:1000});assert.equal(report.verdict,'FAIL','Unmodified fixture Chrome exposes automation; never manufacture a PASS');assert.equal(report.sites.length,7);
    assert.equal(report.sites[2].external.source,'#jsonResult');assert.equal(report.sites[3].external.verdict,'PASS');assert.equal(report.sites[5].external.verdict,'PASS');assert.equal(report.sites.at(-1).verdict,'PASS');
    assert.equal(report.sites.at(-1).tls.secretFixtureValue,undefined);assert.equal(typeof report.sites[0].probe.cdpDetected,'boolean');assert.equal(typeof report.sites[0].probe.plugins,'number');
-   assert.ok(report.sites[0].probe.webglRenderer);assert.equal(report.sites[0].probe.webdriver,true);assert.ok(requests.every(u=>checks.URLS.includes(u)||u.endsWith('/favicon.ico')));
+   assert.ok(report.sites[0].probe.webglRenderer);assert.equal(report.sites[0].probe.webdriver,true);assert.ok(requests.every(u=>checks.URLS.includes(u)||u.endsWith('/favicon.ico')||['https://bot.incolumitas.com/fpScanner.js','https://bot.incolumitas.com/fpCollect.min.js'].includes(u)));
    // Test-only positive control: emulate a console serializer accessing stack.
    await page.evaluate(()=>{window.fixtureDebug=console.debug;console.debug=e=>{void e.stack;};});
    assert.equal((await checks.probe(page,{checkCDP:true})).cdpDetected,true);

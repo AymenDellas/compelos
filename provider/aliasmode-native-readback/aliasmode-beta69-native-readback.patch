@@ -1,0 +1,134 @@
+diff --git a/agent-control.test.ts b/agent-control.test.ts
+index b2e84e2..4464f1e 100644
+--- a/agent-control.test.ts
++++ b/agent-control.test.ts
+@@ -358 +358 @@ function cloudEditHarness() {
+-  const profile = buildNewProfile({ name: "Cloud account", group: "accounts" }, () => false);
++  const profile = buildNewProfile({ name: "Cloud account", group: "accounts", engine: "chromium", chromiumRuntime: "aliasmode" }, () => false);
+@@ -381,0 +382,16 @@ function cloudEditHarness() {
++test("readback capability comes from the running manager and exposes only selected configuration fields", async () => {
++  const h = cloudEditHarness();
++  const capability = await h.session.enqueue(wire("profiles.readbackStatus"));
++  expect(capability).toMatchObject({ ok: true, result: { patchVersion: "COMPELOS_ALIASMODE_READBACK_V1" } });
++  const before = JSON.stringify(h.authoritative);
++  const seeded = await h.session.enqueue(wire("profiles.readbackStatus", { profileId: "profile1" }));
++  expect(seeded).toMatchObject({ ok: true, result: { mode: "seeded", supported: true } });
++  expect(JSON.stringify(h.authoritative)).toBe(before);
++  h.authoritative.payload.profile.tags = ["keep", "compelos-native-readback-v1"];
++  const native = await h.session.enqueue(wire("profiles.readbackStatus", { profileId: "profile1" }));
++  expect(native).toMatchObject({ ok: true, result: { mode: "native", supported: true } });
++  expect(JSON.stringify(native)).not.toContain("old-password");
++  expect(JSON.stringify(native)).not.toContain("session-secret");
++  expect(h.updates).toHaveLength(0);
++});
++
+diff --git a/agent-control.ts b/agent-control.ts
+index 0bcd5e9..7191a95 100644
+--- a/agent-control.ts
++++ b/agent-control.ts
+@@ -4,0 +5,3 @@ import { attachTimezones } from "./geoip.ts";
++import { COMPELOS_READBACK_PATCH, nativeReadback } from "./fingerprint.ts";
++import { decodePortableProfile } from "./portable-profile.ts";
++import { assertSafeProfileId } from "./profile-id.ts";
+@@ -228,0 +232,2 @@ export class AgentControlSession {
++      case "profiles.readbackStatus":
++        return await this.readbackStatus(params);
+@@ -301,0 +307,15 @@ export class AgentControlSession {
++  private async readbackStatus(params: Record<string, unknown>) {
++    if (params.profileId === undefined) return { patchVersion: COMPELOS_READBACK_PATCH, capability: "native-readback-opt-in-v1" };
++    const profileId = stringParam(params, "profileId");
++    assertSafeProfileId(profileId);
++    let profile;
++    if (this.deps.cloudBrowser) {
++      const { connection } = this.cloudMcpConnection();
++      const authoritative = await connection.client.getProfile(profileId);
++      profile = decodePortableProfile(authoritative.payload).profile;
++    } else profile = this.deps.store.getProfile(profileId);
++    if (!profile || profile.id !== profileId) throw agentError("profile_not_found", "profile not found");
++    const supported = (profile.engine ?? "chromium") === "chromium" && profile.chromiumRuntime === "aliasmode";
++    return { profileId, supported, mode: supported ? nativeReadback(profile) ? "native" : "seeded" : "engine-default", patchVersion: COMPELOS_READBACK_PATCH };
++  }
++
+diff --git a/agent/aliasmode-mcp.ts b/agent/aliasmode-mcp.ts
+index db2bfa8..75716e0 100644
+--- a/agent/aliasmode-mcp.ts
++++ b/agent/aliasmode-mcp.ts
+@@ -7,0 +8 @@ import { ALIASMODE_VERSION } from "../version.ts";
++import { COMPELOS_NATIVE_READBACK_TAG, COMPELOS_READBACK_PATCH } from "../fingerprint.ts";
+@@ -173 +174,32 @@ async function profiles(args: string[]): Promise<unknown> {
+-  throw new Error("profiles requires list, create, or delete");
++  if (action === "readback") {
++    const mode = value(rest, "mode") ?? "status";
++    if (mode === "capability") return await withRuntime((client) => client.call("profiles.readbackStatus"));
++    const profileId = requireProfile(rest);
++    if (!["status", "native", "seeded"].includes(mode)) throw new Error("readback mode requires status, native or seeded");
++    return await withRuntime(async (client) => {
++      // Ask the running manager, so a patched helper cannot certify an old
++      // unpatched launcher that would silently keep altering the readback.
++      const capability = await client.call("profiles.readbackStatus", { profileId });
++      if (capability.patchVersion !== COMPELOS_READBACK_PATCH) throw new Error("the running manager lacks the native readback patch");
++      if (mode !== "status" && capability.supported !== true) throw new Error("native readback requires AliasMode Chromium");
++      const roster = await client.call("profiles.list");
++      const profile = roster.profiles.find((p: { id: string }) => p.id === profileId);
++      if (!profile) throw new Error("profile not found");
++      const tags: string[] = Array.isArray(profile.tags) ? profile.tags : [];
++      const current = capability.mode;
++      if (mode !== "status" && mode !== current) {
++        if (profile.running) throw new Error("close the profile before changing readback mode");
++        if (!Number.isSafeInteger(profile.expectedVersion) || profile.permission !== "edit") throw new Error("readback changes require an editable Cloud profile and its current version");
++        const nextTags = tags.filter(t => t !== COMPELOS_NATIVE_READBACK_TAG);
++        if (mode === "native") nextTags.push(COMPELOS_NATIVE_READBACK_TAG);
++        await client.call("profiles.update", { profileId, expectedVersion: profile.expectedVersion, set: { tags: nextTags } });
++        const updated = await client.call("profiles.list");
++        const saved = updated.profiles.find((p: { id: string }) => p.id === profileId);
++        if (!saved || (saved.tags?.includes(COMPELOS_NATIVE_READBACK_TAG) ? "native" : "seeded") !== mode) throw new Error("readback configuration was not confirmed");
++      }
++      const observed = await client.call("profiles.readbackStatus", { profileId });
++      if (observed.mode !== (mode === "status" ? current : mode) || observed.patchVersion !== COMPELOS_READBACK_PATCH) throw new Error("manager readback configuration was not confirmed");
++      return observed;
++    });
++  }
++  throw new Error("profiles requires list, create, readback or delete");
+diff --git a/fingerprint.test.ts b/fingerprint.test.ts
+index 18f5ce7..0799708 100644
+--- a/fingerprint.test.ts
++++ b/fingerprint.test.ts
+@@ -11,0 +12 @@ import {
++  COMPELOS_NATIVE_READBACK_TAG,
+@@ -38,0 +40,11 @@ function profile(overrides: Partial<Profile> = {}): Profile {
++test("explicit native readback removes only the noise switch; existing profile flags remain unchanged", () => {
++  const original = profile({ chromiumRuntime: "aliasmode", tags: ["keep-this-tag"] });
++  const before = structuredClone(original);
++  const seeded = deriveFingerprintFlags(original, 4);
++  const native = deriveFingerprintFlags({ ...original, tags: [...original.tags!, COMPELOS_NATIVE_READBACK_TAG] }, 4);
++  expect(seeded).toContain("--fingerprint-noise");
++  expect(native).toEqual(seeded.filter(flag => flag !== "--fingerprint-noise"));
++  expect(original).toEqual(before);
++  expect(deriveFingerprintFlags({ ...original, tags: ["compelos-native-readback-v0"] }, 4)).toEqual(seeded);
++});
++
+diff --git a/fingerprint.ts b/fingerprint.ts
+index f046be1..5ee975c 100644
+--- a/fingerprint.ts
++++ b/fingerprint.ts
+@@ -19,0 +20,8 @@ import { proxyUrl } from "./proxy.ts";
++// CompelOS local patch: explicit, persistent opt-out for native readback.
++// Untagged profiles retain their original identity and existing launch flags.
++export const COMPELOS_NATIVE_READBACK_TAG = "compelos-native-readback-v1";
++export const COMPELOS_READBACK_PATCH = "COMPELOS_ALIASMODE_READBACK_V1";
++export function nativeReadback(profile: Pick<Profile, "tags">): boolean {
++  return profile.tags?.includes(COMPELOS_NATIVE_READBACK_TAG) === true;
++}
++
+@@ -245 +253 @@ export function deriveFingerprintFlags(profile: Profile, hostCores = availablePa
+-  if (profile.chromiumRuntime) flags.push("--fingerprint-noise");
++  if (profile.chromiumRuntime && !nativeReadback(profile)) flags.push("--fingerprint-noise");
+diff --git a/launcher.ts b/launcher.ts
+index 50eef7a..c511679 100644
+--- a/launcher.ts
++++ b/launcher.ts
+@@ -43 +43 @@ import {
+-  platformFromUA, proxyServerFlag,
++  platformFromUA, proxyServerFlag, nativeReadback,
+@@ -1437,0 +1438 @@ export class Launcher {
++      nativeReadback(profile),

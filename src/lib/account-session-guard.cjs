@@ -2,7 +2,7 @@
 const policy=require('./account-session-policy.cjs'),store=require('./account-session-store.cjs'),diagnostics=require('./stealth-self-test.cjs');
 function createSessionGuard({pool,owner,core,now=Date.now,checks=diagnostics}={}){
  const metadata=a=>({profileId:a.aliasmode_profile_id,engine:a.engine,mode:a.launch_mode,proxyId:a.proxy_id,revision:Number(a.session_revision)});
- const observedFingerprint=async(a,page)=>policy.fingerprint(await checks.identityProbe(page,{assertActive:()=>active(a)}),metadata(a));
+ const observedFingerprint=async(a,page)=>policy.fingerprint(await checks.identityProbe(page,{assertActive:()=>active(a)}),{...metadata(a),...page.providerConfiguration});
  async function active(a){if(!await core.sessionOwned(pool,a.id,owner))throw Error('Session ownership changed during diagnostics.');const current=await core.readRuntimeAccount(pool,a.id);if(!current||current.control_version!==a.control_version||Number(current.session_revision)!==Number(a.session_revision)||current.attention_reason)throw Error('Account paused, held or configuration changed during session work.');return current;}
  async function verify(a,page){
   await active(a);const observed=await observedFingerprint(a,page),baseline=a.session_evidence?.fingerprint;

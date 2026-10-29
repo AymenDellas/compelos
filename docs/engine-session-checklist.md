@@ -1,5 +1,7 @@
 # Session checklist audit — 28 October 2026
 
+**Latest gate/provider repair:** [corrected local admission and native-readback confirmation](engine-gate-repair.md). The local AliasMode repair is installed; two new default-native confirmations pass with no modification/bot warning, all 23 automation flags false and correct clocks. The legacy site's raw FAIL and an earlier connection timeout remain visible. Existing profiles/holds remain unchanged; the future proxy/profile needs its own admission. Earlier unresolved-provider statements below describe the preceding studies.
+
 **Latest clock correction:** [current IANA clock reference](engine-clock-reference.md). The earlier UTC+1 expectation was outdated; AliasMode's Casablanca UTC+0 is correct from 20 September 2026. The unchanged managed browser passes both clocks and all 14 main/worker samples with the corrected reference. Browser tampering remains a separate unresolved issue; there is no account-operation all-clear. Earlier clock claims below are superseded.
 
 **Latest provider investigation:** [reproduced image-noise warning and clock fault](engine-provider-repair.md). Disabling the provider's readback-noise feature cleared the previously failing diagnostic identity in both controlled repetitions; enabling it reproduced the warning in both. Ordinary Chromium passed the focused reference checks, but the user chose to keep AliasMode. A supported provider repair is still required. No all-clear or account start is authorized.

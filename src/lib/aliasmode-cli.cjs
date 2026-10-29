@@ -1,6 +1,7 @@
 'use strict';
 const path=require('node:path'),{execFile}=require('node:child_process');
 const {profileId,providerError}=require('./aliasmode-client.cjs');
+const READBACK_PATCH='COMPELOS_ALIASMODE_READBACK_V1';
 
 function helperPath(value=process.env.ALIASMODE_HELPER_PATH){
  const executable=value||(process.platform==='win32'&&process.env.LOCALAPPDATA?path.join(process.env.LOCALAPPDATA,'AliasMode','aliasmode-mcp.exe'):'');
@@ -41,6 +42,17 @@ function createAliasModeCli({executable,run=execFile,env=process.env}={}){
   if(value.headless!==headless)throw Object.assign(providerError('ALIASMODE_MODE_UNVERIFIED',headless?'AliasMode did not start headlessly. Processing remains paused.':'AliasMode did not open a visible browser. Set its normal runtime mode to visible for manual sign-in.'),{startedProfilePort:value.port});
   return {headless:value.headless,port:value.port};
  }
- return {version,status,open,idle:queue.idle};
+ async function readbackCapability(){
+  let value;try{value=await command(['profiles','readback','--mode','capability']);}catch{throw providerError('ALIASMODE_READBACK_UNAVAILABLE','The running AliasMode manager lacks the validated native-rendering support. Restore its provider patch before continuing.');}
+  if(value.patchVersion!==READBACK_PATCH||value.capability!=='native-readback-opt-in-v1')throw providerError('ALIASMODE_READBACK_UNAVAILABLE','AliasMode did not confirm native-rendering support.');
+  return {patchVersion:READBACK_PATCH,capability:value.capability};
+ }
+ async function readback(id,mode='status'){
+  profileId(id);if(!['status','native','seeded'].includes(mode))throw providerError('ALIASMODE_READBACK_MODE','Choose a supported rendering mode.');
+  let value;try{value=await command(['profiles','readback','--profile',id,'--mode',mode]);}catch{throw providerError('ALIASMODE_READBACK_UNAVAILABLE','AliasMode could not confirm the profile rendering mode. Check the validated provider patch and close the profile before changing it.');}
+  if(value.profileId!==id||value.patchVersion!==READBACK_PATCH||!['native','seeded','engine-default'].includes(value.mode)||typeof value.supported!=='boolean'||value.mode==='native'&&!value.supported||mode!=='status'&&value.mode!==mode)throw providerError('ALIASMODE_READBACK_UNVERIFIED','AliasMode did not confirm the requested profile rendering mode.');
+  return {mode:value.mode,patchVersion:READBACK_PATCH,supported:value.supported};
+ }
+ return {version,status,open,readback,readbackCapability,idle:queue.idle};
 }
-module.exports={createAliasModeCli,helperPath,environment};
+module.exports={createAliasModeCli,helperPath,environment,READBACK_PATCH};
