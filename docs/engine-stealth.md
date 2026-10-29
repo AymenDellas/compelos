@@ -1,5 +1,9 @@
 # Account session controls and diagnostic evidence
 
+## Latest proxy-bound validation — 29 October 2026
+
+[The new purchased-proxy profile](engine-proxy-profile-validation.md) connects correctly over SOCKS5 and passes both clock checks, but browser modification persists in the full battery and a focused repeat despite native readback and an absent noise flag. The first automation result clears on repeat; both results remain saved. The profile is retained closed, no real account is imported or started, and existing controls/holds are unchanged. The local gate correctly remains FAIL. This limits the earlier repair-confirmation results to their measured anonymous profiles; no broader all-clear is supported.
+
 ## Gate and provider repair — 29 October 2026
 
 The user authorized [correcting local admission and repairing the modification warning](engine-gate-repair.md). A narrowly source-verified legacy property check remains a raw FAIL but is a documented compatibility finding. Actual modification warnings now block admission. A published local AliasMode patch makes native image readback an explicit opt-in for new profiles; existing profiles and identity hashes remain unchanged. Two fresh default-native confirmation passes completed with no bot/modification warning, all 23 automation flags false, and correct clocks. An earlier Sannysoft timeout remains recorded. This clears the local repair, not a future proxy/profile or account start; actual bindings, reviews, recovery and holds remain authoritative. Earlier unresolved-provider assessments below are historical and superseded by the repair report.

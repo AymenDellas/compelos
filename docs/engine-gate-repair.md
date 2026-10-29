@@ -1,5 +1,7 @@
 # Local diagnostic gate and AliasMode repair — 29 October 2026
 
+**Later proxy-bound validation is blocked:** [a new blank profile](engine-proxy-profile-validation.md) passes its actual proxy/clock checks but reports browser modification on two observations, with native readback confirmed and the noise flag absent. A first automation finding clears on repeat and remains recorded. The profile is closed and not approved for account use. Earlier successful anonymous results below do not establish readiness for this new setup.
+
 The user authorized correcting the gate and repairing the browser modification
 warning. Raw website verdicts remain intact. The local admission decision is
 now separate from those measurements; it is not a LinkedIn account clearance.
