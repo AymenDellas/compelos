@@ -2,7 +2,7 @@
 
 The user authorized replacing the browser-control approach to address the remaining detection result. This supersedes the earlier request to keep Puppeteer's Runtime subscription for account tabs. It does not authorize clearing John's restriction, re-arming either consumed experiment, buying a proxy, creating a LinkedIn account or treating a detector pass as proof against restriction.
 
-**Current result:** the production controller clears both measured CDP flags and the overall DeviceAndBrowserInfo bot flag; all other 20 flags, seven direct checks and browser identity/version are unchanged. Six endpoints pass and none fails. Sannysoft times out in both the old and new controller, leaving the complete battery **UNKNOWN**, with strict comparison acceptance **false**. The code is ready for proxy/profile configuration; a new account is not cleared for processing by this anonymous result.
+**Latest result:** the [expanded website-panel comparison](engine-vendor-results.md) finds an Incolumitas FPScanner `WEBDRIVER` failure in both setups, plus a Fingerprint browser-tampering finding in the updated run. Both complete evaluations fail. The DeviceAndBrowserInfo flags still clear, BrowserScan reports Normal, and CreepJS completes with zero headless/stealth scores. Fingerprint's Bot field remains clear while its timezone/VPN warning remains. Sannysoft fails execution after network retries; no bot/human verdict is claimed for it. The earlier six-pass counts below represent direct-probe/TLS checks, not six independent website passes. No new account is cleared by this anonymous evidence.
 
 ## Controller
 

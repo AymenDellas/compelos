@@ -1,5 +1,9 @@
 # Account session controls and diagnostic evidence
 
+## Expanded website-panel comparison — 29 October 2026
+
+The [longer old/updated comparison](engine-vendor-results.md) captures actual website panels and screenshots. Both setups fail Incolumitas's FPScanner `WEBDRIVER` check; Fingerprint also reports browser tampering in the updated run and a timezone/VPN warning in both. Its Bot field is separately Not detected. BrowserScan says Normal in both; CreepJS completes with zero headless/stealth scores in both. Sannysoft cannot be reached after HTTPS retries and HTTP fallback, so its execution fails without a bot/human verdict. Both complete evaluations fail. No production detector verdict rule, browser behavior, proxy configuration, account hold or processing intent changed. Earlier six-pass counts below describe lightweight direct-probe/TLS results, not six completed website bot verdicts.
+
 ## Explicit account-tab contexts — 29 October 2026
 
 The user authorized replacing account-tab context tracking to address the remaining browser-control signal. The [explicit-context controller](engine-explicit-contexts.md) keeps AliasMode, installed Puppeteer and CDP, with explicitly owned page contexts instead of an automatically constructed Puppeteer Page. It adds no stealth plugin, browser-global spoofing, detector-verdict change or new browser library.
