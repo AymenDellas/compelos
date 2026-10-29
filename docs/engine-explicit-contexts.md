@@ -2,6 +2,8 @@
 
 The user authorized replacing the browser-control approach to address the remaining detection result. This supersedes the earlier request to keep Puppeteer's Runtime subscription for account tabs. It does not authorize clearing John's restriction, re-arming either consumed experiment, buying a proxy, creating a LinkedIn account or treating a detector pass as proof against restriction.
 
+**Current result:** the production controller clears both measured CDP flags and the overall DeviceAndBrowserInfo bot flag; all other 20 flags, seven direct checks and browser identity/version are unchanged. Six endpoints pass and none fails. Sannysoft times out in both the old and new controller, leaving the complete battery **UNKNOWN**, with strict comparison acceptance **false**. The code is ready for proxy/profile configuration; a new account is not cleared for processing by this anonymous result.
+
 ## Controller
 
 `aliasmode-page.cjs` uses the installed Puppeteer 24.38.0 connection and explicitly owned CDP sessions. CDP remains the declared transport and AliasMode remains the profile provider. Instead of constructing a Puppeteer Page and then breaking its context tracking, account targets use a bounded controller that resolves its own main-world object handles after navigation. The installed library is unchanged.
@@ -72,9 +74,27 @@ An old page can route asynchronously while the next page's HTTP response is pend
 | Deployment trace privacy | **45 manifests, 0 private runtime entries** |
 | Frozen 50-record replay through the navigation correction | Zero decision/evidence changes or errors; complete CRM and account controls unchanged |
 
-The final clean engine output is retained privately as `control-integration-20261029/engine-tests-certified.tap`; CRM output is `crm-final.tap` and the successful default build is `build-certified.log`. An earlier full run had one Chrome fixture startup crash; its three-case file passed on rerun, and the later complete 460-case run passed without failures. Earlier fixture-interface/redirect failures were corrected and are not counted as passes.
+The final clean engine output is retained privately as `control-integration-20261029/engine-tests-certified.tap`; CRM output is `crm-final.tap`. The latest controller's passing focused checks are `loader-navigation-certified.tap` and `detector-fixtures-final.tap`; its successful default build is `build-final-controller.log`. An earlier full run had one Chrome fixture startup crash; its three-case file passed on rerun, and the later complete 460-case run passed without failures. Earlier fixture-interface/redirect failures were corrected and are not counted as passes.
 
 The verification checkout initially shared dependencies through a directory junction, which Turbopack rejected. The alternative webpack builder also rejected the existing PostCSS module export. A physical copy of the same installed dependencies allowed the unchanged default builder to complete; no package versions, browser library or permanent build-root settings changed. The packaging audit then found the worktree's `.git` metadata file in two Finder route traces. Excluding the root file as well as Git directories removes both entries; the subsequent complete default build and privacy audit pass. No environment file was copied or included.
+
+## Final public comparison
+
+The final production-controller run follows the loader correction and the completed browser fixtures/build. PostgreSQL report `context-comparison-2bc565ce-557c-4055-94f8-3b132a87c70e` retains complete evidence at ignored `data/engine-v2/context-comparison/comparison-39602252-cdd4-408a-9c1f-a25ef2091812.json`.
+
+| Endpoint | Production controller |
+| --- | --- |
+| BrowserScan | PASS, HTTP 200 |
+| Incolumitas | PASS, HTTP 200 |
+| DeviceAndBrowserInfo | PASS, HTTP 200; all 23 boolean flags false |
+| Fingerprint | PASS, HTTP 200 |
+| CreepJS | PASS, HTTP 200 |
+| Sannysoft | UNKNOWN, connection timeout in both controllers |
+| BrowserLeaks TLS | PASS, HTTP 200; capture/coherence scope only |
+
+`isAutomatedWithCDP`, `isAutomatedWithCDPInWebWorker` and `isBot` each changed from literal true to literal false. The other 20 device flags, all seven direct checks, browser identity and browser version were identical. BrowserScan and Incolumitas now retain their real HTTP responses. Raw TLS extension-order differences remain in the report; no reference-browser TLS match is claimed.
+
+The overall result remains UNKNOWN and strict seven-endpoint acceptance remains false because Sannysoft was unavailable. No endpoint or verdict rule was removed, weakened or overridden. Original account-control hashes were unchanged, the original AliasMode roster was restored, and the new diagnostic profile was confirmed stopped/deleted. There was no LinkedIn navigation/authentication or lead work.
 
 ## Configuring a profile after installation
 

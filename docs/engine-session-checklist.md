@@ -2,6 +2,8 @@
 
 **29 October update:** the user subsequently authorized replacing account-tab context tracking. The current controller and fresh measurements are documented in [explicit browser contexts](engine-explicit-contexts.md). That implementation supersedes this audit's requirement to retain a native Puppeteer Page/Runtime subscription; the installed library, historical results and detector verdict logic remain unchanged. The results below describe the earlier worker-filter-only implementation.
 
+The final controller clears both CDP flags and the device bot flag, with the other 20 flags unchanged. Six endpoints pass, none fails, and Sannysoft remains UNKNOWN after connection timeouts with both controllers. Build/privacy checks pass. Proxy/profile configuration can proceed, but an actual configured profile still needs fresh evidence before processing; the anonymous result is not a full-battery clearance.
+
 The follow-up checklist audits the implementation already on `compelos/main`. It does not authorize an authenticated LinkedIn run, clear a hold or re-arm either consumed John manifest. The previous [navigation implementation](engine-session-navigation.md) and [worker-target measurement](engine-worker-targets.md) remain documented with their original results.
 
 ## Structural checks and corrections
