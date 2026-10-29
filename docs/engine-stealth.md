@@ -1,5 +1,9 @@
 # Account session controls and diagnostic evidence
 
+## Counterbalanced follow-up — 29 October 2026
+
+The [latest investigation](engine-detector-followup.md) used updated/old/old/updated repeats, then a fresh full old/updated battery. Fingerprint Bot and Browser Tampering cleared in all three new updated observations; the prior tampering finding is retained and its cause remains unisolated. Updated Sannysoft completed all 11 primary and 20 scanner checks without a failure. Incolumitas still publishes its legacy WebDriver failure and cannot complete its behavioral score; the timezone warning persists. An offline stock-browser reference confirms that this legacy rule flags a standard present-but-false property. Its literal FAIL is retained. No production behavior, detector verdict logic, proxy configuration, account hold or processing intent changed; no all-clear is issued.
+
 ## Expanded website-panel comparison — 29 October 2026
 
 The [longer old/updated comparison](engine-vendor-results.md) captures actual website panels and screenshots. Both setups fail Incolumitas's FPScanner `WEBDRIVER` check; Fingerprint also reports browser tampering in the updated run and a timezone/VPN warning in both. Its Bot field is separately Not detected. BrowserScan says Normal in both; CreepJS completes with zero headless/stealth scores in both. Sannysoft cannot be reached after HTTPS retries and HTTP fallback, so its execution fails without a bot/human verdict. Both complete evaluations fail. No production detector verdict rule, browser behavior, proxy configuration, account hold or processing intent changed. Earlier six-pass counts below describe lightweight direct-probe/TLS results, not six completed website bot verdicts.
