@@ -1,6 +1,6 @@
 'use strict';
 // Read-only measurements. Never patch navigator, export cookies or make Node TLS requests.
-const VERSION='DIRECT_SIGNALS_V3',IDENTITY_URL='https://browserscan.net/';
+const VERSION='DIRECT_SIGNALS_V4',IDENTITY_URL='https://browserscan.net/';
 const BATTERY=Object.freeze([
  {url:'https://www.browserscan.net/bot-detection',kind:'browserscan'},
  {url:'https://bot.incolumitas.com/',kind:'incolumitas'},
@@ -15,10 +15,18 @@ async function probe(page,{checkCDP=false}={}){
  return page.evaluate(async check=>{
   const errors={},read=(key,fn)=>{try{return fn()??null;}catch{errors[key]='unavailable';return null;}};
   let gl,debug;try{gl=document.createElement('canvas').getContext('webgl');debug=gl?.getExtension('WEBGL_debug_renderer_info');}catch{errors.webgl='unavailable';}
+  const clock=new Date();
   const p={origin:location.origin,secureContext:isSecureContext,
    webdriver:read('webdriver',()=>navigator.webdriver),userAgent:read('userAgent',()=>navigator.userAgent),platform:read('platform',()=>navigator.platform),
    chrome:read('chrome',()=>window.chrome===null?'null':typeof window.chrome),plugins:read('plugins',()=>navigator.plugins.length),
-   screen:read('screen',()=>({width:screen.width,height:screen.height})),timezone:read('timezone',()=>Intl.DateTimeFormat().resolvedOptions().timeZone),timezoneOffsetMinutes:read('timezoneOffsetMinutes',()=>new Date().getTimezoneOffset()),locale:read('locale',()=>navigator.language),
+   screen:read('screen',()=>({width:screen.width,height:screen.height})),timezone:read('timezone',()=>Intl.DateTimeFormat().resolvedOptions().timeZone),timezoneOffsetMinutes:read('timezoneOffsetMinutes',()=>clock.getTimezoneOffset()),
+   timezoneIntlOffsetMinutes:read('timezoneIntlOffsetMinutes',()=>{
+    // Date can follow Windows while Intl follows different bundled timezone
+    // rules. Measuring only Date accepted that split in the native V8 trial.
+    const name=new Intl.DateTimeFormat('en-US',{timeZoneName:'longOffset'}).formatToParts(clock).find(p=>p.type==='timeZoneName')?.value;
+    const m=name?.match(/^GMT([+-])(\d{2}):(\d{2})$/);
+    return name==='GMT'?0:m?(m[1]==='+'?-1:1)*(Number(m[2])*60+Number(m[3])):null;
+   }),locale:read('locale',()=>navigator.language),
    hardwareConcurrency:read('hardwareConcurrency',()=>navigator.hardwareConcurrency),deviceMemory:read('deviceMemory',()=>navigator.deviceMemory),
    webglVendor:read('webglVendor',()=>debug?gl.getParameter(debug.UNMASKED_VENDOR_WEBGL):null),webglRenderer:read('webglRenderer',()=>debug?gl.getParameter(debug.UNMASKED_RENDERER_WEBGL):null),
    cdpDetected:null,cdpMethod:'Error.stack console serialization heuristic',errors};

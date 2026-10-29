@@ -44,8 +44,9 @@ function interval(policy={},random=randomInt){const p=config(policy);return rand
 function clockVerdict(probe,timezone,now=Date.now()){
  if(typeof timezone!=='string'||!timezone)return {verdict:'UNKNOWN',reason:'Configure the profile timezone before checking its clock.'};
  if(probe?.timezone!==timezone)return {verdict:'FAIL',reason:'The browser timezone does not match the bound proxy timezone.'};
- const observedOffsetMinutes=probe?.timezoneOffsetMinutes;
- if(!Number.isInteger(observedOffsetMinutes)||Math.abs(observedOffsetMinutes)>840)return {verdict:'UNKNOWN',reason:'The browser clock offset could not be verified. Run the network check again.'};
+ const validOffset=value=>Number.isInteger(value)&&Math.abs(value)<=840;
+ const observedOffsetMinutes=validOffset(probe?.timezoneOffsetMinutes)?probe.timezoneOffsetMinutes:null;
+ const observedIntlOffsetMinutes=validOffset(probe?.timezoneIntlOffsetMinutes)?probe.timezoneIntlOffsetMinutes:null;
  let expectedOffsetMinutes;
  try{
   const name=new Intl.DateTimeFormat('en-US',{timeZone:timezone,timeZoneName:'longOffset'}).formatToParts(new Date(now)).find(p=>p.type==='timeZoneName')?.value;
@@ -53,8 +54,13 @@ function clockVerdict(probe,timezone,now=Date.now()){
   expectedOffsetMinutes=name==='GMT'?0:m?(m[1]==='+'?-1:1)*(Number(m[2])*60+Number(m[3])):null;
  }catch{expectedOffsetMinutes=null;}
  if(expectedOffsetMinutes===null)return {verdict:'UNKNOWN',reason:'The configured timezone clock offset could not be verified.'};
- return {verdict:observedOffsetMinutes===expectedOffsetMinutes?'PASS':'FAIL',timezone,observedOffsetMinutes,expectedOffsetMinutes,
-  reason:observedOffsetMinutes===expectedOffsetMinutes?'The browser clock matches its configured timezone.':'The profile clock is out of step with its timezone. Correct the AliasMode profile timezone or browser core before rerunning the network check.'};
+ const details={timezone,observedOffsetMinutes,observedIntlOffsetMinutes,expectedOffsetMinutes};
+ // A known clock mismatch wins over another clock being unavailable. Native
+ // V8 --no-icu-timezone-data fixed Date but left Intl wrong in the measured
+ // AliasMode core; accepting only the former would hide the remaining fault.
+ if([observedOffsetMinutes,observedIntlOffsetMinutes].some(value=>value!==null&&value!==expectedOffsetMinutes))return {...details,verdict:'FAIL',reason:'The browser reports a local time that does not match its timezone. Correct the AliasMode profile timezone or browser core before rerunning the network check.'};
+ if(observedOffsetMinutes===null||observedIntlOffsetMinutes===null)return {...details,verdict:'UNKNOWN',reason:'Both browser clock readings could not be verified. Run the network check again.'};
+ return {...details,verdict:'PASS',reason:'Both browser clock readings match the configured timezone.'};
 }
 function networkVerdict(observed,account){
  const country=String(observed?.country||'').toUpperCase(),timezone=observed?.timezone;

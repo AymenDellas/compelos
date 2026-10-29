@@ -4,21 +4,30 @@ const now=Date.parse('2026-10-27T12:00:00Z');
 const account=()=>({aliasmode_profile_id:'fixture',binding_revision:1,session_revision:2,engine:'aliasmode-chromium',launch_mode:'headful',proxy_id:'dedicated-one',proxy_host:'proxy.test',proxy_port:8000,proxy_country:'GB',proxy_timezone:'Europe/London',daily_limit:300,session_evidence:{expectedExitIp:'192.0.2.10'},session_policy:{}});
 function ready(){const a=account(),key=p.evidenceKey(a);Object.assign(a.session_evidence,{network:{verdict:'PASS',key},fingerprint:{hash:'baseline'},gate:{verdict:'PASS',key,fingerprintHash:'baseline'}});return a;}
 test('obsolete detector readers cannot authorize a session or rewrite retained evidence and holds',()=>{
- const a=ready(),old=require('node:crypto').createHash('sha256').update(JSON.stringify([a.aliasmode_profile_id,a.binding_revision,a.session_revision,a.engine,a.launch_mode,a.proxy_id,require('../../src/lib/browser-control-version.cjs')])).digest('hex');
+ const a=ready(),old=require('node:crypto').createHash('sha256').update(JSON.stringify([a.aliasmode_profile_id,a.binding_revision,a.session_revision,a.engine,a.launch_mode,a.proxy_id,require('../../src/lib/browser-control-version.cjs'),'DIRECT_SIGNALS_V3'])).digest('hex');
  assert.notEqual(p.evidenceKey(a),old);a.session_evidence.network.key=old;a.session_evidence.gate.key=old;const before=structuredClone(a.session_evidence);
  assert.equal(p.lifecycle(a).state,'PROVISION');assert.deepEqual(a.session_evidence,before);a.attention_reason='Exact saved LinkedIn hold';assert.equal(p.lifecycle(a).state,'HOLD');assert.equal(p.lifecycle(a).reason,'Exact saved LinkedIn hold');assert.deepEqual(a.session_evidence,before);
 });
 test('timezone verification requires the actual daylight-saving clock offset, not just its name',()=>{
  const at=Date.parse('2026-10-29T12:00:00Z');
  for(const [timezone,offset]of [['Africa/Casablanca',-60],['America/New_York',240],['Europe/London',0],['Asia/Kathmandu',-345]]){
-  assert.equal(p.clockVerdict({timezone,timezoneOffsetMinutes:offset},timezone,at).verdict,'PASS');
-  assert.equal(p.clockVerdict({timezone,timezoneOffsetMinutes:offset+60},timezone,at).verdict,'FAIL');
+  assert.equal(p.clockVerdict({timezone,timezoneOffsetMinutes:offset,timezoneIntlOffsetMinutes:offset},timezone,at).verdict,'PASS');
+  assert.equal(p.clockVerdict({timezone,timezoneOffsetMinutes:offset+60,timezoneIntlOffsetMinutes:offset},timezone,at).verdict,'FAIL');
+  assert.equal(p.clockVerdict({timezone,timezoneOffsetMinutes:offset,timezoneIntlOffsetMinutes:offset+60},timezone,at).verdict,'FAIL');
+  assert.equal(p.clockVerdict({timezone,timezoneOffsetMinutes:offset},timezone,at).verdict,'UNKNOWN');
+  assert.equal(p.clockVerdict({timezone,timezoneIntlOffsetMinutes:offset},timezone,at).verdict,'UNKNOWN');
+  assert.equal(p.clockVerdict({timezone,timezoneIntlOffsetMinutes:offset+60},timezone,at).verdict,'FAIL','known Intl failure wins over missing Date measurement');
   assert.equal(p.clockVerdict({timezone},timezone,at).verdict,'UNKNOWN');
  }
  assert.equal(p.clockVerdict({timezone:'Africa/Casablanca',timezoneOffsetMinutes:0},'Africa/Casablanca',at).expectedOffsetMinutes,-60);
  assert.equal(p.clockVerdict({timezone:'UTC',timezoneOffsetMinutes:0},'Europe/London',at).verdict,'FAIL');
- assert.equal(p.clockVerdict({timezone:'America/New_York',timezoneOffsetMinutes:300},'America/New_York',Date.parse('2026-01-15T12:00:00Z')).verdict,'PASS');
+ assert.equal(p.clockVerdict({timezone:'America/New_York',timezoneOffsetMinutes:300,timezoneIntlOffsetMinutes:300},'America/New_York',Date.parse('2026-01-15T12:00:00Z')).verdict,'PASS');
  assert.equal(p.clockVerdict({timezoneOffsetMinutes:0},undefined,at).verdict,'UNKNOWN');
+});
+
+test('a corrected Date clock cannot conceal the measured remaining Intl clock fault',()=>{
+ const r=p.clockVerdict({timezone:'Africa/Casablanca',timezoneOffsetMinutes:-60,timezoneIntlOffsetMinutes:0},'Africa/Casablanca',Date.parse('2026-10-29T12:00:00Z'));
+ assert.equal(r.verdict,'FAIL');assert.equal(r.observedOffsetMinutes,-60);assert.equal(r.observedIntlOffsetMinutes,0);assert.equal(r.expectedOffsetMinutes,-60);
 });
 test('network evidence cannot pass without exact fixed exit IP and country/timezone matching',()=>{
  const a=account(),observed={ip:'192.0.2.10',country:'GB',timezone:'Europe/London'};

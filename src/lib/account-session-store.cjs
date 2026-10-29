@@ -21,7 +21,8 @@ async function ensure(pool){if(!ready.has(pool))ready.set(pool,(async()=>{
 function publicSite(s){
  const external=s.external,text=value=>typeof value==='string'?value.slice(0,500):'';
  return {url:s.url,verdict:s.verdict,reason:s.reason,website:external?{verdict:text(external.verdict),value:text(external.value),scope:text(external.scope),observations:(Array.isArray(external.observations)?external.observations:[]).slice(0,100).map(o=>({name:text(o?.name),value:text(o?.value)}))}:null,
-  timezone:typeof s.probe?.timezone==='string'?text(s.probe.timezone):null,timezoneOffsetMinutes:Number.isInteger(s.probe?.timezoneOffsetMinutes)?s.probe.timezoneOffsetMinutes:null};
+  timezone:typeof s.probe?.timezone==='string'?text(s.probe.timezone):null,timezoneOffsetMinutes:Number.isInteger(s.probe?.timezoneOffsetMinutes)?s.probe.timezoneOffsetMinutes:null,
+  timezoneIntlOffsetMinutes:Number.isInteger(s.probe?.timezoneIntlOffsetMinutes)?s.probe.timezoneIntlOffsetMinutes:null};
 }
 function publicState(a){const e=a.session_evidence||{},g=e.gate;const gate=g?{verdict:g.verdict,reason:g.reason,checkedAt:g.checkedAt,reportId:g.reportId,approvedAt:g.approvedAt,sites:(Array.isArray(g.sites)?g.sites:[]).slice(0,8).map(publicSite)}:null;return {revision:Number(a.session_revision||0),engine:a.engine,launchMode:a.launch_mode,proxyId:a.proxy_id||'',proxyHost:a.proxy_host||'',proxyPort:a.proxy_port||null,proxyCountry:a.proxy_country||'',proxyTimezone:a.proxy_timezone||'',expectedExitIp:e.expectedExitIp||'',policy:policy.config(a.session_policy),lifecycle:policy.lifecycle(a,a.daily_day?{day:a.daily_day}:{}),network:e.network||null,gate,fingerprint:e.fingerprint?{hash:e.fingerprint.hash,fields:e.fingerprint.fields,checkedAt:e.fingerprint.checkedAt}:null,drift:e.drift||null,diagnosticRequested:e.command||null};}
 async function configure(pool,input){
