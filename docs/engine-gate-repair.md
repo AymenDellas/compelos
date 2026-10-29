@@ -141,6 +141,7 @@ Software verification:
 | AliasMode TypeScript and compiled sidecar build | Passed |
 | CompelOS `tsc --noEmit` and changed-file lint | Passed |
 | Production application build | Passed |
+| Installed working-app copy, focused admission/provider/identity checks | 34 passed; 0 failed/skipped |
 | Build privacy trace audit | 92 traces; 0 private-data/secret-file inclusions |
 | Stored-evidence replay | 50 records; 0 decision/evidence changes; CRM and controls unchanged |
 
@@ -154,6 +155,11 @@ warnings in unrelated UI files. Those are not fixed or claimed green here;
 changed-file lint passes. The successful build retains its existing module-type
 and broad filesystem-pattern warnings; the separate privacy audit confirms that
 private diagnostic data and secret files are excluded.
+
+All 26 changed files were installed into the user's working application after
+checking that their prior contents still matched the expected baseline. The
+installation preserves unrelated edits. The installed-copy replay again retains
+all 50 decisions/evidence, the complete CRM digest and every account control.
 
 Existing accounts remain paused and exact holds remain intact. No proxy is
 currently bound. The final proxy/profile combination needs its own network,
