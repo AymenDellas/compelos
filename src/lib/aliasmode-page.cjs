@@ -87,7 +87,7 @@ class ControlledPage extends EventEmitter{
   this._disconnect=()=>this._didClose();browser.on('disconnected',this._disconnect);
   client.on(CDPSessionEvent.Disconnected,()=>this._didClose());
   client.on('Page.frameNavigated',({frame:f})=>{if(f.parentId)return;this._frameId=f.id;this._frame._id=f.id;this._url=f.url;this._generation++;this._global=null;this._handles.clear();this._event('commit');this.emit('framenavigated',this._frame);this.emit('_navigation',{kind:'commit',loaderId:f.loaderId});});
-  client.on('Page.navigatedWithinDocument',e=>{if(e.frameId!==this._frameId)return;this._url=e.url;this.emit('framenavigated',this._frame);this.emit('_navigation',{kind:'same-document'});});
+  client.on('Page.navigatedWithinDocument',e=>{if(e.frameId!==this._frameId)return;this._url=e.url;this.emit('framenavigated',this._frame);this.emit('_navigation',{kind:'same-document',url:e.url});});
   client.on('Page.lifecycleEvent',e=>{if(e.frameId===this._frameId){this._event(e.name);this.emit('_navigation',{kind:e.name,loaderId:e.loaderId});}});
   client.on('Network.requestWillBeSent',e=>this._request(e));
   client.on('Fetch.requestPaused',e=>this._paused(e));
@@ -132,7 +132,7 @@ class ControlledPage extends EventEmitter{
   if(request.isNavigationRequest()&&request.frame()===this._frame){this._documents.set(e.loaderId,response);if(this._documents.size>16)this._documents.delete(this._documents.keys().next().value);}
   this.emit('response',response);
  }
- _finished(e,failed=false){const request=this._requests.get(e.requestId);if(!request)return;if(failed){request.error={errorText:e.errorText||'REQUEST_FAILED'};if(request.isNavigationRequest()&&request.frame()===this._frame)this.emit('_navigation',{kind:'failed',error:Error(request.error.errorText)});}request._finished=true;this.emit(failed?'requestfailed':'requestfinished',request);this._requests.delete(e.requestId);this._recentRequests.set(e.requestId,request);if(this._recentRequests.size>64)this._recentRequests.delete(this._recentRequests.keys().next().value);}
+ _finished(e,failed=false){const request=this._requests.get(e.requestId);if(!request)return;if(failed){request.error={errorText:e.errorText||'REQUEST_FAILED'};if(request.isNavigationRequest()&&request.frame()===this._frame)this.emit('_navigation',{kind:'failed',loaderId:request.event.loaderId,error:Error(request.error.errorText)});}request._finished=true;this.emit(failed?'requestfailed':'requestfinished',request);this._requests.delete(e.requestId);this._recentRequests.set(e.requestId,request);if(this._recentRequests.size>64)this._recentRequests.delete(this._recentRequests.keys().next().value);}
  _didClose(){if(this._closed)return;this._closed=true;this._global=null;this._handles.clear();this.emit('close');}
  url(){return this._url;}
  isClosed(){return this._closed;}
@@ -183,29 +183,35 @@ class ControlledPage extends EventEmitter{
   await this.waitForFunction(({selector,visible})=>{const n=document.querySelector(selector);return !!n&&(!visible||n.getClientRects().length>0&&getComputedStyle(n).visibility!=='hidden');},{timeout}, {selector,visible});
   return this.$(selector);
  }
- waitForNavigation({waitUntil='load',timeout=this._defaultTimeout}={}){
+ waitForNavigation({waitUntil='load',timeout=this._defaultTimeout,_documentOnly=false}={}){
   const kind=waitUntil==='domcontentloaded'?'DOMContentLoaded':waitUntil;
   if(!['load','DOMContentLoaded'].includes(kind)||!Number.isFinite(timeout)||timeout<1)return Promise.reject(Error('Unsupported or unbounded navigation wait'));
-  let cancel;const promise=new Promise((resolve,reject)=>{
-   let loader=null,committed=false;
+  let cancel,expectLoader;const promise=new Promise((resolve,reject)=>{
+   let loader=null,committed=false,completed=null,expectedLoader=null,pendingFailure=null,expectedUrl=null,sameDocumentUrl=null;
    const cleanup=()=>{clearTimeout(timer);this.off('_navigation',event);this.off('close',closed);};
    const closed=()=>{cleanup();reject(Error('Target closed'));};
    cancel=error=>{cleanup();reject(error);};
+   const finish=()=>{if(committed&&completed===loader&&(!_documentOnly||expectedLoader===loader)){cleanup();resolve(this._documents.get(loader)||null);}};
+   const finishSameDocument=()=>{if(expectedUrl!==null&&!expectedLoader&&sameDocumentUrl===expectedUrl){cleanup();resolve(null);}};
+   expectLoader=(id,url)=>{expectedLoader=id;expectedUrl=url;if(!id)finishSameDocument();else if(pendingFailure?.loaderId===id)cancel(pendingFailure.error);else finish();};
    const event=e=>{
-    if(e.kind==='failed'){cleanup();reject(e.error);return;}
+    if(e.kind==='failed'){if(!_documentOnly||e.loaderId===expectedLoader)cancel(e.error);else pendingFailure=e;return;}
     // A newly committed document can replace/push its own URL while parsing.
     // Its real HTTP response and requested lifecycle still belong to this wait.
-    if(e.kind==='same-document'&&!committed){cleanup();resolve(null);return;}
-    if(e.kind==='commit'){loader=e.loaderId;committed=true;return;}
-    if(committed&&e.kind===kind&&e.loaderId===loader){cleanup();resolve(this._documents.get(loader)||null);}
+    if(e.kind==='same-document'){sameDocumentUrl=e.url;if(_documentOnly)finishSameDocument();else if(!committed){cleanup();resolve(null);}return;}
+    if(e.kind==='commit'){loader=e.loaderId;committed=true;finish();return;}
+    if(committed&&e.kind===kind&&e.loaderId===loader){completed=e.loaderId;finish();}
    };
    const timer=setTimeout(()=>{cleanup();reject(timeoutError('Navigation timeout of '+timeout+' ms exceeded'));},timeout);
    this.on('_navigation',event);this.once('close',closed);
-  });promise.cancel=cancel;return promise;
+  });promise.cancel=cancel;promise.expectLoader=expectLoader;return promise;
  }
  async goto(url,options={}){
-  const navigation=this.waitForNavigation(options);navigation.catch(()=>{});
-  try{const result=await this._send('Page.navigate',{url});if(result.errorText)throw Error(result.errorText+' at requested page');return await navigation;}
+  const destination=new URL(url,this._url).href;
+  const navigation=this.waitForNavigation({...options,_documentOnly:true});navigation.catch(()=>{});
+  // Page.navigate identifies its own document. Old-page SPA activity cannot
+  // satisfy this command while the requested response is still pending.
+  try{const result=await this._send('Page.navigate',{url});if(result.errorText)throw Error(result.errorText+' at requested page');navigation.expectLoader(result.loaderId,destination);return await navigation;}
   catch(error){navigation.cancel(error);throw error;}
  }
  async setRequestInterception(enabled){if(typeof enabled!=='boolean')throw Error('Invalid request interception mode');this._interception=enabled;await this._send(enabled?'Fetch.enable':'Fetch.disable',enabled?{patterns:[{urlPattern:'*',requestStage:'Request'}]}:{});}

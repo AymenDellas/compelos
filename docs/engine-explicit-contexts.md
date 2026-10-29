@@ -55,6 +55,10 @@ The first integrated seven-endpoint comparison independently confirmed the same 
 
 A document can call `history.replaceState` while parsing, before its requested load event. That same-document event previously resolved the document navigation as null. After a full-document commit, the controller now retains its real response and waits for the requested lifecycle. True SPA-only navigation still returns null. A local early-routing fixture requires the literal HTTP 200 response and completed title; the existing SPA/header fixtures remain passing. No detector assessment or endpoint is changed to accommodate the UNKNOWN results.
 
+The next comparison confirmed BrowserScan's HTTP response but found another timing case at Incolumitas. Its complete evidence remains in PostgreSQL `context-comparison-f206ab3a-3fe3-465f-8d9b-6c3e712eaa86` and ignored `comparison-3a3bb5f4-9f8d-4025-94b9-aae49108df35.json`: five candidate endpoints passed, Incolumitas had missing navigation metadata, and Sannysoft timed out in both passes. The three device flags again cleared with other flags/identity unchanged; account controls/roster and confirmed cleanup were preserved.
+
+An old page can route asynchronously while the next page's HTTP response is pending. A new fixture deliberately reproduced the null response before the fix, observing the old route rather than assuming the race occurred. Explicit `goto` now matches the loader returned by its own `Page.navigate` command; unrelated old-page routing cannot finish it. Hash-only navigation waits for its matching URL event. Local assertions require HTTP 200, the requested document title, the observed competing route and correct hash navigation, with no Runtime subscription. After this last correction, all **31 affected browser/adapter/comparison checks** and **7 detector fixtures** pass, and the default production build/privacy check pass again. The full 460-case run preceded this last loader correction; it was not repeated afterward.
+
 ## Completed offline gates
 
 | Gate | Result |
