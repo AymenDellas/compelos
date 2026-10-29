@@ -3,6 +3,11 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),p=require
 const now=Date.parse('2026-10-27T12:00:00Z');
 const account=()=>({aliasmode_profile_id:'fixture',binding_revision:1,session_revision:2,engine:'aliasmode-chromium',launch_mode:'headful',proxy_id:'dedicated-one',proxy_host:'proxy.test',proxy_port:8000,proxy_country:'GB',proxy_timezone:'Europe/London',daily_limit:300,session_evidence:{expectedExitIp:'192.0.2.10'},session_policy:{}});
 function ready(){const a=account(),key=p.evidenceKey(a);Object.assign(a.session_evidence,{network:{verdict:'PASS',key},fingerprint:{hash:'baseline'},gate:{verdict:'PASS',key,fingerprintHash:'baseline'}});return a;}
+test('obsolete detector readers cannot authorize a session or rewrite retained evidence and holds',()=>{
+ const a=ready(),old=require('node:crypto').createHash('sha256').update(JSON.stringify([a.aliasmode_profile_id,a.binding_revision,a.session_revision,a.engine,a.launch_mode,a.proxy_id,require('../../src/lib/browser-control-version.cjs')])).digest('hex');
+ assert.notEqual(p.evidenceKey(a),old);a.session_evidence.network.key=old;a.session_evidence.gate.key=old;const before=structuredClone(a.session_evidence);
+ assert.equal(p.lifecycle(a).state,'PROVISION');assert.deepEqual(a.session_evidence,before);a.attention_reason='Exact saved LinkedIn hold';assert.equal(p.lifecycle(a).state,'HOLD');assert.equal(p.lifecycle(a).reason,'Exact saved LinkedIn hold');assert.deepEqual(a.session_evidence,before);
+});
 test('network evidence cannot pass without exact fixed exit IP and country/timezone matching',()=>{
  const a=account(),observed={ip:'192.0.2.10',country:'GB',timezone:'Europe/London'};
  assert.equal(p.networkVerdict(observed,a).verdict,'PASS');

@@ -1,6 +1,6 @@
 'use strict';
 // Read-only measurements. Never patch navigator, export cookies or make Node TLS requests.
-const VERSION='DIRECT_SIGNALS_V2',IDENTITY_URL='https://browserscan.net/';
+const VERSION='DIRECT_SIGNALS_V3',IDENTITY_URL='https://browserscan.net/';
 const BATTERY=Object.freeze([
  {url:'https://www.browserscan.net/bot-detection',kind:'browserscan'},
  {url:'https://bot.incolumitas.com/',kind:'incolumitas'},
@@ -18,7 +18,7 @@ async function probe(page,{checkCDP=false}={}){
   const p={origin:location.origin,secureContext:isSecureContext,
    webdriver:read('webdriver',()=>navigator.webdriver),userAgent:read('userAgent',()=>navigator.userAgent),platform:read('platform',()=>navigator.platform),
    chrome:read('chrome',()=>window.chrome===null?'null':typeof window.chrome),plugins:read('plugins',()=>navigator.plugins.length),
-   screen:read('screen',()=>({width:screen.width,height:screen.height})),timezone:read('timezone',()=>Intl.DateTimeFormat().resolvedOptions().timeZone),locale:read('locale',()=>navigator.language),
+   screen:read('screen',()=>({width:screen.width,height:screen.height})),timezone:read('timezone',()=>Intl.DateTimeFormat().resolvedOptions().timeZone),timezoneOffsetMinutes:read('timezoneOffsetMinutes',()=>new Date().getTimezoneOffset()),locale:read('locale',()=>navigator.language),
    hardwareConcurrency:read('hardwareConcurrency',()=>navigator.hardwareConcurrency),deviceMemory:read('deviceMemory',()=>navigator.deviceMemory),
    webglVendor:read('webglVendor',()=>debug?gl.getParameter(debug.UNMASKED_VENDOR_WEBGL):null),webglRenderer:read('webglRenderer',()=>debug?gl.getParameter(debug.UNMASKED_RENDERER_WEBGL):null),
    cdpDetected:null,cdpMethod:'Error.stack console serialization heuristic',errors};
@@ -79,21 +79,45 @@ function siteResult(kind){
   }
   if(kind==='fingerprint'){
    const value=document.querySelector('[data-test-property-name="bot"]')?.textContent?.replace(/\s+/g,' ').trim();
-   if(value==='Not detected')return {verdict:'PASS',source:'[data-test-property-name="bot"]',value};
-   if(/^You are a (?:bad |good )?bot\b/i.test(value||''))return {verdict:'FAIL',source:'[data-test-property-name="bot"]',value:value.slice(0,200)};
+   const fields={tampering:'Browser tampering',vpn:'Website VPN warning',developer_tools:'Developer tools',suspect_score:'Suspect score'};
+   const observations=Object.entries(fields).map(([key,name])=>({name,value:document.querySelector('[data-test-property-name="'+key+'"]')?.textContent?.replace(/\s+/g,' ').trim().slice(0,400)||'Unavailable'}));
+   // Preserve the Bot-field assessment. Other published fields are evidence,
+   // including warnings; they must not be hidden behind the Bot-field PASS.
+   if(value==='Not detected')return {verdict:'PASS',source:'[data-test-property-name="bot"]',value,observations};
+   if(/^You are a (?:bad |good )?bot\b/i.test(value||''))return {verdict:'FAIL',source:'[data-test-property-name="bot"]',value:value.slice(0,200),observations};
   }
   if(kind==='sannysoft'){
    if(!document.querySelector('#user-agent-result')?.textContent?.trim()||!/^\d+/.test(document.querySelector('#plugins-length-result')?.textContent?.trim()||''))return null;
-   const ids=['user-agent-result','webdriver-result','advanced-webdriver-result','chrome-result','plugins-length-result','plugins-type-result'];
+   const scanner=document.querySelector('#fp2');
+   const ids=['user-agent-result','webdriver-result','advanced-webdriver-result','chrome-result','plugins-length-result','plugins-type-result',...(scanner?['permissions-result','languages-result','webgl-vendor','webgl-renderer','broken-image-dimensions']:[])];
    const cells=ids.map(id=>{const e=document.getElementById(id);return e?.textContent?.trim()?{id,value:e.textContent.trim().slice(0,400),failed:e.classList.contains('failed')}:null;});
    if(cells.some(c=>!c))return null;
-   return {verdict:cells.some(c=>c.failed)?'FAIL':'PASS',source:'Completed result table',cells};
+   if(scanner){
+    const rows=Array.from(scanner.querySelectorAll('tr')).slice(0,80).map(row=>{const a=row.querySelectorAll('td');return a.length>=2?{id:'scanner.'+a[0].textContent.trim().slice(0,100),value:a[1].textContent.trim().slice(0,400),failed:a[1].classList.contains('failed')||/^FAIL$/i.test(a[1].textContent.trim())}:null;});
+    // Never call the first table a complete pass while the scanner is pending.
+    // A positive primary-table finding is already evidence and must survive.
+    if(rows.length<20||rows.some(r=>!r||!r.value)){if(!cells.some(c=>c.failed))return null;}
+    else cells.push(...rows);
+   }
+   return {verdict:cells.some(c=>c.failed)?'FAIL':'PASS',source:scanner?'Completed primary and scanner tables':'Completed result table',cells,observations:cells.map(c=>({name:c.id,value:(c.failed?'FAIL: ':'')+c.value}))};
   }
   if(kind==='incolumitas'){
    const data=JSON.parse((document.querySelector('#new-tests')?.textContent||'').slice(0,32768));
-   if(!['webdriverPresent','puppeteerEvaluationScript','inconsistentUserAgent','inconsistentLanguages'].every(k=>['OK','FAIL'].includes(data[k])))return null;
+   // Current published names replaced the old inconsistentUserAgent/languages
+   // fields. Accept either complete known schema, never a partial checklist.
+   const schemas=[['webdriverPresent','puppeteerEvaluationScript','inconsistentUserAgent','inconsistentLanguages'],['puppeteerEvaluationScript','webdriverPresent','connectionRTT','refMatch','overrideTest','overflowTest','puppeteerExtraStealthUsed','inconsistentWebWorkerNavigatorPropery','inconsistentServiceWorkerNavigatorPropery']];
+   if(!schemas.some(keys=>keys.every(k=>['OK','FAIL'].includes(data[k]))))return null;
    const checks=Object.fromEntries(Object.entries(data).filter(([,v])=>v==='OK'||v==='FAIL').slice(0,40));
-   return {verdict:Object.values(checks).includes('FAIL')?'FAIL':'PASS',source:'#new-tests',checks};
+   const observations=[];let legacyChecks=null;
+   try{const legacy=JSON.parse((document.querySelector('#detection-tests')?.textContent||'').slice(0,32768));legacyChecks={};for(const [group,entries]of Object.entries(legacy))if(entries&&typeof entries==='object')for(const [name,status]of Object.entries(entries))if(['OK','FAIL','WARN'].includes(status)&&Object.keys(legacyChecks).length<80)legacyChecks[group+'.'+name]=status;}catch{/* Preserve the current result when optional legacy output is unavailable. */}
+   if(!Object.values(checks).includes('FAIL')&&document.querySelector('#detection-tests')&&!Object.keys(legacyChecks||{}).some(k=>k.startsWith('fpscanner.')))return null;
+   // Feed every completed published failure into the unchanged fail-wins
+   // assessment. A documented compatibility issue is still the site's FAIL.
+   for(const [name,status]of Object.entries(legacyChecks||{}))checks['legacy.'+name]=status;
+   for(const [name,status]of Object.entries(legacyChecks||{}))observations.push({name:'Legacy '+name,value:status});
+   const score=(document.body?.innerText||'').match(/Your Behavioral Score:\s*(0(?:\.\d+)?|1(?:\.0+)?)(?!\d)/i);
+   observations.push({name:'Behavioral score',value:score?score[1]:'Unavailable'});
+   return {verdict:Object.values(checks).includes('FAIL')?'FAIL':'PASS',source:legacyChecks?'#new-tests and #detection-tests':'#new-tests',checks,legacyChecks,observations,scope:'Completed static checklists; behavioral score is recorded separately and can remain unavailable.'};
   }
  }catch{/* Missing/incomplete vendor UI; direct probes are independent. */}
  return null;

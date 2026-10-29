@@ -19,7 +19,9 @@ function fingerprint(probe,metadata={}){
   hardwareConcurrency:probe.hardwareConcurrency??null,deviceMemory:probe.deviceMemory??null,webglVendor:probe.webglVendor??null,webglRenderer:probe.webglRenderer??null};
  return {hash:createHash('sha256').update(JSON.stringify(fields)).digest('hex'),fields};
 }
-function evidenceKey(account){return createHash('sha256').update(JSON.stringify([account.aliasmode_profile_id,Number(account.binding_revision||0),Number(account.session_revision||0),account.engine,account.launch_mode,account.proxy_id,require('./browser-control-version.cjs')])).digest('hex');}
+// A report captured by obsolete result readers cannot authorize this setup.
+// Invalidate by key; preserve saved evidence, fingerprint fields and all holds.
+function evidenceKey(account){return createHash('sha256').update(JSON.stringify([account.aliasmode_profile_id,Number(account.binding_revision||0),Number(account.session_revision||0),account.engine,account.launch_mode,account.proxy_id,require('./browser-control-version.cjs'),require('./stealth-self-test.cjs').VERSION])).digest('hex');}
 function localDay(now,timezone='UTC'){return new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));}
 function dayNumber(day){return Math.floor(Date.parse(day+'T00:00:00Z')/DAY);}
 function lifecycle(account,{now=Date.now(),day=localDay(now,account.proxy_timezone||'UTC')}={}){
