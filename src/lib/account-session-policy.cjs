@@ -41,6 +41,21 @@ function lifecycle(account,{now=Date.now(),day=localDay(now,account.proxy_timezo
  return {state:step<4?'RAMP':'PROCESSING',reason:'Session prerequisites satisfied.',limit:Math.min(account.daily_limit,cap),rampStartedAt:start};
 }
 function interval(policy={},random=randomInt){const p=config(policy);return random(p.minIntervalSeconds,p.maxIntervalSeconds+1)*1000;}
+function clockVerdict(probe,timezone,now=Date.now()){
+ if(typeof timezone!=='string'||!timezone)return {verdict:'UNKNOWN',reason:'Configure the profile timezone before checking its clock.'};
+ if(probe?.timezone!==timezone)return {verdict:'FAIL',reason:'The browser timezone does not match the bound proxy timezone.'};
+ const observedOffsetMinutes=probe?.timezoneOffsetMinutes;
+ if(!Number.isInteger(observedOffsetMinutes)||Math.abs(observedOffsetMinutes)>840)return {verdict:'UNKNOWN',reason:'The browser clock offset could not be verified. Run the network check again.'};
+ let expectedOffsetMinutes;
+ try{
+  const name=new Intl.DateTimeFormat('en-US',{timeZone:timezone,timeZoneName:'longOffset'}).formatToParts(new Date(now)).find(p=>p.type==='timeZoneName')?.value;
+  const m=name?.match(/^GMT([+-])(\d{2}):(\d{2})$/);
+  expectedOffsetMinutes=name==='GMT'?0:m?(m[1]==='+'?-1:1)*(Number(m[2])*60+Number(m[3])):null;
+ }catch{expectedOffsetMinutes=null;}
+ if(expectedOffsetMinutes===null)return {verdict:'UNKNOWN',reason:'The configured timezone clock offset could not be verified.'};
+ return {verdict:observedOffsetMinutes===expectedOffsetMinutes?'PASS':'FAIL',timezone,observedOffsetMinutes,expectedOffsetMinutes,
+  reason:observedOffsetMinutes===expectedOffsetMinutes?'The browser clock matches its configured timezone.':'The profile clock is out of step with its timezone. Correct the AliasMode profile timezone or browser core before rerunning the network check.'};
+}
 function networkVerdict(observed,account){
  const country=String(observed?.country||'').toUpperCase(),timezone=observed?.timezone;
  if(!observed?.ip||!require('node:net').isIP(observed.ip)||!country||!timezone)return {verdict:'UNKNOWN',reason:'Network response lacks an IP, country or timezone.'};
@@ -51,4 +66,4 @@ function networkVerdict(observed,account){
  if(observed.ip!==account.session_evidence.expectedExitIp)return {verdict:'FAIL',reason:'Observed exit IP differs from the dedicated proxy binding.'};
  return {verdict:'PASS',ip:observed.ip,country,timezone,key:evidenceKey(account)};
 }
-module.exports={DEFAULTS,config,fingerprint,evidenceKey,lifecycle,localDay,interval,networkVerdict};
+module.exports={DEFAULTS,config,fingerprint,evidenceKey,lifecycle,localDay,interval,networkVerdict,clockVerdict};

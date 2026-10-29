@@ -8,6 +8,18 @@ test('obsolete detector readers cannot authorize a session or rewrite retained e
  assert.notEqual(p.evidenceKey(a),old);a.session_evidence.network.key=old;a.session_evidence.gate.key=old;const before=structuredClone(a.session_evidence);
  assert.equal(p.lifecycle(a).state,'PROVISION');assert.deepEqual(a.session_evidence,before);a.attention_reason='Exact saved LinkedIn hold';assert.equal(p.lifecycle(a).state,'HOLD');assert.equal(p.lifecycle(a).reason,'Exact saved LinkedIn hold');assert.deepEqual(a.session_evidence,before);
 });
+test('timezone verification requires the actual daylight-saving clock offset, not just its name',()=>{
+ const at=Date.parse('2026-10-29T12:00:00Z');
+ for(const [timezone,offset]of [['Africa/Casablanca',-60],['America/New_York',240],['Europe/London',0],['Asia/Kathmandu',-345]]){
+  assert.equal(p.clockVerdict({timezone,timezoneOffsetMinutes:offset},timezone,at).verdict,'PASS');
+  assert.equal(p.clockVerdict({timezone,timezoneOffsetMinutes:offset+60},timezone,at).verdict,'FAIL');
+  assert.equal(p.clockVerdict({timezone},timezone,at).verdict,'UNKNOWN');
+ }
+ assert.equal(p.clockVerdict({timezone:'Africa/Casablanca',timezoneOffsetMinutes:0},'Africa/Casablanca',at).expectedOffsetMinutes,-60);
+ assert.equal(p.clockVerdict({timezone:'UTC',timezoneOffsetMinutes:0},'Europe/London',at).verdict,'FAIL');
+ assert.equal(p.clockVerdict({timezone:'America/New_York',timezoneOffsetMinutes:300},'America/New_York',Date.parse('2026-01-15T12:00:00Z')).verdict,'PASS');
+ assert.equal(p.clockVerdict({timezoneOffsetMinutes:0},undefined,at).verdict,'UNKNOWN');
+});
 test('network evidence cannot pass without exact fixed exit IP and country/timezone matching',()=>{
  const a=account(),observed={ip:'192.0.2.10',country:'GB',timezone:'Europe/London'};
  assert.equal(p.networkVerdict(observed,a).verdict,'PASS');

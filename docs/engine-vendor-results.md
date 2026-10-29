@@ -1,5 +1,7 @@
 # Rendered website comparison — 29 October 2026
 
+**Current findings:** the [latest local repairs and provider measurements](engine-diagnostic-readers.md) reproduce Fingerprint tampering on additional fresh profiles and find an incorrect clock offset in AliasMode Chromium. A native correction failed. CloakBrowser's clock is correct in a focused trial, but tampering remains. The regular readers now retain the real published failures and warnings. Earlier clear observations below are preserved; they do not establish a lasting repair or all-clear.
+
 **Later follow-up:** the [counterbalanced repeats and fresh full battery](engine-detector-followup.md) cleared Fingerprint Bot and Browser Tampering in all three updated observations across two new profiles. Updated Sannysoft also completed with all 11 primary and 20 scanner checks clear. Incolumitas retains its legacy WebDriver failure and incomplete behavioral score; the timezone warning remains. The legacy source also fails a stock-browser false-valued-property reference. That explains this particular incompatibility without changing the site's result to PASS. No all-clear or account restart follows. The original findings below remain preserved.
 
 Fresh anonymous AliasMode Chromium profile, visible Chrome/155.0.8059.85. Old and updated controls used the same profile and unchanged browser settings. Actual result panels were observed for up to 120 seconds, with screenshots. Production detector code and its verdict rules were not changed.

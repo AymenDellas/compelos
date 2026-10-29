@@ -1,5 +1,9 @@
 # Account session controls and diagnostic evidence
 
+## Reader and clock repairs — 29 October 2026
+
+The [latest repair and provider measurements](engine-diagnostic-readers.md) correct obsolete result readers, expose vendor warnings, bind approvals to the reader version and reject a matching timezone name with an incorrect clock offset. The full V3 comparison preserves the legacy WebDriver FAIL. Fresh AliasMode Chromium profiles also show a UTC-offset inconsistency and a recurring Fingerprint tampering warning; a native clock correction did not work. A focused CloakBrowser profile has the correct clock and all 23 automation flags clear, but still reports tampering. No clock override, compatibility exception, engine migration, account start or all-clear is enabled. The earlier three clear Fingerprint observations below remain historical evidence; the warning subsequently recurred.
+
 ## Counterbalanced follow-up — 29 October 2026
 
 The [latest investigation](engine-detector-followup.md) used updated/old/old/updated repeats, then a fresh full old/updated battery. Fingerprint Bot and Browser Tampering cleared in all three new updated observations; the prior tampering finding is retained and its cause remains unisolated. Updated Sannysoft completed all 11 primary and 20 scanner checks without a failure. Incolumitas still publishes its legacy WebDriver failure and cannot complete its behavioral score; the timezone warning persists. An offline stock-browser reference confirms that this legacy rule flags a standard present-but-false property. Its literal FAIL is retained. No production behavior, detector verdict logic, proxy configuration, account hold or processing intent changed; no all-clear is issued.

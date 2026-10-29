@@ -25,6 +25,7 @@ export default function AccountSessionControls({account:a,disabled,online,onActi
     {s.lifecycle.required&&<><dt className="text-[var(--text-faint)]">Warmup</dt><dd>{s.lifecycle.done||0}/{s.lifecycle.required} observed days</dd></>}
     {s.lifecycle.limit&&<><dt className="text-[var(--text-faint)]">Effective daily limit</dt><dd>{s.lifecycle.limit} / ceiling {a.dailyLimit}</dd></>}
    </dl>
+   {typeof s.network?.reason==='string'&&<p className="field-hint">{s.network.reason}</p>}
    <div className="flex flex-wrap gap-2">
     <button type="button" className="btn btn-outline !text-xs" disabled={checkDisabled||!s.proxyId} onClick={()=>void onAction({action:'session-check',accountId:a.id,command:'preflight'})}>Check network</button>
     <button type="button" className="btn btn-outline !text-xs" disabled={checkDisabled} onClick={()=>void onAction({action:'session-check',accountId:a.id,command:'approve-identity'})}>{s.drift?'Approve reviewed browser identity':'Capture browser identity'}</button>

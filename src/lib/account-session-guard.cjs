@@ -20,8 +20,9 @@ function createSessionGuard({pool,owner,core,now=Date.now,checks=diagnostics}={}
     const observed=await checks.network(page,{assertActive:()=>active(a)}),region=new Intl.DisplayNames('en',{type:'region'}).of(a.proxy_country);
     if(observed.country===region||observed.countryName===region)observed.country=a.proxy_country;
     const probe=await checks.probe(page);let verdict=policy.networkVerdict(observed,a);
-    if(probe.timezone!==a.proxy_timezone)verdict={verdict:'FAIL',reason:'The browser timezone does not match the bound proxy timezone.'};
-    patch.network={...verdict,observed,checkedAt:new Date(now()).toISOString()};patch.gate=null;patch.previousGate=a.session_evidence?.gate||null;
+    const clock=policy.clockVerdict(probe,a.proxy_timezone,now());
+    if(clock.verdict==='FAIL'||clock.verdict==='UNKNOWN'&&verdict.verdict==='PASS')verdict=clock;
+    patch.network={...verdict,observed,clock,checkedAt:new Date(now()).toISOString()};patch.gate=null;patch.previousGate=a.session_evidence?.gate||a.session_evidence?.previousGate||null;
     if(verdict.verdict==='PASS'&&a.connected_at&&!a.session_evidence?.fingerprint){const fingerprint=await observedFingerprint(a,page);patch.fingerprint={...fingerprint,checkedAt:new Date(now()).toISOString()};}
    }else if(action==='approve-identity'){
     const fingerprint=await observedFingerprint(a,page);

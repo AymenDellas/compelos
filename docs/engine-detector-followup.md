@@ -1,5 +1,7 @@
 # Detector follow-up — 29 October 2026
 
+**Later measurements:** [reader and clock repairs](engine-diagnostic-readers.md) retain the original findings below and report that tampering recurred on additional fresh profiles. The local reader/preflight defects are repaired. The AliasMode Chromium clock inconsistency and recurring provider tampering results are unresolved; no all-clear or account start is authorized by the clear observations in this earlier follow-up.
+
 **All-clear: NO.** This investigation preserves failed website findings and incomplete execution. No production browser code, detector verdict rule, profile configuration, proxy, account hold or processing intent changed.
 
 ## Full old/updated comparison
