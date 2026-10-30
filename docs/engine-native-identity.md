@@ -1,5 +1,11 @@
 # Native AliasMode identity repair — 30 October 2026
 
+**Later separation investigation:** the [profile separation and Firefox trial](engine-profile-separation.md)
+confirms that this active native-host mode shares device characteristics. The
+successful observations below have single-profile diagnostic scope; they do not
+clear a fleet of independent account identities. The user kept Firefox as testing
+only, so no runtime migration or general account go-ahead follows from that trial.
+
 This report supersedes the remaining-provider status in the 29 October
 [repeatability investigation](engine-profile-repeatability.md). Those old failed,
 partial and successful observations remain recorded. No old report is relabeled.

@@ -1,5 +1,34 @@
 # Draft provider repair request: profile-dependent modification findings
 
+## 30 October follow-up: Chromium profile separation remains unresolved
+
+The [native-host repair](../../docs/engine-native-identity.md) subsequently cleared
+Bot/modification findings in six managed launches with correct native clocks.
+It resolves the preceding clock limitation below, but exposes shared host device
+characteristics. The [new separation study](../../docs/engine-profile-separation.md)
+retains all prior failures and records these additional findings:
+
+- Ten local Chromium launches confirm seed-only hardware composition leaves the
+  sampled canvas, WebGL, audio and font rendering shared. Native noise separates
+  the sampled rendering but brings back the modification warning in four of four
+  public reference launches using two fixed identities.
+- Beta.70 still uses the same Windows Chromium `.4` core. Please provide a native
+  repair with stable, internally coherent per-profile rendering and hardware,
+  working clocks and documented limitations. A manager version change alone
+  does not establish that repair.
+- The existing AliasMode Firefox core demonstrates stable, distinct actual pixel
+  identities and published visitor IDs across two profiles restarted twice each,
+  with clear Bot/modification results and passing US clocks. It still shows a
+  VPN/OS warning; unproxied Casablanca clocks fail. The user explicitly kept
+  Firefox as testing only. No production adapter/default change was made.
+
+Acceptance still requires preserving every raw warning, unsuccessful attempt,
+existing account identity and exact hold. No renderer injection, detector-verdict
+rewrite or guarantee of unlinkability is requested. This remains an unsent draft.
+The reproduction and limitations below describe the earlier readback-only patch.
+
+## Earlier reproduction
+
 This is a prepared reproduction, not an externally submitted issue. No account,
 proxy credential, purchased address, cookie, private endpoint or profile ID is
 included. No LinkedIn account operation is required to reproduce it.

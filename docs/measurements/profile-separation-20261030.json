@@ -1,0 +1,244 @@
+{
+  "version": "PROFILE_SEPARATION_TEST_RECEIPT_V1",
+  "date": "2026-10-30",
+  "productionBaselineCommit": "3427d0f92955ecd16f59b5617c9b22853634056e",
+  "decision": "TESTING_ONLY",
+  "productionChanged": false,
+  "accountClearance": false,
+  "detectorLogicChanged": false,
+  "transport": "ALIASMODE_FIREFOX_MCP",
+  "collectorTransportLabel": "CDP (unchanged Chrome collector metadata; not the actual Firefox transport)",
+  "firefoxVersion": "156.0.1-beta.36-r11",
+  "firefoxExecutableSha256": "cf60060ac7664bdf954353a18f358d7f251b68272119a5b3a6d3f11abd8bbb4f",
+  "confirmationBenchmark": "firefox-public-proxy-4666577f-0c8b-451c-9d95-1b1d9a8c915b",
+  "runs": [
+    {
+      "profile": 1,
+      "restart": 1,
+      "clock": "PASS",
+      "pageClocksPassed": 7,
+      "automationFlagsFalse": 23,
+      "bot": "Not detected",
+      "modification": "Not detected",
+      "vpnWarning": "You are using a VPN 🌐 (public VPN IP, OS mismatch)",
+      "suspectScore": "12",
+      "endpointsHttp200": 7,
+      "rawCounts": {
+        "PASS": 1,
+        "FAIL": 6,
+        "UNKNOWN": 0
+      },
+      "admission": "FAIL",
+      "failedDirectCheck": "chrome",
+      "sannysoft": {
+        "passed": 30,
+        "failed": 1,
+        "failedCell": "chrome-result"
+      },
+      "incolumitasPublishedResult": "UNKNOWN",
+      "closed": true
+    },
+    {
+      "profile": 1,
+      "restart": 2,
+      "clock": "PASS",
+      "pageClocksPassed": 7,
+      "automationFlagsFalse": 23,
+      "bot": "Not detected",
+      "modification": "Not detected",
+      "vpnWarning": "You are using a VPN 🌐 (public VPN IP, OS mismatch)",
+      "suspectScore": "12",
+      "endpointsHttp200": 7,
+      "rawCounts": {
+        "PASS": 1,
+        "FAIL": 6,
+        "UNKNOWN": 0
+      },
+      "admission": "FAIL",
+      "failedDirectCheck": "chrome",
+      "sannysoft": {
+        "passed": 30,
+        "failed": 1,
+        "failedCell": "chrome-result"
+      },
+      "incolumitasPublishedResult": "UNKNOWN",
+      "closed": true
+    },
+    {
+      "profile": 2,
+      "restart": 1,
+      "clock": "PASS",
+      "pageClocksPassed": 7,
+      "automationFlagsFalse": 23,
+      "bot": "Not detected",
+      "modification": "Not detected",
+      "vpnWarning": "You are using a VPN 🌐 (public VPN IP, OS mismatch)",
+      "suspectScore": "12",
+      "endpointsHttp200": 7,
+      "rawCounts": {
+        "PASS": 1,
+        "FAIL": 6,
+        "UNKNOWN": 0
+      },
+      "admission": "FAIL",
+      "failedDirectCheck": "chrome",
+      "sannysoft": {
+        "passed": 30,
+        "failed": 1,
+        "failedCell": "chrome-result"
+      },
+      "incolumitasPublishedResult": "UNKNOWN",
+      "closed": true
+    },
+    {
+      "profile": 2,
+      "restart": 2,
+      "clock": "PASS",
+      "pageClocksPassed": 7,
+      "automationFlagsFalse": 23,
+      "bot": "Not detected",
+      "modification": "Not detected",
+      "vpnWarning": "You are using a VPN 🌐 (public VPN IP, OS mismatch)",
+      "suspectScore": "12",
+      "endpointsHttp200": 7,
+      "rawCounts": {
+        "PASS": 1,
+        "FAIL": 6,
+        "UNKNOWN": 0
+      },
+      "admission": "FAIL",
+      "failedDirectCheck": "chrome",
+      "sannysoft": {
+        "passed": 30,
+        "failed": 1,
+        "failedCell": "chrome-result"
+      },
+      "incolumitasPublishedResult": "UNKNOWN",
+      "closed": true
+    }
+  ],
+  "identityComparisons": {
+    "canvas": {
+      "stableAcrossRestarts": true,
+      "differentAcrossProfiles": true
+    },
+    "webgl": {
+      "stableAcrossRestarts": true,
+      "differentAcrossProfiles": true
+    },
+    "fonts": {
+      "stableAcrossRestarts": true,
+      "differentAcrossProfiles": true
+    },
+    "combined": {
+      "stableAcrossRestarts": true,
+      "differentAcrossProfiles": true
+    },
+    "visitorIdHash": {
+      "stableAcrossRestarts": true,
+      "differentAcrossProfiles": true
+    }
+  },
+  "accountsUnchanged": true,
+  "temporaryProfilesClosedAndDeleted": true,
+  "rosterRestored": true,
+  "limitations": [
+    "The installed production adapter remains Chromium and exposes shared host hardware.",
+    "Raw browser-family-specific failures and unsupported published results have not been relabeled.",
+    "Fingerprint still publishes a public-VPN-IP/OS-mismatch warning and suspect score 12.",
+    "Unproxied Firefox Casablanca clock failures remain unresolved; the US/New York confirmation has passing clocks.",
+    "Two profiles and two restarts each do not prove unlinkability or future LinkedIn acceptance."
+  ],
+  "evidence": [
+    {
+      "benchmark": "firefox-fixture-37f797c5-be72-4b0a-8401-93167e3726c1",
+      "sha256": "b161a844d86d10ebf9b484a958234b8e6ae291629141b5a96bdb86f35684b824",
+      "runs": 0,
+      "executionState": "DIAGNOSTIC_PARTIAL"
+    },
+    {
+      "benchmark": "firefox-local-443692df-72a9-4a70-b50c-4094b692da83",
+      "sha256": "1cf4bd1592d7299b8938d668c3c8a04d73e1a6980920d7f2e350e275478beabb",
+      "runs": 4,
+      "executionState": "DIAGNOSTIC_COMPLETE"
+    },
+    {
+      "benchmark": "firefox-local-7fe1f366-ca41-416a-b8a9-770a0b150068",
+      "sha256": "ca283f46b94cb38d2e41e3f4e9c737e0b0d52f74d8dfb8fabc73e120bf45b7d7",
+      "runs": 1,
+      "executionState": "DIAGNOSTIC_PARTIAL"
+    },
+    {
+      "benchmark": "firefox-local-b53d0604-721b-4cfe-bcb8-5587185754df",
+      "sha256": "bb4f5c81c08d205e13170c0e40a5e1a43787057577f61f95b632be1383df852e",
+      "runs": 1,
+      "executionState": "DIAGNOSTIC_PARTIAL"
+    },
+    {
+      "benchmark": "firefox-local-d917331a-8d87-4107-8a62-ead3e78fa2ae",
+      "sha256": "0956608f259c5fd81b026e5187b10e687cf8d14c51d0067130e18df2a5ab238a",
+      "runs": 1,
+      "executionState": "DIAGNOSTIC_PARTIAL"
+    },
+    {
+      "benchmark": "firefox-public-06012ca4-529c-40cd-a69e-3ffa392f9fc8",
+      "sha256": "bf9883cb8ee5058783c10a67d8513f10eeadfaa0e82340331284c5079fdaf0bd",
+      "runs": 4,
+      "executionState": "DIAGNOSTIC_COMPLETE"
+    },
+    {
+      "benchmark": "firefox-public-proxy-4666577f-0c8b-451c-9d95-1b1d9a8c915b",
+      "sha256": "12928cf2c274d1eb4df42d78d79283586827d8d6e9be68ac439c7ae47604c772",
+      "runs": 4,
+      "executionState": "DIAGNOSTIC_COMPLETE"
+    },
+    {
+      "benchmark": "firefox-public-proxy-948694b9-5a3b-41af-b224-51adaa6cdcb5",
+      "sha256": "a66170ba04f36828fbdc03fe44b9723b1d5a9dae788b2a4ab1c374f0a757e850",
+      "runs": 1,
+      "executionState": "DIAGNOSTIC_PARTIAL"
+    },
+    {
+      "benchmark": "firefox-reference-213b1b4b-ee32-4f64-bcce-be2ab0e3a1b7",
+      "sha256": "71c520bd79b26c3e708adfcb268bd81f35e8a1b92336308ff5bf7e8f5c9c9251",
+      "runs": 4,
+      "executionState": "DIAGNOSTIC_COMPLETE"
+    },
+    {
+      "benchmark": "firefox-reference-97ebf5aa-40da-4400-8ead-cf7a841abdcb",
+      "sha256": "5f5dfac2bf239d98c4ce1a821185f884228cbbb2f2ed97b6e5822d89d987260f",
+      "runs": 1,
+      "executionState": "DIAGNOSTIC_PARTIAL"
+    },
+    {
+      "benchmark": "firefox-reference-adf01e78-fb0e-45b6-aa95-24ca1a51156c",
+      "sha256": "24019f61607a3d4bfc8c6cee26fb8100054a2981fca2ccb53b71d45cf1314c6a",
+      "runs": 4,
+      "executionState": "DIAGNOSTIC_COMPLETE"
+    },
+    {
+      "benchmark": "firefox-reference-e5120342-2e82-4fe1-a4ef-939555afc319",
+      "sha256": "69fa9593d9cbefae69ed4de96c7d582926adb0d92cd6079e98f1be8e69a588c9",
+      "runs": 4,
+      "executionState": "DIAGNOSTIC_COMPLETE"
+    },
+    {
+      "benchmark": "local-separation-2e530a71-ae24-4a0e-afa4-b52b1c5bc4b2",
+      "sha256": "e4c64457c39c6a50d080727d1440399e5577c1cda68ea6fff3308c955facaf23",
+      "runs": 10,
+      "executionState": "DIAGNOSTIC_COMPLETE"
+    },
+    {
+      "benchmark": "separation-candidates-824f1a46-9026-4703-9d58-9e2580996742",
+      "sha256": "30ac96c8fc3cfb7c2d5fe400d1c1c2d3dc83a964f275537a785b42c56287f6a3",
+      "runs": 0,
+      "executionState": "DIAGNOSTIC_PARTIAL"
+    },
+    {
+      "benchmark": "separation-direct-9b51262b-da4b-4744-bca0-e75d036dac15",
+      "sha256": "cf3ee40881d8b74e895b05f2730be794fe7bfe529c4bd860ed2d5c4fca58a358",
+      "runs": 4,
+      "executionState": "DIAGNOSTIC_COMPLETE"
+    }
+  ]
+}

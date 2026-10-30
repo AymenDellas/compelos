@@ -1,5 +1,11 @@
 # Session checklist audit — 28 October 2026
 
+**Latest scope:** [profile separation and Firefox trial](engine-profile-separation.md).
+The active Chromium host configuration shares device characteristics. Firefox
+passed the measured separation/bot/modification/US-clock checks, but the user
+chose testing only. It is not integrated; raw failures and warnings remain
+recorded, and this trial supplies no account go-ahead.
+
 **30 October follow-up:** [native AliasMode identity and clock repair](engine-native-identity.md)
 contains the latest implementation and separate managed-profile evidence. Dated
 claims below describe the preceding configurations and retain their original scope.

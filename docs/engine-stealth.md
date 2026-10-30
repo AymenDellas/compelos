@@ -1,5 +1,16 @@
 # Account session controls and diagnostic evidence
 
+## Profile separation and test-only Firefox trial — 30 October 2026
+
+The [latest separation study](engine-profile-separation.md) confirms the active
+Chromium host configuration shares this machine's device characteristics.
+Firefox produces stable, different sampled identities with clear bot/modification
+fields and correct US proxy clocks in four new runs, but the user chose **testing
+only**. It is not integrated, the current gate remains unchanged, and no account
+go-ahead is issued. The VPN/OS warning, Firefox Casablanca clock failure and all
+raw Chrome-specific failures remain visible in that report. The preceding native
+repair's successful observations do not establish multi-account separation.
+
 ## Native identity repair — 30 October 2026
 
 The [current native identity repair and verification](engine-native-identity.md)

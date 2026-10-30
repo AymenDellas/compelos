@@ -1,5 +1,11 @@
 # Local diagnostic gate and AliasMode repair — 29 October 2026
 
+**Latest scope:** [profile separation and test-only Firefox trial](engine-profile-separation.md).
+The active Chromium host setup shares device characteristics. Firefox's measured
+separation successes have not been integrated or used to alter admission. The
+raw Firefox battery remains FAIL, its published VPN/OS warning remains visible,
+and no general account go-ahead follows from the earlier gate repair.
+
 **30 October follow-up:** the [native identity repair](engine-native-identity.md)
 supersedes this page's provider status. The diagnostic gate is unchanged in that
 repair. The dated results and earlier limitations below remain recorded.
