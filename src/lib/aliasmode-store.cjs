@@ -67,4 +67,18 @@ async function sessionTransaction(pool,account,owner,action){const c=await pool.
 async function saveSession(pool,account,owner,value){await sessionTransaction(pool,account,owner,c=>c.query(`INSERT INTO compel_aliasmode_sessions(profile_id,account_id,owner,managed,headless,pid,target_id)
  VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(profile_id) DO UPDATE SET account_id=$2,owner=$3,managed=$4,headless=$5,pid=$6,target_id=$7,updated_at=NOW(),closed_at=NULL`,[account.aliasmode_profile_id,account.id,owner,value.managed,value.headless,value.pid,value.targetId]));}
 async function finishSession(pool,account,owner){await sessionTransaction(pool,account,owner,c=>c.query('UPDATE compel_aliasmode_sessions SET closed_at=NOW(),updated_at=NOW() WHERE profile_id=$1 AND account_id=$2',[account.aliasmode_profile_id,account.id]));}
-module.exports={SCHEMA,ensure,publicSettings,privateConfig,saveConfig,requestRefresh,allowProcessing,importProfile,bind,updateAccount,requestClose,finishClose,assertOwner,session,saveSession,finishSession};
+async function archiveAccount(pool,accountId){
+ await ensure(pool);if(typeof accountId!=='string')throw Error('Choose an account.');
+ const c=await pool.connect();try{await c.query('BEGIN');await c.query('SELECT id FROM compel_worker_config WHERE id=1 FOR UPDATE');
+  const a=(await c.query('SELECT * FROM compel_linkedin_accounts WHERE id=$1 AND NOT archived FOR UPDATE',[accountId])).rows[0];
+  if(!a)throw Error('Account not found.');
+  if(a.processing_enabled)throw Error('Pause this account before deleting it.');
+  if(a.login_requested_at||a.close_requested_at)throw Error('Wait for the pending operation to finish before deleting.');
+  if((await c.query('SELECT 1 FROM compel_worker_sessions WHERE account_id=$1 AND lease_until>NOW()',[accountId])).rowCount)throw Error('Close this account session before deleting it.');
+  if((await c.query('SELECT 1 FROM compel_aliasmode_sessions WHERE account_id=$1 AND closed_at IS NULL',[accountId])).rowCount)throw Error('Close the browser profile before deleting this account.');
+  await c.query("UPDATE compel_linkedin_accounts SET archived=TRUE,enabled=FALSE,processing_enabled=FALSE,processing_until=NULL,aliasmode_profile_id=NULL,changed_at=clock_timestamp() WHERE id=$1",[accountId]);
+  await c.query('UPDATE compel_worker_config SET revision=revision+1 WHERE id=1');
+  await c.query("SELECT pg_notify('compel_engine_wake','')");await c.query('COMMIT');
+ }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
+}
+module.exports={SCHEMA,ensure,publicSettings,privateConfig,saveConfig,requestRefresh,allowProcessing,importProfile,bind,updateAccount,requestClose,finishClose,assertOwner,session,saveSession,finishSession,archiveAccount};

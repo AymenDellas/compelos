@@ -185,6 +185,7 @@ export default function AliasModeAccounts(){
                         'Profile closure requested. Sign-in preserved.');}}
                       onRemove={()=>{setMenuOpen(null);void run(a.id,()=>change({action:'bind',accountId:a.id,profileId:null,name:'',bindingRevision:a.bindingRevision||0}),
                         'Profile unlinked. History and holds retained.');}}
+                      onDelete={()=>{setMenuOpen(null);if(!confirm(`Delete "${a.label}"? The account will be archived and removed from the list. Qualification history is preserved.`))return;void run(a.id,()=>change({action:'archive',accountId:a.id}),'Account deleted.');}}
                       onDismiss={()=>setMenuOpen(null)}/>}
                   </div>
                 </div>
@@ -224,7 +225,14 @@ export default function AliasModeAccounts(){
             <p className="field-hint">History and review holds are retained. Link an AliasMode profile to resume processing.</p>
             {unlinked.map(a=><div key={a.id} className="flex items-center justify-between gap-2 border-t border-[var(--line)] py-2 text-xs">
               <span>{a.label}{a.signedIn?.name?` · ${a.signedIn.name}`:''}</span>
-              {a.attentionReason&&<span className="text-[var(--bad)]">{a.attentionReason}</span>}
+              <div className="flex items-center gap-2">
+                {a.attentionReason&&<span className="text-[var(--bad)]">{a.attentionReason}</span>}
+                <button type="button" className="btn btn-ghost !text-xs !p-1 text-[var(--bad)]" title="Delete account"
+                  disabled={!!pending||a.processingEnabled}
+                  onClick={()=>{if(!confirm(`Delete "${a.label}"? The account will be archived. History is preserved.`))return;void run(a.id,()=>change({action:'archive',accountId:a.id}),'Account deleted.');}}>
+                  <Trash2 className="w-3.5 h-3.5"/>
+                </button>
+              </div>
             </div>)}
           </div>
         </details>}
@@ -250,9 +258,9 @@ export default function AliasModeAccounts(){
 
 /* ── account context menu ────────────────────────────────────────── */
 
-function AccountMenu({account:a,pending,online,onVerify,onSetup,onClose,onRemove,onDismiss}:{
+function AccountMenu({account:a,pending,online,onVerify,onSetup,onClose,onRemove,onDelete,onDismiss}:{
   account:WorkerAccount;pending:boolean;online:boolean;
-  onVerify:()=>void;onSetup:()=>void;onClose:()=>void;onRemove:()=>void;onDismiss:()=>void;
+  onVerify:()=>void;onSetup:()=>void;onClose:()=>void;onRemove:()=>void;onDelete:()=>void;onDismiss:()=>void;
 }){
   const ref=useRef<HTMLDivElement>(null);
   useEffect(()=>{
@@ -277,10 +285,15 @@ function AccountMenu({account:a,pending,online,onVerify,onSetup,onClose,onRemove
       <Unlink className="w-3.5 h-3.5"/>Close browser
     </button>
     <div className="menu-sep"/>
-    <button type="button" className="menu-item w-full text-left text-[var(--bad)]"
+    <button type="button" className="menu-item w-full text-left"
       disabled={pending||a.processingEnabled||a.online}
       onClick={onRemove}>
-      <Trash2 className="w-3.5 h-3.5"/>Remove profile
+      <Unlink className="w-3.5 h-3.5"/>Unlink profile
+    </button>
+    <button type="button" className="menu-item w-full text-left text-[var(--bad)]"
+      disabled={pending||a.processingEnabled||a.online}
+      onClick={onDelete}>
+      <Trash2 className="w-3.5 h-3.5"/>Delete account
     </button>
   </div>;
 }
