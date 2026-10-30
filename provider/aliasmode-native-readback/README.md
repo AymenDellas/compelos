@@ -1,5 +1,9 @@
 # AliasMode native image readback repair
 
+**Superseded for new profiles:** the [native identity and clock repair](../aliasmode-native-identity/README.md)
+includes this patch and replaces generated hardware composition for new profiles.
+This page describes the earlier readback-only mode, which existing profiles retain.
+
 **Scope correction:** [the repeatability study](../../docs/engine-profile-repeatability.md)
 finds modification warnings on two profiles despite this patch being active.
 Another profile clears them. This removes one identified trigger; it is not a

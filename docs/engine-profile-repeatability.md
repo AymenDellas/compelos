@@ -1,5 +1,9 @@
 # Profile repeatability investigation — 29 October 2026
 
+**30 October follow-up:** see the [native identity repair](engine-native-identity.md)
+for the later configuration and its separate verification. This report describes
+the earlier readback-only setup; its failed and partial observations remain intact.
+
 **Not cleared for account operation.** The predeclared study tested the retained
 purchased-proxy profile and two new anonymous profiles, with two complete browser
 launches per profile. Every launch attempted the unchanged seven-endpoint battery.

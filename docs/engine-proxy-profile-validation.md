@@ -1,5 +1,9 @@
 # Proxy-bound profile validation — 29 October 2026
 
+**30 October follow-up:** the same retained blank profile is tested separately
+under the [native identity repair](engine-native-identity.md). The findings below
+describe its earlier readback-only configuration and are not relabeled.
+
 The [subsequent repeatability study](engine-profile-repeatability.md) repeats this
 profile twice and tests two fresh profiles twice each. Automation flags clear
 in all six, but this profile's modification warning persists. The first

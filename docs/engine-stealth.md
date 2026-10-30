@@ -1,5 +1,13 @@
 # Account session controls and diagnostic evidence
 
+## Native identity repair — 30 October 2026
+
+The [current native identity repair and verification](engine-native-identity.md)
+supersede the provider status below. This changes new profiles' browser
+configuration without changing diagnostic verdicts, qualification, existing
+account identities, holds or paused intent. The dated studies below retain their
+original outcomes.
+
 ## Profile repeatability investigation — 29 October 2026
 
 [Six independent launches across three blank profiles](engine-profile-repeatability.md) all clear the 23 automation flags. The modification warning persists on two profiles and clears on the third; the old positive automation finding remains unexplained. The new study collector and failure-preserving assessor make this reproducible without changing runtime admission or detector logic. The provider repair remains incomplete, and no account all-clear is issued. Existing holds and paused intent remain unchanged.
