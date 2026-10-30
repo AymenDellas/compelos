@@ -143,7 +143,7 @@ export default function AliasModeAccounts(){
         <div className="space-y-3">
           {linked.map(a=>{
             const {status,label:statusLabel,badge,dot}=accountStatus(a);
-            return <div key={a.id} className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)] overflow-hidden" role="group" aria-label={a.label}>
+            return <div key={a.id} className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)]" role="group" aria-label={a.label}>
               {/* card header */}
               <div className="flex items-center gap-3 px-4 py-3">
                 <div className="min-w-0 flex-1">
@@ -269,7 +269,7 @@ function AccountMenu({account:a,pending,online,onVerify,onSetup,onClose,onRemove
     return()=>document.removeEventListener('mousedown',handler);
   },[onDismiss]);
 
-  return <div ref={ref} className="menu absolute right-0 top-full mt-1 z-30">
+  return <div ref={ref} className="menu absolute right-0 top-full mt-1 z-50">
     <button type="button" className="menu-item w-full text-left"
       disabled={pending||!online||a.closePending||a.processingEnabled}
       onClick={onVerify}>
