@@ -45,7 +45,8 @@ async function probe(page,{checkCDP=false}={}){
 async function identityProbe(page,{assertActive=async()=>{}}={}){
  await assertActive();
  // Preserve the old secure origin/hash fields: battery updates must not create drift.
- if(page.url()!==IDENTITY_URL)await page.goto(IDENTITY_URL,{waitUntil:'domcontentloaded',timeout:15000});
+ const current=page.url();
+ if(!current||(!current.startsWith('https://browserscan.net/')&&!current.startsWith('https://www.browserscan.net/')))await page.goto(IDENTITY_URL,{waitUntil:'domcontentloaded',timeout:35000});
  await assertActive();const p=await probe(page);
  if(!p.secureContext||new URL(p.origin).hostname.replace(/^www\./,'')!=='browserscan.net')throw Error('A consistent secure diagnostic context could not be established.');
  return p;
@@ -146,7 +147,7 @@ async function run(page,{assertActive=async()=>{},now=Date.now,urls=URLS,resultT
  for(const {url,kind}of BATTERY){
   await assertActive();const at=now();let e={url,kind},stage='navigation';
   try{
-   const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:15000});await assertActive();
+   const response=await page.goto(url,{waitUntil:'domcontentloaded',timeout:35000});await assertActive();
    const status=response?.status(),finalUrl=page.url();e={...e,status,finalUrl};
    if(kind==='tls'){
     stage='tls-json';
@@ -191,7 +192,7 @@ async function sourceHashes(page){
 async function network(page,{assertActive=async()=>{}}={}){
  const readings=[];
  for(let i=0;i<3;i++){
-  await assertActive();const response=await page.goto('https://api.ipapi.is/',{waitUntil:'domcontentloaded',timeout:15000});
+  await assertActive();const response=await page.goto('https://api.ipapi.is/',{waitUntil:'domcontentloaded',timeout:35000});
   if(response?.status()!==200)throw Error('Free network lookup unavailable (HTTP '+response?.status()+'); no automatic retry.');
   const data=await page.evaluate(()=>{try{return JSON.parse(document.body.innerText.slice(0,65536));}catch{return null;}});
   if(!data||data.error)throw Error('Free network lookup returned no usable evidence.');

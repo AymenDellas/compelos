@@ -420,6 +420,7 @@ function SessionSetupDialog({account:a,provider:_provider,pending:disabled,onlin
             {s.lifecycle.limit&&<><dt className="text-[var(--text-faint)]">Daily limit</dt><dd>{s.lifecycle.limit} / {a.dailyLimit} ceiling</dd></>}
           </dl>
           {typeof s.network?.reason==='string'&&<p className="field-hint">{s.network.reason}</p>}
+          {s.commandError&&<div className="p-2.5 rounded bg-[var(--surface-2)] border border-[var(--bad)] text-xs text-[var(--bad)] font-medium flex items-center gap-2"><AlertTriangle className="w-4 h-4 shrink-0"/><span>Check failed: {s.commandError}</span></div>}
         </div>
 
         {/* verification actions */}
