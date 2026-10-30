@@ -20,6 +20,7 @@ function fingerprint(probe,metadata={}){
  // Untagged existing profiles retain their saved identity hash. Only an
  // explicit rendering change adds a new identity component and needs review.
  if(metadata.readbackMode==='native')Object.assign(fields,{readbackMode:'native',providerPatchVersion:metadata.providerPatchVersion??null});
+ if(metadata.nativeIdentityMode==='host')Object.assign(fields,{nativeIdentityMode:'host',nativeClockVersion:metadata.nativeClockVersion??null});
  return {hash:createHash('sha256').update(JSON.stringify(fields)).digest('hex'),fields};
 }
 // A report captured by obsolete result readers cannot authorize this setup.

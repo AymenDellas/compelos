@@ -25,6 +25,17 @@ function fixture({active=false,saved=null,headless=true}={}){
 test('visible is the default and explicit headless configuration remains supported',async()=>{
  const f=fixture();delete f.account.launch_mode;const b=createAliasModeBrowser(f.options);await b.open();assert.equal(b.isHeadless(),false);await b.open({headless:false});assert.equal(f.calls.filter(v=>v==='connect').length,1);await b.recycle();
 });
+test('native profiles confirm their owned worker target clock before returning a usable surface',async()=>{
+ const f=fixture(),api=f.options.provider.client,start=api.start;
+ api.start=async(...args)=>({...await start(...args),readback:{mode:'native',patchVersion:'COMPELOS_ALIASMODE_READBACK_V1'},identity:{mode:'host',timezone:'America/New_York',patchVersion:'COMPELOS_NATIVE_IDENTITY_V1'}});
+ api.preparePage=async(id,target)=>{assert.equal(id,f.account.aliasmode_profile_id);assert.equal(target,'compel-tab');f.calls.push('clock.prepare');return {mode:'host',clockReady:true,timezone:'America/New_York',patchVersion:'COMPELOS_NATIVE_IDENTITY_V1'};};
+ const b=createAliasModeBrowser(f.options),surface=await b.open();assert.ok(f.calls.indexOf('newPage')<f.calls.indexOf('clock.prepare'));assert.equal(surface.page.providerConfiguration.nativeIdentityMode,'host');assert.equal(Object.isFrozen(surface.page.providerConfiguration),true);await b.recycle();
+});
+test('an unconfirmed native target clock cleans up only the owned newly opened profile',async()=>{
+ const f=fixture(),api=f.options.provider.client,start=api.start;
+ api.start=async(...args)=>({...await start(...args),identity:{mode:'host',timezone:'America/New_York',patchVersion:'COMPELOS_NATIVE_IDENTITY_V1'}});
+ api.preparePage=async()=>({mode:'host',clockReady:false});await assert.rejects(createAliasModeBrowser(f.options).open(),e=>e.code==='ALIASMODE_NATIVE_CLOCK');assert.equal(f.active,false);assert.ok(f.calls.includes('page.close'));
+});
 test('a failed page controller is detached before restoring only the recorded worker target',async()=>{
  const f=fixture(),b=createAliasModeBrowser(f.options);await b.open();f.page.isUsable=()=>false;assert.equal(b.isOpen(),false);
  // The mock factory returns a usable fixture object after reattachment.

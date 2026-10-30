@@ -2,6 +2,7 @@
 const path=require('node:path'),{execFile}=require('node:child_process');
 const {profileId,providerError}=require('./aliasmode-client.cjs');
 const READBACK_PATCH='COMPELOS_ALIASMODE_READBACK_V1';
+const IDENTITY_PATCH='COMPELOS_NATIVE_IDENTITY_V1';
 
 function helperPath(value=process.env.ALIASMODE_HELPER_PATH){
  const executable=value||(process.platform==='win32'&&process.env.LOCALAPPDATA?path.join(process.env.LOCALAPPDATA,'AliasMode','aliasmode-mcp.exe'):'');
@@ -53,6 +54,18 @@ function createAliasModeCli({executable,run=execFile,env=process.env}={}){
   if(value.profileId!==id||value.patchVersion!==READBACK_PATCH||!['native','seeded','engine-default'].includes(value.mode)||typeof value.supported!=='boolean'||value.mode==='native'&&!value.supported||mode!=='status'&&value.mode!==mode)throw providerError('ALIASMODE_READBACK_UNVERIFIED','AliasMode did not confirm the requested profile rendering mode.');
   return {mode:value.mode,patchVersion:READBACK_PATCH,supported:value.supported};
  }
- return {version,status,open,readback,readbackCapability,idle:queue.idle};
+ async function identityCapability(){
+  let value;try{value=await command(['profiles','identity','--mode','capability']);}catch{throw providerError('ALIASMODE_IDENTITY_UNAVAILABLE','AliasMode lacks the validated native identity and clock support. Restore its provider patch before creating new profiles.');}
+  if(value.patchVersion!==IDENTITY_PATCH||value.capability!=='native-identity-with-clock-v1'||value.platform!=='win32')throw providerError('ALIASMODE_IDENTITY_UNAVAILABLE','Native profiles require the verified Windows AliasMode provider.');
+  return {patchVersion:IDENTITY_PATCH,capability:value.capability};
+ }
+ async function identity(id,mode='status',targetId=null){
+  profileId(id);if(!['status','host','composed'].includes(mode)||targetId!==null&&(mode!=='status'||typeof targetId!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(targetId)))throw providerError('ALIASMODE_IDENTITY_CONFIG','Choose a supported native identity mode and target.');
+  let value;try{value=await command(['profiles','identity','--profile',id,'--mode',mode,...(targetId?['--target',targetId]:[])]);}catch{throw providerError('ALIASMODE_IDENTITY_UNAVAILABLE','AliasMode could not confirm native identity or its clock. Close the profile before changing its configuration.');}
+  if(value.profileId!==id||value.patchVersion!==IDENTITY_PATCH||!['host','composed'].includes(value.mode)||typeof value.supported!=='boolean'||typeof value.running!=='boolean'||typeof value.clockReady!=='boolean'||mode!=='status'&&value.mode!==mode||value.mode==='host'&&(!value.supported||typeof value.timezone!=='string'||!value.timezone))throw providerError('ALIASMODE_IDENTITY_UNVERIFIED','AliasMode returned unverified native identity configuration.');
+  if(value.mode==='host'&&value.running&&!value.clockReady||targetId&&(!value.running||!value.clockReady))throw providerError('ALIASMODE_NATIVE_CLOCK','The profile native clock is not ready. No account navigation is authorized.');
+  return {mode:value.mode,patchVersion:IDENTITY_PATCH,supported:value.supported,timezone:value.timezone||'',running:value.running,clockReady:value.clockReady};
+ }
+ return {version,status,open,readback,readbackCapability,identity,identityCapability,idle:queue.idle};
 }
-module.exports={createAliasModeCli,helperPath,environment,READBACK_PATCH};
+module.exports={createAliasModeCli,helperPath,environment,READBACK_PATCH,IDENTITY_PATCH};

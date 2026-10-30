@@ -3,7 +3,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),path=requ
 const {createAliasModeCli,environment}=require('../../src/lib/aliasmode-cli.cjs');
 const executable=path.resolve('fixture-install/aliasmode-mcp.exe');
 function fixture(){const calls=[];let headless=true;const cli=createAliasModeCli({executable,env:{PATH:'fixture-path',DATABASE_URL:'private-db',AUTH_SECRET:'private-auth'},run:(file,args,options,done)=>{
- calls.push({file,args,options});const id=args[args.indexOf('--profile')+1],mode=args[args.indexOf('--mode')+1];let result=args[1]==='readback'?(mode==='capability'?{patchVersion:'COMPELOS_ALIASMODE_READBACK_V1',capability:'native-readback-opt-in-v1'}:{profileId:id,mode:mode==='status'?'native':mode,supported:true,patchVersion:'COMPELOS_ALIASMODE_READBACK_V1'}):args[0]==='version'?{version:'0.1.0-beta.69'}:args[1]==='status'?{profileId:id,state:'running',running:true,headless,port:9222}:{profileId:id,alreadyOpen:false,headless,port:9222};done(null,JSON.stringify({ok:true,result}));
+ calls.push({file,args,options});const id=args[args.indexOf('--profile')+1],mode=args[args.indexOf('--mode')+1];let result=args[1]==='identity'?(mode==='capability'?{patchVersion:'COMPELOS_NATIVE_IDENTITY_V1',capability:'native-identity-with-clock-v1',platform:'win32'}:{profileId:id,mode:mode==='status'?'host':mode,supported:true,patchVersion:'COMPELOS_NATIVE_IDENTITY_V1',timezone:'America/New_York',running:true,clockReady:true}):args[1]==='readback'?(mode==='capability'?{patchVersion:'COMPELOS_ALIASMODE_READBACK_V1',capability:'native-readback-opt-in-v1'}:{profileId:id,mode:mode==='status'?'native':mode,supported:true,patchVersion:'COMPELOS_ALIASMODE_READBACK_V1'}):args[0]==='version'?{version:'0.1.0-beta.69'}:args[1]==='status'?{profileId:id,state:'running',running:true,headless,port:9222}:{profileId:id,alreadyOpen:false,headless,port:9222};done(null,JSON.stringify({ok:true,result}));
  }});return {cli,calls,set headless(value){headless=value;}};}
 test('supported CLI headless launch uses an argument array, hidden child window and scrubbed environment',async()=>{
  const f=fixture();assert.deepEqual(await f.cli.open('profile-one'),{headless:true,port:9222});await f.cli.version();assert.equal(f.calls.length,2);
@@ -14,6 +14,14 @@ test('supported CLI headless launch uses an argument array, hidden child window 
 test('native rendering is confirmed by the running provider and uses an explicit profile mode',async()=>{
  const f=fixture();assert.equal((await f.cli.readbackCapability()).patchVersion,'COMPELOS_ALIASMODE_READBACK_V1');assert.deepEqual(await f.cli.readback('one','native'),{mode:'native',supported:true,patchVersion:'COMPELOS_ALIASMODE_READBACK_V1'});assert.deepEqual(f.calls[1].args,['profiles','readback','--profile','one','--mode','native','--json']);assert.equal(f.calls[1].options.env.AUTH_SECRET,undefined);
  const old=createAliasModeCli({executable,run:(_f,_a,_o,done)=>done(null,JSON.stringify({ok:true,result:{}}))});await assert.rejects(old.readbackCapability(),e=>e.code==='ALIASMODE_READBACK_UNAVAILABLE');await assert.rejects(old.readback('one'),e=>e.code==='ALIASMODE_READBACK_UNVERIFIED');
+});
+test('native identity requires a running-manager capability and prepares only the specified owned target',async()=>{
+ const f=fixture();assert.equal((await f.cli.identityCapability()).patchVersion,'COMPELOS_NATIVE_IDENTITY_V1');
+ const value=await f.cli.identity('one','status','owned-target');assert.equal(value.mode,'host');assert.equal(value.clockReady,true);
+ assert.deepEqual(f.calls[1].args,['profiles','identity','--profile','one','--mode','status','--target','owned-target','--json']);assert.equal(f.calls[1].options.env.AUTH_SECRET,undefined);
+ const old=createAliasModeCli({executable,run:(_f,_a,_o,done)=>done(null,JSON.stringify({ok:true,result:{}}))});await assert.rejects(old.identityCapability(),e=>e.code==='ALIASMODE_IDENTITY_UNAVAILABLE');await assert.rejects(old.identity('one'),e=>e.code==='ALIASMODE_IDENTITY_UNVERIFIED');
+ const unready=createAliasModeCli({executable,run:(_f,_a,_o,done)=>done(null,JSON.stringify({ok:true,result:{profileId:'one',patchVersion:'COMPELOS_NATIVE_IDENTITY_V1',mode:'host',supported:true,timezone:'America/New_York',running:true,clockReady:false}}))});await assert.rejects(unready.identity('one'),e=>e.code==='ALIASMODE_NATIVE_CLOCK');
+ await assert.rejects(f.cli.identity('one','host','wrong-target'),e=>e.code==='ALIASMODE_IDENTITY_CONFIG');
 });
 test('visible launch omits the flag and requires actual visible confirmation',async()=>{
  const f=fixture();await assert.rejects(f.cli.open('one',{headless:false}),e=>e.code==='ALIASMODE_MODE_UNVERIFIED'&&e.startedProfilePort===9222);f.headless=false;

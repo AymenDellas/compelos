@@ -28,6 +28,8 @@ test('human approval cannot override modification and retains raw compatibility 
 test('rendering choice and provider patch are part of frozen browser identity',()=>{
  const probe={...fixture.probe(),platform:'Win32',timezone:'UTC',locale:'en-GB',screen:{width:1920,height:1080}},metadata={profileId:'fixture',mode:'headful',readbackMode:'native',providerPatchVersion:'COMPELOS_ALIASMODE_READBACK_V1'},hash=p.fingerprint(probe,metadata).hash;
  assert.equal(hash,p.fingerprint(probe,{...metadata}).hash);assert.notEqual(hash,p.fingerprint(probe,{...metadata,readbackMode:'seeded'}).hash);assert.notEqual(hash,p.fingerprint(probe,{...metadata,providerPatchVersion:null}).hash);
+ const host={...metadata,nativeIdentityMode:'host',nativeClockVersion:'COMPELOS_NATIVE_IDENTITY_V1'};
+ assert.notEqual(hash,p.fingerprint(probe,host).hash);assert.equal(p.fingerprint(probe,host).hash,p.fingerprint(probe,{...host}).hash);assert.notEqual(p.fingerprint(probe,host).hash,p.fingerprint(probe,{...host,nativeClockVersion:'changed'}).hash);
  // Literal snapshot from the preceding controller. Installing the patch alone
  // must not manufacture identity drift for an unchanged, untagged profile.
  assert.equal(p.fingerprint(probe,{...metadata,readbackMode:'seeded'}).hash,'216c8af382deb97c9a3aee74f236c2f6dafbb206769b8d70da13e0e95047236b');

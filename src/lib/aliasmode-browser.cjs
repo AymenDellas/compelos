@@ -80,7 +80,12 @@ function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('
     // restored tabs, and never create an incognito context without its cookies.
     const target=previous?.target_id?await pageController.existingTarget(browser,previous.target_id):null;
     const page=await pageController.openPage(browser,{targetId:target?.targetId});if(!target)createdPage=page;await check();
-    if(state.readback)Object.defineProperty(page,'providerConfiguration',{value:Object.freeze({readbackMode:state.readback.mode,providerPatchVersion:state.readback.patchVersion}),configurable:false});
+    if(state.identity?.mode==='host'){
+     if(typeof api.preparePage!=='function')throw providerError('ALIASMODE_NATIVE_CLOCK','The provider cannot prepare this native profile clock.');
+     const prepared=await api.preparePage(id,page.target()._targetId);await check();
+     if(prepared.mode!=='host'||!prepared.clockReady||prepared.patchVersion!==state.identity.patchVersion||prepared.timezone!==state.identity.timezone)throw providerError('ALIASMODE_NATIVE_CLOCK','The provider did not confirm the worker tab native clock.');
+    }
+    if(state.readback)Object.defineProperty(page,'providerConfiguration',{value:Object.freeze({readbackMode:state.readback.mode,providerPatchVersion:state.readback.patchVersion,...(state.identity?.mode==='host'?{nativeIdentityMode:'host',nativeClockVersion:state.identity.patchVersion}: {})}),configurable:false});
     const managed=started||previous?.managed===true&&previous.pid===pid&&!!target;
     entry={browser,page,pid,managed,headless:state.headless,targetId:page.target()._targetId,expected:false};
     entry.listener=()=>{if(entry?.browser===browser&&!entry.expected)onDisconnect(providerError('ALIASMODE_CDP_DISCONNECTED','AliasMode browser connection closed. The same profile will be reconciled; checkpoints are retained.'));};

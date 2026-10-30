@@ -1,0 +1,13 @@
+{
+  "patch": "COMPELOS_NATIVE_IDENTITY_V1",
+  "upstreamCommit": "9577c815e30af8958d5a604fe5c9820b6e400886",
+  "upstreamTag": "v0.1.0-beta.69",
+  "compiler": "Bun 1.2.21 windows-x64-baseline",
+  "installedSidecarSha256": "a042192c2f351c950912eb1e47df1b603afd4e5df7257a87ee82903ab25155c2",
+  "nativeClockSourceSha256": "0149e9d295446abb71bca1a433afbe0a65db1995fb8ee9a87a5cdf5abc03ae17",
+  "unchangedGuiSha256": "1b6f227382f5990d0dc660742b04c87e9c500096221d701b1c9244f1c91a0f1f",
+  "unchangedOfficialHelperSha256": "3b0e041fba489a76d40eaba5222a0c3a227c656cad54b1bd06d7e45e5d6e1b75",
+  "unchangedChromiumExeSha256": "0ef4de1bef7c12534031318e07ac89fa7942916a3abc89057985aafefbca619f",
+  "unchangedChromiumDllSha256": "a8cdf152a1748f5d21d5c9ef20f8f591041fa91a026ec7f1d3a1968175031be4",
+  "scope": "Local Windows build and source identity, not a vendor signature or account authorization"
+}

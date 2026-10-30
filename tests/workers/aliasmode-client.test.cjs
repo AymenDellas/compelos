@@ -1,14 +1,24 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {createAliasModeClient,baseUrl,websocket}=require('../../src/lib/aliasmode-client.cjs');
+const identity=(running=false,mode='host')=>({mode,supported:true,patchVersion:'COMPELOS_NATIVE_IDENTITY_V1',timezone:mode==='host'?'America/New_York':'',running,clockReady:running&&mode==='host'});
 const readback=()=>({mode:'native',supported:true,patchVersion:'COMPELOS_ALIASMODE_READBACK_V1'});
-function fixture(data={}){const calls=[];return {calls,client:createAliasModeClient({config:{baseUrl:'http://127.0.0.1:50400',apiKey:'must-never-forward'},cli:{version:async()=>'0.1.0-beta.69',readback:async()=>readback(),readbackCapability:async()=>({patchVersion:readback().patchVersion}),status:async()=>({running:true,state:'running',headless:true,port:9222}),idle:async()=>{}},fetch:async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({code:0,data}),{status:200});}})};}
+function fixture(data={}){const calls=[];return {calls,client:createAliasModeClient({config:{baseUrl:'http://127.0.0.1:50400',apiKey:'must-never-forward'},cli:{version:async()=>'0.1.0-beta.69',readback:async()=>readback(),readbackCapability:async()=>({patchVersion:readback().patchVersion}),identityCapability:async()=>({patchVersion:'COMPELOS_NATIVE_IDENTITY_V1'}),identity:async(_id,mode)=>identity(data.status==='Active',mode==='composed'?'composed':'host'),status:async()=>({running:true,state:'running',headless:true,port:9222}),idle:async()=>{}},fetch:async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({code:0,data}),{status:200});}})};}
 test('new profile provisioning explicitly chooses the native Chromium runtime and fixed screen without credentials',async()=>{
  for(const engine of ['aliasmode-chromium','cloakbrowser']){
   const f=fixture({id:'new-fixture'});await f.client.createProfile({name:'Fixture member',engine});const body=JSON.parse(f.calls[0].options.body);
   assert.equal(body.engine,'chromium');assert.equal(body.chromium_runtime,engine==='aliasmode-chromium'?'aliasmode':'cloakbrowser');assert.equal(body.fingerprint_config.screen_resolution,'1920_1080');assert.equal(f.calls[0].options.method,'POST');
+  assert.equal(body.native_identity,engine==='aliasmode-chromium');
   assert.ok(!JSON.stringify(body).includes('password'));assert.ok(!JSON.stringify(f.calls).includes('must-never-forward'));
  }
+});
+test('native identity support is required before creating a new default profile',async()=>{
+ let calls=0;const client=createAliasModeClient({cli:{readbackCapability:async()=>({}),identityCapability:async()=>{throw Error('Native provider repair missing');}},fetch:async()=>{calls++;throw Error('Must not create');}});
+ await assert.rejects(client.createProfile({name:'New member'}),/Native provider repair missing/);assert.equal(calls,0);
+});
+test('identity and clock configuration cannot change while the official CLI launches a profile',async()=>{
+ let active=false,reads=0;const client=createAliasModeClient({cli:{readback:async()=>readback(),identity:async()=>({...identity(active),timezone:++reads===1?'America/New_York':'Europe/London'}),open:async()=>{active=true;return {headless:true,port:9222};},status:async()=>({running:true,state:'running',headless:true,port:9222})},fetch:async()=>new Response(JSON.stringify({code:0,data:{status:active?'Active':'Inactive',...(active?{ws:{puppeteer:'ws://127.0.0.1:9222/devtools/browser/fixture'}}:{})}}))});
+ await assert.rejects(client.start('one'),e=>e.code==='ALIASMODE_IDENTITY_UNVERIFIED'&&e.startedProfilePort===9222);
 });
 test('only loopback API and CDP addresses are accepted',()=>{
  assert.equal(baseUrl(),'http://127.0.0.1:50400');
@@ -16,7 +26,7 @@ test('only loopback API and CDP addresses are accepted',()=>{
  for(const value of ['ws://attacker.test:90/devtools/browser/id','ws://127.0.0.1:9/other','ws://user:secret@localhost:9/devtools/browser/id'])assert.throws(()=>websocket(value));
 });
 test('CLI launches headlessly while Local API supplies CDP and confirmed stop without auth or launch flags',async()=>{
- let active=false;const calls=[],cli={version:async()=>'0.1.0-beta.69',readback:async()=>readback(),status:async()=>({running:true,state:'running',headless:true,port:9222}),open:async(id,options)=>{calls.push({id,options});active=true;return {headless:true,port:9222};},idle:async()=>{}};
+ let active=false;const calls=[],cli={version:async()=>'0.1.0-beta.69',readback:async()=>readback(),identity:async()=>identity(active),status:async()=>({running:true,state:'running',headless:true,port:9222}),open:async(id,options)=>{calls.push({id,options});active=true;return {headless:true,port:9222};},idle:async()=>{}};
  const client=createAliasModeClient({cli,fetch:async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({code:0,data:{status:active?'Active':'Inactive',...(active?{ws:{puppeteer:'ws://127.0.0.1:9222/devtools/browser/fixture'}}:{})}}));}});
  const value=await client.start('one',{headless:true});assert.equal(value.headless,true);assert.equal(calls.find(c=>c.id).options.headless,true);await client.stop('one');
  assert.ok(calls.filter(c=>c.url).every(c=>!c.url.includes('/start')&&!c.url.includes('launch_args')&&c.options.headers.Authorization===undefined));assert.equal(new URL(calls.at(-1).url).pathname,'/api/v1/browser/stop');
@@ -29,7 +39,7 @@ test('an unavailable provider capability blocks new native profiles before creat
 });
 
 test('rendering configuration must stay unchanged across a CLI-managed launch',async()=>{
- let active=false,reads=0;const client=createAliasModeClient({cli:{readback:async()=>({...readback(),mode:++reads===1?'native':'seeded'}),open:async()=>{active=true;return {headless:true,port:9222};},status:async()=>({running:true,state:'running',headless:true,port:9222})},fetch:async()=>new Response(JSON.stringify({code:0,data:{status:active?'Active':'Inactive',...(active?{ws:{puppeteer:'ws://127.0.0.1:9222/devtools/browser/fixture'}}:{})}}))});
+ let active=false,reads=0;const client=createAliasModeClient({cli:{readback:async()=>({...readback(),mode:++reads===1?'native':'seeded'}),identity:async()=>identity(active),open:async()=>{active=true;return {headless:true,port:9222};},status:async()=>({running:true,state:'running',headless:true,port:9222})},fetch:async()=>new Response(JSON.stringify({code:0,data:{status:active?'Active':'Inactive',...(active?{ws:{puppeteer:'ws://127.0.0.1:9222/devtools/browser/fixture'}}:{})}}))});
  await assert.rejects(client.start('one'),e=>e.code==='ALIASMODE_READBACK_UNVERIFIED'&&e.startedProfilePort===9222);
 });
 test('CLI and Local API instance disagreement fails closed',async()=>{
