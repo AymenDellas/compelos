@@ -1,5 +1,10 @@
 # Proxy-bound profile validation — 29 October 2026
 
+The [subsequent repeatability study](engine-profile-repeatability.md) repeats this
+profile twice and tests two fresh profiles twice each. Automation flags clear
+in all six, but this profile's modification warning persists. The first
+automation finding below remains recorded and unexplained.
+
 **The new blank profile is not cleared for account use.** Its proxy connection
 and clock pass, but Fingerprint reports browser modification in both the full
 battery and an unchanged focused repeat. The earlier anonymous native-readback

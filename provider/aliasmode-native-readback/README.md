@@ -1,5 +1,11 @@
 # AliasMode native image readback repair
 
+**Scope correction:** [the repeatability study](../../docs/engine-profile-repeatability.md)
+finds modification warnings on two profiles despite this patch being active.
+Another profile clears them. This removes one identified trigger; it is not a
+universal browser repair. The [remaining provider request](repair-request.md) is
+prepared with all outcomes retained.
+
 This is a local modification of AliasMode's Apache-2.0 source, not an official
 vendor release. It keeps AliasMode as the profile/cookie/proxy owner and keeps
 the installed Chromium binary, official CLI, Local API and plain Puppeteer.

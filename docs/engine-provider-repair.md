@@ -1,5 +1,10 @@
 # AliasMode provider repair evidence — 29 October 2026
 
+**Later limitation:** [the profile repeatability study](engine-profile-repeatability.md)
+reproduces modification warnings despite the installed native-readback patch.
+Its earlier success below is specific to the tested profiles and trigger. The
+remaining provider repair is incomplete, with no account-operation clearance.
+
 **Repair now installed and confirmed:** [the gate/native-readback repair](engine-gate-repair.md) documents the published local AliasMode source patch and two completed default-native confirmations. Both show no modification/bot warning, all 23 automation flags false and correct clocks. Existing profiles were not migrated. This supersedes the unresolved repair status below, while retaining the controlled root-cause evidence and account boundaries.
 
 **Clock assessment superseded:** [the clock reference correction](engine-clock-reference.md) establishes that AliasMode's Casablanca UTC+0 is correct under current IANA rules. Our old Node reference incorrectly expected UTC+1. The clock-only managed check now passes without browser changes. The remaining provider issue in this report is the image-noise modification warning. Historical raw readings and original assessments are preserved below; there is no account-operation all-clear.

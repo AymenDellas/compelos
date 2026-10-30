@@ -1,5 +1,9 @@
 # Account session controls and diagnostic evidence
 
+## Profile repeatability investigation — 29 October 2026
+
+[Six independent launches across three blank profiles](engine-profile-repeatability.md) all clear the 23 automation flags. The modification warning persists on two profiles and clears on the third; the old positive automation finding remains unexplained. The new study collector and failure-preserving assessor make this reproducible without changing runtime admission or detector logic. The provider repair remains incomplete, and no account all-clear is issued. Existing holds and paused intent remain unchanged.
+
 ## Latest proxy-bound validation — 29 October 2026
 
 [The new purchased-proxy profile](engine-proxy-profile-validation.md) connects correctly over SOCKS5 and passes both clock checks, but browser modification persists in the full battery and a focused repeat despite native readback and an absent noise flag. The first automation result clears on repeat; both results remain saved. The profile is retained closed, no real account is imported or started, and existing controls/holds are unchanged. The local gate correctly remains FAIL. This limits the earlier repair-confirmation results to their measured anonymous profiles; no broader all-clear is supported.

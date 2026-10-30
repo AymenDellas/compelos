@@ -80,4 +80,3 @@ async function deleteTemporaryProfile({api,production,profileId,owned,remove=asy
 }
 if(require.main===module)main().catch(e=>{console.error(e.code||e.name,e.message);process.exitCode=1;});
 module.exports={parseArgs,readStudy,main,deleteTemporaryProfile};
-
