@@ -19,6 +19,7 @@ export async function POST(request:Request){try{await authorize(request,true);}c
  else if(body.action==='session-check')await sessions.request(pool,body.accountId,body.command);
  else if(body.action==='approve-unclear')await sessions.approveUnknown(pool,body);
  else if(body.action==='close'){if(typeof body.accountId!=='string')throw Error('Choose an account.');await ads.requestClose(pool,body.accountId);}
- else throw Error('Unknown AliasMode action.');
+ else if(body.action==='archive'){if(typeof body.accountId!=='string')throw Error('Choose an account.');await ads.archiveAccount(pool,body.accountId);}
+  else throw Error('Unknown AliasMode action.');
  return NextResponse.json({provider:await ads.publicSettings(pool),accounts:await settings(pool)},{headers:{'Cache-Control':'no-store'}});
  }catch(error){return NextResponse.json({error:error instanceof Error?error.message:'Could not update AliasMode profiles.'},{status:400});}}

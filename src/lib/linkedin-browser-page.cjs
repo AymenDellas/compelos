@@ -29,7 +29,7 @@ function externalUrl(value, redirected=false) {
 }
 async function snapshot(page) {
  return page.evaluate(() => {
-  const selector='main,[role="main"],header,[role="banner"],nav,[role="navigation"],dialog,[role="dialog"],.feed-identity-module,.profile-card,[data-view-name="identity-self-profile"],[data-view-name="nav-settings__dropdown"],.global-nav__me';
+  const selector='main,[role="main"],header,[role="banner"],nav,[role="navigation"],dialog,[role="dialog"],aside,[role="complementary"],.feed-identity-module,.profile-card,[data-view-name="identity-self-profile"],[data-view-name="nav-settings__dropdown"],.global-nav__me';
   const roots = [...document.querySelectorAll(selector)]
    .filter(n => !n.parentElement?.closest(selector));
   const content = roots.filter(n => n.getClientRects().length).map(root => {
@@ -119,7 +119,7 @@ async function clickControl(page, selector, match, kind, options={}) {
  }
  return false;
 }
-async function navigateProfile(page,person,{assertActive=async()=>{},onNavigationEvidence,timeout=60000}={}) {
+async function navigateProfile(page,person,{assertActive=async()=>{},onNavigationEvidence,timeout=45000}={}) {
  const expected=profileUrl(person);
  if(!expected)throw problem('PROFILE_IDENTITY','The requested LinkedIn profile URL is invalid.');
  await assertActive();
@@ -155,8 +155,6 @@ async function navigateProfile(page,person,{assertActive=async()=>{},onNavigatio
    // Register before input: a rendered link may perform a full document load
    // or LinkedIn's native same-document routing. Both retain browser semantics.
    const navigation=page.waitForNavigation({waitUntil:'load',timeout});
-   // Handle an early rejection while input is in flight, then await the ORIGINAL
-   // promise below. A timeout must propagate; never turn it into a null response.
    navigation.catch(()=>{});
    if(el){method='rendered-link';await pressControl(page,el);}
    else await page.evaluate(url=>location.assign(url),expected);
@@ -230,7 +228,7 @@ function signedInIdentity(state, now=new Date().toISOString()) {
  const $=cheerio.load(state.html), identities=[];
  // Never infer the viewer from feed authors, suggestions, the configured email,
  // or the profile currently being inspected.
- const scopes=$('.feed-identity-module,.profile-card:has(a[href*="/me/"]),.profile-card:has(a[href*="/dashboard/"]),[data-view-name="identity-self-profile"],.global-nav__me,[data-view-name="nav-settings__dropdown"]');
+ const scopes=$('aside:has(a[href*="/me/"]),aside:has(a[href*="/dashboard/"]),.feed-identity-module,.profile-card:has(a[href*="/me/"]),.profile-card:has(a[href*="/dashboard/"]),[data-view-name="identity-self-profile"],.global-nav__me,[data-view-name="nav-settings__dropdown"]');
  scopes.each((_i,node)=>{
   // LinkedIn also renders identity-self-profile on the profile link itself.
   // find() only visits descendants, so excluding that anchor loses the viewer.
@@ -238,7 +236,11 @@ function signedInIdentity(state, now=new Date().toISOString()) {
   const urls=[...new Set(links.map(n=>profileUrl($(n).attr('href'))))];
   if(urls.length!==1)return;
   const link=links.find(n=>!new RegExp(identityLabels.view,'iu').test(identityLabel($(n).text())) && text($(n).text()));
-  const name=text(scope.find('h2,h3,.artdeco-entity-lockup__title,.feed-identity-module__actor-meta').first().text()) || text(link&&$(link).text()) || text(scope.find('img[alt]').first().attr('alt')).replace(/^(?:photo of|profile photo of)\s+/i,'');
+  const spanName = text(scope.find('a[href*="/in/"] span,a[href*="/in/"] strong').filter((_, el) => {
+   const t = text($(el).text());
+   return t && !/^(?:Dashboard|Profile viewers|Try Premium|Student at|Access exclusive)/i.test(t);
+  }).first().text());
+  const name=text(scope.find('h2,h3,.artdeco-entity-lockup__title,.feed-identity-module__actor-meta').first().text()) || spanName || text(link&&$(link).text().split('\n')[0]) || text(scope.find('img[alt]').first().attr('alt')).replace(/^(?:photo of|profile photo of)\s+/i,'');
   if(!name||new RegExp(identityLabels.view,'iu').test(identityLabel(name))||new RegExp(identityLabels.me,'iu').test(identityLabel(name))||/^(?:profile photo|profile|الملف الشخصي)$/iu.test(identityLabel(name)))return;
   const identity=cleanIdentity({name,profileUrl:urls[0],checkedAt:now});
   if(identity)identities.push(identity);

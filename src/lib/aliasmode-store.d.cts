@@ -9,3 +9,4 @@ export function bind(pool:unknown,input:unknown):Promise<void>;
 export function importProfile(pool:unknown,input:unknown):Promise<string>;
 export function updateAccount(pool:unknown,input:unknown):Promise<void>;
 export function requestClose(pool:unknown,id:string):Promise<void>;
+export function archiveAccount(pool:unknown,accountId:string):Promise<void>;

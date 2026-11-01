@@ -26,7 +26,7 @@ export default function AccountSessionControls({account:a,disabled,online,onActi
     {s.lifecycle.required&&<><dt className="text-[var(--text-faint)]">Warmup</dt><dd>{s.lifecycle.done||0}/{s.lifecycle.required} observed days</dd></>}
     {s.lifecycle.limit&&<><dt className="text-[var(--text-faint)]">Effective daily limit</dt><dd>{s.lifecycle.limit} / ceiling {a.dailyLimit}</dd></>}
    </dl>
-   {typeof s.network?.reason==='string'&&<p className="field-hint">{s.network.reason}</p>}
+   {typeof s.network?.reason==='string'&&<p className="field-hint">{s.network.reason}</p>}{s.commandError&&<p className="field-hint text-[var(--bad)] font-semibold">{s.commandError}</p>}
    {s.gate?.compatibility?.map(c=><p className="field-hint" key={c.id}>Compatibility finding · raw {c.rawVerdict} retained: {c.reason}</p>)}
    {s.gate?.scope&&<p className="field-hint">{s.gate.scope}</p>}
    <div className="flex flex-wrap gap-2">
