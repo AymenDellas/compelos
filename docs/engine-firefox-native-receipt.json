@@ -248,6 +248,20 @@
       "errors": 6,
       "warnings": 4,
       "scope": "Existing unchanged copy-studio components"
+    },
+    "mergedAffected": {
+      "passed": 40,
+      "failed": 0
+    },
+    "installedRuntimeFocused": {
+      "passed": 20,
+      "failed": 0
+    },
+    "mergedTypes": "PASS",
+    "mergedBuild": "PASS",
+    "deploymentTraces": {
+      "checked": 92,
+      "privateRuntimeAssets": 0
     }
   },
   "limitations": [
@@ -256,5 +270,14 @@
     "New York Date and Intl clock mechanics pass; no proxy binding/country alignment was tested. The earlier Casablanca Firefox clock failure is not repaired or relabeled.",
     "The raw public counts remain one PASS/six FAIL because the original direct collector expects a Chrome object. Only the narrowly scoped local Firefox interpretation differs.",
     "The initial saved admission also incorrectly treated TLS collection without a CDP console challenge as incomplete. Raw report preserved; the corrected local interpretation is explicitly recomputed here and tested. Incolumitas remains UNKNOWN."
-  ]
+  ],
+  "integrationCommit": "70a2537",
+  "localRuntimeInstalled": true,
+  "localAgent": {
+    "online": true,
+    "processing": 0,
+    "commands": 0,
+    "openBrowsers": 0,
+    "allProfilesClosed": true
+  }
 }

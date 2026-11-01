@@ -75,6 +75,13 @@ unchanged copy-studio components. All 92 deployment traces exclude private
 runtime assets. The initial build failure from bundling a desktop-only native
 dependency is retained; the final build uses Node's installed-module loader.
 
+The newer GitHub profile-panel, account-archive and diagnostic-error changes
+were merged without overwriting them. Forty affected tests, merged types/lint
+and the merged production build passed. The installed local runtime passed its
+20 focused native/diagnostic tests. The original app's agent is back online with
+zero processing accounts, zero queued session commands and all browsers closed.
+Unrelated local edits and real environment files were preserved.
+
 Private raw reports and the 50-record stored-CRM
 replay are kept under ignored `data/engine-v2/` and archived in PostgreSQL.
 Passing sampled diagnostics cannot prove universal unlinkability or establish
