@@ -127,7 +127,7 @@ function createAgent(options){
  async function heartbeat(){
   if(heartbeatTask)return heartbeatTask;
   heartbeatTask=(async()=>{
-   const state={stage:'AGENT_ACK',accounts:stages,resources:resource,browserCapacity:maxBrowsers,readerMode:'VOYAGER_V1',browserDriver:'ALIASMODE_CDP',recycleJobs:maxJobs,
+   const state={stage:'AGENT_ACK',accounts:stages,resources:resource,browserCapacity:maxBrowsers,readerMode:'VOYAGER_V1',browserDriver:'ALIASMODE',browserTransports:{chromium:'CDP',firefox:'PLAYWRIGHT'},recycleJobs:maxJobs,
     openAccountBrowsers:coordinator.reserved.size,pendingSaves:saves.size,saveCapacity:saves.capacity};
    if(options.onHeartbeat)await options.onHeartbeat(state);else if(await registry.heartbeat(pool,owner,state))stopped=true;
    await Promise.all([...entries.values()].filter(entry=>!entry.closing).map(async entry=>{

@@ -7,6 +7,11 @@ test('externally managed AliasMode browser trees and app overhead are included o
  const data=await createSampler({pid:1,read:async()=>rows,externalRoots:async()=>[11,999]})();assert.equal(data.treeRssMB,100);assert.equal(data.aliasmodeRssMB,90);assert.equal(data.chromeRoots.find(r=>r.pid===11).rssMB,70);assert.deepEqual(data.missingBrowserRoots,[999]);
 });
 const mb=1048576;
+test('verified Firefox roots named aliasmode.exe retain separate account memory totals',async()=>{
+ const rows=[{pid:1,ppid:0,name:'node.exe',rss:10*mb,cpuMs:0},{pid:10,ppid:0,name:'aliasmode.exe',rss:20*mb,cpuMs:0},{pid:11,ppid:10,name:'aliasmode-sidecar.exe',rss:30*mb,cpuMs:0},
+  {pid:20,ppid:11,name:'aliasmode.exe',rss:40*mb,cpuMs:0},{pid:21,ppid:20,name:'aliasmode.exe',rss:50*mb,cpuMs:0},{pid:30,ppid:11,name:'aliasmode.exe',rss:60*mb,cpuMs:0},{pid:31,ppid:30,name:'aliasmode.exe',rss:70*mb,cpuMs:0}];
+ const result=await createSampler({pid:1,read:async()=>rows,externalRoots:async()=>[20,30]})();assert.deepEqual(result.missingBrowserRoots,[]);assert.equal(result.treeRssMB,280);assert.equal(result.chromeRssMB,220);assert.deepEqual(result.chromeRoots.map(r=>[r.pid,r.rssMB]),[[20,90],[30,130]]);
+});
 test('includes every descendant renderer and excludes unrelated Chrome and sampler helper',()=>{
  const rows=[{pid:1,ppid:0,name:'node'},{pid:2,ppid:1,name:'chrome'},{pid:3,ppid:2,name:'chrome'},
   {pid:4,ppid:0,name:'chrome'},{pid:5,ppid:1,name:'powershell.exe'}];

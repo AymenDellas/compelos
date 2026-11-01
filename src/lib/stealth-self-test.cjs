@@ -48,6 +48,10 @@ async function identityProbe(page,{assertActive=async()=>{}}={}){
  if(page.url()!==IDENTITY_URL)await page.goto(IDENTITY_URL,{waitUntil:'domcontentloaded',timeout:15000});
  await assertActive();const p=await probe(page);
  if(!p.secureContext||new URL(p.origin).hostname.replace(/^www\./,'')!=='browserscan.net')throw Error('A consistent secure diagnostic context could not be established.');
+ if(page.engine==='aliasmode-firefox'){
+  const rendered=await require('./browser-profile-readback.cjs').capture(page);await assertActive();
+  p.rendering={version:rendered.version,canvas:rendered.canvas,webgl:rendered.webgl,audio:rendered.audio,fonts:rendered.fonts};
+ }
  return p;
 }
 const result=(name,read,ok,value)=>({name,verdict:!read?'UNKNOWN':ok?'PASS':'FAIL',value:value??null});
@@ -174,8 +178,8 @@ async function run(page,{assertActive=async()=>{},now=Date.now,urls=URLS,resultT
   await assertActive();sites.push({...e,durationMs:now()-at});
  }
  const overall=verdict(sites),counts={PASS:0,FAIL:0,UNKNOWN:0};for(const s of sites)counts[s.verdict]++;
- const admission=require('./diagnostic-admission.cjs').assess(sites);
- return {version:VERSION,verdict:admission.verdict,reason:admission.reason,measurementVerdict:overall,admission,scope:admission.scope,controlTransport:'CDP',checkedAt:new Date(now()).toISOString(),durationMs:now()-start,counts,countsScope:'Raw direct/site/TLS results; compatibility does not rewrite these counts.',sites};
+ const admission=require('./diagnostic-admission.cjs').assess(sites,{engine:page.engine});
+ return {version:VERSION,verdict:admission.verdict,reason:admission.reason,measurementVerdict:overall,admission,scope:admission.scope,controlTransport:page.controlTransport||'CDP',checkedAt:new Date(now()).toISOString(),durationMs:now()-start,counts,countsScope:'Raw direct/site/TLS results; compatibility does not rewrite these counts.',sites};
 }
 async function sourceHashes(page){
  return page.evaluate(async()=>{

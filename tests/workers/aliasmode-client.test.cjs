@@ -4,6 +4,10 @@ const {createAliasModeClient,baseUrl,websocket}=require('../../src/lib/aliasmode
 const identity=(running=false,mode='host')=>({mode,supported:true,patchVersion:'COMPELOS_NATIVE_IDENTITY_V1',timezone:mode==='host'?'America/New_York':'',running,clockReady:running&&mode==='host'});
 const readback=()=>({mode:'native',supported:true,patchVersion:'COMPELOS_ALIASMODE_READBACK_V1'});
 function fixture(data={}){const calls=[];return {calls,client:createAliasModeClient({config:{baseUrl:'http://127.0.0.1:50400',apiKey:'must-never-forward'},cli:{version:async()=>'0.1.0-beta.69',readback:async()=>readback(),readbackCapability:async()=>({patchVersion:readback().patchVersion}),identityCapability:async()=>({patchVersion:'COMPELOS_NATIVE_IDENTITY_V1'}),identity:async(_id,mode)=>identity(data.status==='Active',mode==='composed'?'composed':'host'),status:async()=>({running:true,state:'running',headless:true,port:9222}),idle:async()=>{}},fetch:async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({code:0,data}),{status:200});}})};}
+test('new profile defaults to provider-owned Firefox without shared-host configuration or a launch',async()=>{
+ const calls=[];let closed=false;const client=createAliasModeClient({cli:{},fetch:async()=>assert.fail('No Chromium create or fallback'),firefoxRuntime:{connect:async()=>({call:async(method,params)=>{calls.push({method,params});return {id:'fresh-firefox'};},close:()=>{closed=true;}})}});
+ const created=await client.createProfile({name:'New member'});assert.equal(created.engine,'aliasmode-firefox');assert.equal(closed,true);assert.deepEqual(calls,[{method:'profiles.create',params:{input:{name:'New member',engine:'firefox',nativeIdentity:false},temporary:false}}]);
+});
 test('new profile provisioning explicitly chooses the native Chromium runtime and fixed screen without credentials',async()=>{
  for(const engine of ['aliasmode-chromium','cloakbrowser']){
   const f=fixture({id:'new-fixture'});await f.client.createProfile({name:'Fixture member',engine});const body=JSON.parse(f.calls[0].options.body);
@@ -12,9 +16,9 @@ test('new profile provisioning explicitly chooses the native Chromium runtime an
   assert.ok(!JSON.stringify(body).includes('password'));assert.ok(!JSON.stringify(f.calls).includes('must-never-forward'));
  }
 });
-test('native identity support is required before creating a new default profile',async()=>{
+test('native identity support is required before creating an explicit native Chromium profile',async()=>{
  let calls=0;const client=createAliasModeClient({cli:{readbackCapability:async()=>({}),identityCapability:async()=>{throw Error('Native provider repair missing');}},fetch:async()=>{calls++;throw Error('Must not create');}});
- await assert.rejects(client.createProfile({name:'New member'}),/Native provider repair missing/);assert.equal(calls,0);
+ await assert.rejects(client.createProfile({name:'New member',engine:'aliasmode-chromium'}),/Native provider repair missing/);assert.equal(calls,0);
 });
 test('identity and clock configuration cannot change while the official CLI launches a profile',async()=>{
  let active=false,reads=0;const client=createAliasModeClient({cli:{readback:async()=>readback(),identity:async()=>({...identity(active),timezone:++reads===1?'America/New_York':'Europe/London'}),open:async()=>{active=true;return {headless:true,port:9222};},status:async()=>({running:true,state:'running',headless:true,port:9222})},fetch:async()=>new Response(JSON.stringify({code:0,data:{status:active?'Active':'Inactive',...(active?{ws:{puppeteer:'ws://127.0.0.1:9222/devtools/browser/fixture'}}:{})}}))});
@@ -35,7 +39,7 @@ test('CLI launches headlessly while Local API supplies CDP and confirmed stop wi
 
 test('an unavailable provider capability blocks new native profiles before creating one',async()=>{
  let calls=0;const client=createAliasModeClient({cli:{readbackCapability:async()=>{throw Error('Missing patch');}},fetch:async()=>{calls++;throw Error('Must not create');}});
- await assert.rejects(client.createProfile({name:'New member'}),/Missing patch/);assert.equal(calls,0);
+ await assert.rejects(client.createProfile({name:'New member',engine:'aliasmode-chromium'}),/Missing patch/);assert.equal(calls,0);
 });
 
 test('rendering configuration must stay unchanged across a CLI-managed launch',async()=>{

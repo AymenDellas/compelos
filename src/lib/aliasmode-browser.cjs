@@ -11,6 +11,7 @@ function targetFilter(target){
 // Leave that library intact. Account tabs instead use explicit manual contexts
 // in aliasmode-page.cjs, without automatic page/worker attachment or spoofing.
 function createAliasModeBrowser({account,owner,pool,provider,puppeteer=require('puppeteer'),pageController=require('./aliasmode-page.cjs'),onDisconnect=()=>{},onStage=()=>{}}){
+ if(account.engine==='aliasmode-firefox')return require('./aliasmode-firefox-browser.cjs').createAliasModeFirefoxBrowser({account,owner,pool,provider,onDisconnect,onStage,ownership});
  const id=profileId(account.aliasmode_profile_id),store=provider.store,api=provider.client;
  let entry=null,opening=null,openingMode=null,closing=null,cancelled=false;
  const assertOwner=()=>store.assertOwner(pool,account,owner);

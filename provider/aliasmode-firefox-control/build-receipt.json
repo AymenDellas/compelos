@@ -1,0 +1,25 @@
+{
+  "version": "COMPELOS_FIREFOX_CONTROL_V1",
+  "upstreamCommit": "9577c815e30af8958d5a604fe5c9820b6e400886",
+  "upstreamTag": "v0.1.0-beta.69",
+  "compiler": "Bun 1.2.21 windows-x64-baseline",
+  "candidateSidecarSha256": "9581b06b93a54731903096a07366c5d5c78cb184ef07c82003f619d185b22b7c",
+  "nativeRuntimeClientSha256": "aa3878fd906b1efd6f8e117c2d6f8270089d7c3c64c6eeacf30fef99183cc3eb",
+  "patchSha256": "1158ae81f528d882710a76373442f18574b11a15e747ce20d946b10f27b12e24",
+  "unchangedFirefoxExeSha256": "cf60060ac7664bdf954353a18f358d7f251b68272119a5b3a6d3f11abd8bbb4f",
+  "existingNativeClientVersion": "1.58.2",
+  "providerTests": {
+    "passed": 726,
+    "failed": 0,
+    "skipped": 2
+  },
+  "noAutoLaunchTests": {
+    "passed": 2,
+    "failed": 0
+  },
+  "providerTypes": "PASS",
+  "installed": true,
+  "installedSidecarSha256": "9581b06b93a54731903096a07366c5d5c78cb184ef07c82003f619d185b22b7c",
+  "installedRuntimeClientSha256": "aa3878fd906b1efd6f8e117c2d6f8270089d7c3c64c6eeacf30fef99183cc3eb",
+  "installedAt": "2026-11-01T16:11:20.299Z"
+}

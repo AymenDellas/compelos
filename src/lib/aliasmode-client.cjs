@@ -17,7 +17,7 @@ function publicProfile(value){
  // persist, log or forward the raw response; select only public identifiers.
  return {id,name:String(value.name||id).replace(/[\u0000-\u001f]/g,'').slice(0,120),group:String(value.group_name||'').slice(0,120),number:String(value.serial_number||value.profile_no||'').slice(0,32)};
 }
-function createAliasModeClient({config={},fetch:fetcher=globalThis.fetch,timeoutMs=10000,cli}={}){
+function createAliasModeClient({config={},fetch:fetcher=globalThis.fetch,timeoutMs=10000,cli,firefoxRuntime}={}){
  // Bound local control work without delaying LinkedIn requests.
  const queue=require('./bounded-work.cjs').createBoundedQueue({capacity:16,concurrency:2});
  const helper=cli||require('./aliasmode-cli.cjs').createAliasModeCli();
@@ -67,8 +67,16 @@ function createAliasModeClient({config={},fetch:fetcher=globalThis.fetch,timeout
   }catch(error){error.startedProfilePort=opened.port;throw error;}
  }
  async function list(){let profiles=[],truncated=false;for(let page=1;page<=2;page++){const data=await request('/api/v1/user/list?'+new URLSearchParams({page:String(page),page_size:'100'}));if(!Array.isArray(data.list))throw providerError('ALIASMODE_API_RESPONSE','AliasMode did not return a supported profile list.');profiles.push(...data.list.map(publicProfile).filter(Boolean));if(data.list.length<100)break;if(page===2)truncated=true;}return {profiles:[...new Map(profiles.map(p=>[p.id,p])).values()],truncated};}
- async function createProfile({name,engine='aliasmode-chromium',nativeReadback=true,nativeIdentity=nativeReadback}){
-  if(typeof name!=='string'||!name.trim()||name.length>80||!['aliasmode-chromium','cloakbrowser'].includes(engine)||typeof nativeReadback!=='boolean'||typeof nativeIdentity!=='boolean')throw providerError('ALIASMODE_PROFILE_CONFIG','Enter a profile name and supported Chromium engine.');
+ async function nativeProfiles(){
+  const manager=await (firefoxRuntime||require('./aliasmode-firefox-runtime.cjs').createFirefoxRuntime({helper})).connect();
+  try{const result=await manager.call('profiles.list');if(!Array.isArray(result.profiles)||result.profiles.length>200)throw providerError('ALIASMODE_API_RESPONSE','Native profile metadata exceeded the bounded size.');return result.profiles.map(p=>({id:profileId(p.id),...(p.engine==='firefox'?{engine:'aliasmode-firefox'}:{})}));}finally{manager.close();}
+ }
+ async function createProfile({name,engine='aliasmode-firefox',nativeReadback=true,nativeIdentity=nativeReadback}){
+  if(typeof name!=='string'||!name.trim()||name.length>80||!['aliasmode-firefox','aliasmode-chromium','cloakbrowser'].includes(engine)||typeof nativeReadback!=='boolean'||typeof nativeIdentity!=='boolean')throw providerError('ALIASMODE_PROFILE_CONFIG','Enter a profile name and supported AliasMode engine.');
+  if(engine==='aliasmode-firefox'){
+   const manager=await (firefoxRuntime||require('./aliasmode-firefox-runtime.cjs').createFirefoxRuntime({helper})).connect();
+   try{const created=await manager.call('profiles.create',{input:{name:name.trim(),engine:'firefox',nativeIdentity:false},temporary:false});return {id:profileId(created.id),name:name.trim(),engine};}finally{manager.close();}
+  }
   if(engine==='aliasmode-chromium'&&nativeReadback)await helper.readbackCapability();
   if(engine==='aliasmode-chromium'&&nativeIdentity)await helper.identityCapability();
   const result=await request('/api/v1/user/create',{method:'POST',body:{name:name.trim(),engine:'chromium',chromium_runtime:engine==='aliasmode-chromium'?'aliasmode':'cloakbrowser',native_identity:engine==='aliasmode-chromium'&&nativeIdentity,fingerprint_config:{screen_resolution:'1920_1080'}}});
@@ -76,6 +84,6 @@ function createAliasModeClient({config={},fetch:fetcher=globalThis.fetch,timeout
   if(engine==='aliasmode-chromium'&&nativeIdentity)try{await helper.identity(id,'host');}catch{const error=providerError('ALIASMODE_IDENTITY_CONFIG','The blank profile was created, but native identity was not confirmed. It was retained for review.');error.createdProfileId=id;throw error;}
   return {id,name:name.trim(),engine};
  }
- return {health:()=>request('/status'),capabilities:async()=>({helperVersion:await helper.version(),headless:true}),createProfile,list,active,inspect,start,preparePage:(id,targetId)=>helper.identity(profileId(id),'status',targetId),stop:async id=>{await request('/api/v1/browser/stop?user_id='+encodeURIComponent(profileId(id)),{timeout:90000});},idle:async()=>{await helper.idle();await queue.idle();},request};
+ return {health:()=>request('/status'),capabilities:async()=>({helperVersion:await helper.version(),headless:true}),createProfile,list,nativeProfiles,active,inspect,start,preparePage:(id,targetId)=>helper.identity(profileId(id),'status',targetId),stop:async id=>{await request('/api/v1/browser/stop?user_id='+encodeURIComponent(profileId(id)),{timeout:90000});},idle:async()=>{await helper.idle();await queue.idle();},request};
 }
 module.exports={createAliasModeClient,baseUrl,profileId,websocket,publicProfile,providerError};

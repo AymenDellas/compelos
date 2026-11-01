@@ -13,7 +13,8 @@ function legacyCompatibility(site){
   failures.length===1&&failures[0]==='legacy.fpscanner.WEBDRIVER'&&e.legacyChecks?.['fpscanner.WEBDRIVER']==='FAIL'&&
   Object.entries(SOURCE_HASHES).every(([name,hash])=>e.sourceHashes?.[name]===hash);
 }
-function assess(sites=[]){
+function assess(sites=[],{engine}={}){
+ if(engine==='aliasmode-firefox')return require('./diagnostic-admission-firefox.cjs').assess(sites);
  if(!Array.isArray(sites))sites=[];
  // Required lazily so the raw measurement module can use this separate policy.
  const raw=require('./stealth-self-test.cjs'),checks=[],compatibility=[];

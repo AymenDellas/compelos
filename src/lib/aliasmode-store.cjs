@@ -27,16 +27,19 @@ async function saveConfig(pool,input){
 }
 async function requestRefresh(pool){await ensure(pool);await pool.query('UPDATE compel_aliasmode_config SET refresh_requested_at=clock_timestamp() WHERE id=1');await pool.query("SELECT pg_notify('compel_engine_wake','')");}
 async function allowProcessing(pool,enabled){if(typeof enabled!=='boolean')throw Error('Choose whether processing is allowed.');await pool.query('UPDATE compel_worker_config SET active_count=CASE WHEN $1 THEN GREATEST(1,(SELECT count(*) FROM compel_linkedin_accounts WHERE NOT archived AND enabled AND aliasmode_profile_id IS NOT NULL)) ELSE 0 END,revision=revision+1 WHERE id=1',[enabled]);if(!enabled)await pool.query('UPDATE compel_linkedin_accounts SET processing_enabled=FALSE,processing_until=NULL WHERE processing_enabled');await pool.query("SELECT pg_notify('compel_engine_wake','')");}
-async function importProfile(pool,{profileId:id,name,expectedMemberName,dailyLimit=300}){
+async function importProfile(pool,{profileId:id,name,expectedMemberName,dailyLimit=300,engine}){
  await ensure(pool);profileId(id);if(typeof name!=='string'||!name.trim()||name.length>80||typeof expectedMemberName!=='string'||!expectedMemberName.trim()||expectedMemberName.length>200||!Number.isInteger(dailyLimit)||dailyLimit<1||dailyLimit>400)throw Error('Enter the profile name, expected LinkedIn member and daily limit.');
+ const metadata=(await publicSettings(pool)).profiles.find(p=>p.id===id)?.engine;
+ engine=engine??metadata??'aliasmode-chromium';
+ if(!['aliasmode-firefox','aliasmode-chromium','cloakbrowser'].includes(engine)||metadata&&metadata!==engine)throw Error('Choose the actual AliasMode profile engine. Refresh profiles if it changed.');
  const c=await pool.connect();try{await c.query('BEGIN');await c.query('SELECT id FROM compel_worker_config WHERE id=1 FOR UPDATE');
   if((await c.query('SELECT 1 FROM compel_linkedin_accounts WHERE NOT archived AND aliasmode_profile_id=$1',[id])).rowCount)throw Error('This AliasMode profile is already linked.');
   const count=Number((await c.query('SELECT count(*)::int AS n FROM compel_linkedin_accounts WHERE NOT archived')).rows[0].n);if(count>=10)throw Error('CompelOS supports up to ten saved accounts.');
   const accountId=require('node:crypto').randomUUID();
   // This is an explicit internal handle in the legacy NOT NULL email column,
   // not an invented email address or a LinkedIn login credential.
-  await c.query(`INSERT INTO compel_linkedin_accounts(id,label,email,profile_key,enabled,daily_limit,position,aliasmode_profile_id,aliasmode_profile_name,expected_member_name)
-   VALUES($1,$2,$3,$1,TRUE,$4,COALESCE((SELECT max(position)+1 FROM compel_linkedin_accounts),0),$5,$2,$6)`,[accountId,name.trim(),'aliasmode:'+id,dailyLimit,id,expectedMemberName.trim()]);
+  await c.query(`INSERT INTO compel_linkedin_accounts(id,label,email,profile_key,enabled,daily_limit,position,aliasmode_profile_id,aliasmode_profile_name,expected_member_name,engine)
+   VALUES($1,$2,$3,$1,TRUE,$4,COALESCE((SELECT max(position)+1 FROM compel_linkedin_accounts),0),$5,$2,$6,$7)`,[accountId,name.trim(),'aliasmode:'+id,dailyLimit,id,expectedMemberName.trim(),engine]);
   await c.query('UPDATE compel_worker_config SET revision=revision+1 WHERE id=1');await c.query("SELECT pg_notify('compel_engine_wake','')");await c.query('COMMIT');return accountId;
  }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
 }

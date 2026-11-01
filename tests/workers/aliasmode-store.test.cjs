@@ -30,3 +30,14 @@ test('AliasMode config has no API key and profile imports remain paused',async()
   assert.equal(await store.finishClose(pool,one,'2000-01-01T00:00:00Z'),false);assert.equal(await store.finishClose(pool,one,token),true);
  }finally{await db.close();}
 });
+test('new Firefox imports select the verified engine atomically and do not authorize processing',async()=>{
+ const db=await database(),pool=db.pool;try{
+  await core.ensure(pool);await store.ensure(pool);
+  await pool.query('UPDATE compel_aliasmode_config SET profiles=$1::jsonb WHERE id=1',[JSON.stringify([{id:'native-ff',engine:'aliasmode-firefox'},{id:'native-second',engine:'aliasmode-firefox'}])]);
+  const id=await store.importProfile(pool,{profileId:'native-ff',name:'Native fixture',expectedMemberName:'Fixture Member'});
+  const account=(await pool.query('SELECT engine,processing_enabled,confirmed_identity,connected_at FROM compel_linkedin_accounts WHERE id=$1',[id])).rows[0];
+  assert.equal(account.engine,'aliasmode-firefox');assert.equal(account.processing_enabled,false);assert.equal(account.confirmed_identity,null);assert.equal(account.connected_at,null);
+  await assert.rejects(store.importProfile(pool,{profileId:'native-second',name:'Wrong engine',expectedMemberName:'Fixture Member',engine:'aliasmode-chromium'}),/actual AliasMode profile engine/);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM compel_linkedin_accounts')).rows[0].n,1);
+ }finally{await db.close();}
+});

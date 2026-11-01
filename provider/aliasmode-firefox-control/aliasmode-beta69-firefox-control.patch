@@ -1,0 +1,1190 @@
+diff --git a/adspower-users.ts b/adspower-users.ts
+index 10e1149..5dc8316 100644
+--- a/adspower-users.ts
++++ b/adspower-users.ts
+@@ -68,11 +68,13 @@ function intParam(raw: string | null, fallback: number): number {
+ 
+ /** AdsPower account/proxy/fingerprint fields → aliasmode NewProfileInput. */
+ function inputFromCreateBody(body: any): NewProfileInput {
++  if (body?.native_identity !== undefined && typeof body.native_identity !== "boolean") throw new Error("native_identity must be a boolean");
+   const px = body?.user_proxy_config;
+   const hasProxy = px && px.proxy_host && String(px.proxy_host).trim();
+   // AdsPower screen_resolution is "1920_1080"; aliasmode's create wants "1920x1080".
+   const screenRaw = body?.fingerprint_config?.screen_resolution;
+   return {
++    nativeIdentity: body?.native_identity !== false,
+     name: typeof body?.name === "string" ? body.name : "",
+     group: normalizeGroup(body?.group_id),
+     platform: typeof body?.domain_name === "string" ? body.domain_name : "",
+diff --git a/agent-control.test.ts b/agent-control.test.ts
+index b2e84e2..81cdf58 100644
+--- a/agent-control.test.ts
++++ b/agent-control.test.ts
+@@ -46,7 +46,7 @@ function harness(options: {
+       events.push(`clear-temp:${id}`);
+       temporary = false;
+     },
+-    getProfile: (id: string) => id === "profile1" && profileExists ? { id } : null,
++    getProfile: (id: string) => id === "profile1" && profileExists ? { id, ...(options.firefox ? { engine: "firefox", tags: ["compelos-firefox-native-v1"], firefox: { config: { allowMainWorld: true } } } : {}) } : null,
+     deleteProfile: (id: string) => {
+       events.push(`delete:${id}`);
+       profileExists = false;
+@@ -222,6 +222,38 @@ test("Firefox MCP relays official schemas and calls through the authenticated ma
+   ]);
+ });
+ 
++test("native Firefox bridge exposes only verified loopback control for the same instance", async () => {
++  const h = harness({ active: true, firefox: true });
++  const calls: string[] = [];
++  const session = new AgentControlSession({ ...h.deps, firefoxCall: async (_owner, operation) => {
++    calls.push(operation);
++    return operation === "playwright-endpoint" ? { endpoint: "ws://127.0.0.1:9445/" + "b".repeat(64) }
++      : { generation: "generation", profileId: "profile1", browserPid: 13, directory: "private-directory" };
++  } });
++  expect(await session.enqueue(wire("firefox.connectionCapability"))).toMatchObject({ ok: true, result: { version: "COMPELOS_FIREFOX_CONTROL_V1" } });
++  const response = await session.enqueue(wire("firefox.connection", { profileId: "profile1" }));
++  expect(response).toMatchObject({ ok: true, result: { engine: "firefox", protocol: "playwright", pid: 13, headless: true } });
++  expect(calls).toEqual(["status", "playwright-endpoint", "status"]);
++  expect(JSON.stringify(response)).not.toContain("private-token");
++  expect(JSON.stringify(response)).not.toContain("private-directory");
++});
++
++test("native Firefox bridge rejects remote capabilities, wrong PIDs and generation changes", async () => {
++  for (const defect of ["remote", "pid", "generation", "mode"]) {
++    const h = harness({ active: true, firefox: true }); let reads = 0;
++    if (defect === "mode") h.deps.store.getLaunch("profile1")!.headless = undefined;
++    const session = new AgentControlSession({ ...h.deps, firefoxCall: async (_owner, operation) => {
++      if (operation === "playwright-endpoint") return { endpoint: "ws://" + (defect === "remote" ? "example.com" : "127.0.0.1") + ":9445/" + "b".repeat(64) };
++      reads++;
++      return { generation: defect === "generation" && reads === 2 ? "replacement" : "generation", profileId: "profile1", browserPid: defect === "pid" ? 99 : 13 };
++    } });
++    expect(await session.enqueue(wire("firefox.connection", { profileId: "profile1" }))).toMatchObject({ ok: false, error: { code: "connection_unverified" } });
++    expect(h.events).toEqual([]);
++  }
++  const chrome = harness({ active: true });
++  expect(await chrome.session.enqueue(wire("firefox.connection", { profileId: "profile1" }))).toMatchObject({ ok: false, error: { code: "browser_not_firefox" } });
++});
++
+ test("an existing browser rejects a launch-mode change", async () => {
+   const h = harness({ active: true });
+   const response = await h.session.enqueue(wire("browser.open", {
+@@ -355,7 +387,7 @@ test("MCP connector methods return the token once and use the current device URL
+ 
+ function cloudEditHarness() {
+   const h = harness();
+-  const profile = buildNewProfile({ name: "Cloud account", group: "accounts" }, () => false);
++  const profile = buildNewProfile({ name: "Cloud account", group: "accounts", engine: "chromium", chromiumRuntime: "aliasmode" }, () => false);
+   profile.id = "profile1";
+   profile.password = "old-password";
+   profile.email = "keep@example.test";
+@@ -379,6 +411,32 @@ function cloudEditHarness() {
+   return { ...h, deps, client, authoritative, updates, session: new AgentControlSession(deps) };
+ }
+ 
++test("readback capability comes from the running manager and exposes only selected configuration fields", async () => {
++  const h = cloudEditHarness();
++  const capability = await h.session.enqueue(wire("profiles.readbackStatus"));
++  expect(capability).toMatchObject({ ok: true, result: { patchVersion: "COMPELOS_ALIASMODE_READBACK_V1" } });
++  const before = JSON.stringify(h.authoritative);
++  const seeded = await h.session.enqueue(wire("profiles.readbackStatus", { profileId: "profile1" }));
++  expect(seeded).toMatchObject({ ok: true, result: { mode: "seeded", supported: true } });
++  expect(JSON.stringify(h.authoritative)).toBe(before);
++  h.authoritative.payload.profile.tags = ["keep", "compelos-native-readback-v1"];
++  const native = await h.session.enqueue(wire("profiles.readbackStatus", { profileId: "profile1" }));
++  expect(native).toMatchObject({ ok: true, result: { mode: "native", supported: true } });
++  expect(JSON.stringify(native)).not.toContain("old-password");
++  expect(JSON.stringify(native)).not.toContain("session-secret");
++  expect(h.updates).toHaveLength(0);
++});
++test("native identity status comes from the manager without exposing account or proxy data", async () => {
++  const h = cloudEditHarness();
++  expect(await h.session.enqueue(wire("profiles.nativeIdentityStatus"))).toMatchObject({ ok: true, result: { patchVersion: "COMPELOS_NATIVE_IDENTITY_V1", capability: "native-identity-with-clock-v1" } });
++  const composed = await h.session.enqueue(wire("profiles.nativeIdentityStatus", { profileId: "profile1" }));
++  expect(composed).toMatchObject({ ok: true, result: { mode: "composed", running: false, clockReady: false } });
++  h.authoritative.payload.profile.tags = ["keep", "compelos-native-identity-v1"];
++  const native = await h.session.enqueue(wire("profiles.nativeIdentityStatus", { profileId: "profile1" }));
++  expect(native).toMatchObject({ ok: true, result: { mode: "host", running: false, clockReady: false } });
++  expect(JSON.stringify(native)).not.toContain("old-password"); expect(JSON.stringify(native)).not.toContain("session-secret"); expect(h.updates).toHaveLength(0);
++});
++
+ test("Cloud profile edits use roster versions and preserve unedited credentials and sessions", async () => {
+   const h = cloudEditHarness();
+   const listed = await h.session.enqueue(wire("profiles.list"));
+@@ -535,7 +593,7 @@ async function onHost(platform: "win32" | "darwin" | "linux", run: () => Promise
+ 
+ // The MCP create tool and `aliasmode-mcp profiles create` both send this request.
+ test.each([
+-  ["win32", "chromium", "aliasmode"],
++  ["win32", "firefox", undefined],
+   ["darwin", "firefox", undefined],
+   ["linux", "firefox", undefined],
+ ] as const)("profiles.create on %s defaults to %s, and an explicit browser request wins", async (platform, engine, runtime) => {
+diff --git a/agent-control.ts b/agent-control.ts
+index 0bcd5e9..e7f70a2 100644
+--- a/agent-control.ts
++++ b/agent-control.ts
+@@ -1,7 +1,12 @@
+ import { buildNewProfile, type NewProfileInput } from "./create.ts";
+ import { syncFirefoxTimezone } from "./firefox-config.ts";
++import { controlledFirefox } from "./firefox-control.ts";
+ import { callFirefoxOwner, type FirefoxOwner } from "./firefox-runtime.ts";
+ import { attachTimezones } from "./geoip.ts";
++import { COMPELOS_READBACK_PATCH, nativeReadback } from "./fingerprint.ts";
++import { NATIVE_IDENTITY_PATCH, nativeIdentity } from "./native-clock.ts";
++import { decodePortableProfile } from "./portable-profile.ts";
++import { assertSafeProfileId } from "./profile-id.ts";
+ import type { CloudConnectionRuntime } from "./cloud-connection.ts";
+ import { CloudApiError } from "./cloud-client.ts";
+ import {
+@@ -72,7 +77,7 @@ type SafeProfile = {
+   platform: string;
+   tags: string[];
+   running: boolean;
+-  engine?: "firefox";
++  engine?: "chromium" | "firefox";
+   capabilities?: readonly string[];
+   debugPort?: number;
+   headless?: boolean;
+@@ -219,13 +224,20 @@ export class AgentControlSession {
+   private async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
+     switch (method) {
+       case "profiles.list":
+-        return { profiles: await this.listProfiles() };
++        return { profiles: (await this.listProfiles()).map(profile => {
++          const engine = this.deps.store.getProfile(profile.id)?.engine;
++          return { ...profile, ...(engine === "firefox" || engine === "chromium" ? { engine } : {}) };
++        }) };
+       case "profiles.replaceProxies":
+         return await this.replaceProfileProxies(params);
+       case "profiles.create":
+         return await this.createProfile(params);
+       case "profiles.update":
+         return await this.updateProfile(params);
++      case "profiles.readbackStatus":
++        return await this.readbackStatus(params);
++      case "profiles.nativeIdentityStatus":
++        return await this.nativeIdentityStatus(params);
+       case "profiles.delete":
+         return await this.deleteProfile(stringParam(params, "profileId"));
+       case "browser.open":
+@@ -234,6 +246,10 @@ export class AgentControlSession {
+         return await this.profileStatus(stringParam(params, "profileId"));
+       case "firefox.tools.list":
+         return { tools: await this.firefoxCall(stringParam(params, "profileId"), "mcp-list", {}) };
++      case "firefox.connectionCapability":
++        return { version: "COMPELOS_FIREFOX_CONTROL_V1", protocol: "playwright", lifecycleOwner: "AliasMode", evaluation: "native-main-world", startupMode: "blank" };
++      case "firefox.connection":
++        return await this.firefoxConnection(stringParam(params, "profileId"));
+       case "firefox.tools.call":
+         return await this.firefoxCall(stringParam(params, "profileId"), "mcp-call", {
+           name: stringParam(params, "name"),
+@@ -299,6 +315,40 @@ export class AgentControlSession {
+     return runProxyReplacements(connection.client, params);
+   }
+ 
++  private async readbackStatus(params: Record<string, unknown>) {
++    if (params.profileId === undefined) return { patchVersion: COMPELOS_READBACK_PATCH, capability: "native-readback-opt-in-v1" };
++    const profileId = stringParam(params, "profileId");
++    assertSafeProfileId(profileId);
++    let profile;
++    if (this.deps.cloudBrowser) {
++      const { connection } = this.cloudMcpConnection();
++      const authoritative = await connection.client.getProfile(profileId);
++      profile = decodePortableProfile(authoritative.payload).profile;
++    } else profile = this.deps.store.getProfile(profileId);
++    if (!profile || profile.id !== profileId) throw agentError("profile_not_found", "profile not found");
++    const supported = (profile.engine ?? "chromium") === "chromium" && profile.chromiumRuntime === "aliasmode";
++    return { profileId, supported, mode: supported ? nativeReadback(profile) || nativeIdentity(profile) ? "native" : "seeded" : "engine-default", patchVersion: COMPELOS_READBACK_PATCH };
++  }
++
++  private async nativeIdentityStatus(params: Record<string, unknown>) {
++    if (params.profileId === undefined) return { patchVersion: NATIVE_IDENTITY_PATCH, capability: "native-identity-with-clock-v1", platform: process.platform };
++    const profileId = stringParam(params, "profileId"); assertSafeProfileId(profileId);
++    let profile;
++    if (this.deps.cloudBrowser) { const { connection } = this.cloudMcpConnection(); const current = await connection.client.getProfile(profileId); profile = decodePortableProfile(current.payload).profile; }
++    else profile = this.deps.store.getProfile(profileId);
++    if (!profile || profile.id !== profileId) throw agentError("profile_not_found", "profile not found");
++    const supported = (profile.engine ?? "chromium") === "chromium" && profile.chromiumRuntime === "aliasmode" && process.platform === "win32";
++    const mode = nativeIdentity(profile) ? "host" : "composed";
++    if (params.targetId !== undefined) {
++      const targetId = stringParam(params, "targetId");
++      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(targetId)) throw agentError("invalid_request", "invalid target identifier");
++      if (mode !== "host" || !supported) throw agentError("invalid_request", "the profile does not use the supported native clock");
++      await this.deps.launcher.prepareNativeTarget(profileId, targetId);
++    }
++    const running = !!this.deps.store.getLaunch(profileId);
++    return { profileId, supported, mode, patchVersion: NATIVE_IDENTITY_PATCH, timezone: mode === "host" ? profile.timezone : "", running, clockReady: mode === "host" && running && this.deps.launcher.nativeClockReady(profileId) };
++  }
++
+   private async updateProfile(params: Record<string, unknown>) {
+     if (!this.deps.cloudBrowser) {
+       throw agentError("cloud_unavailable", "Switch to AliasMode Cloud and sign in on this device first");
+@@ -306,7 +356,7 @@ export class AgentControlSession {
+     const { connection } = this.cloudMcpConnection();
+     const profileId = stringParam(params, "profileId");
+     const set = object(params.set);
+-    const stringFields = ["name", "group", "platform", "username", "password", "email", "emailPassword", "twofa", "proxy", "proxyType", "resolution"];
++    const stringFields = ["name", "group", "platform", "username", "password", "email", "emailPassword", "twofa", "proxy", "proxyType", "resolution", "timezone"];
+     if (!Object.keys(set).length) throw agentError("invalid_request", "set must contain an editable field");
+     for (const [field, value] of Object.entries(set)) {
+       const valid = stringFields.includes(field) ? typeof value === "string"
+@@ -328,6 +378,44 @@ export class AgentControlSession {
+     }
+   }
+ 
++  private async firefoxConnection(profileId: string): Promise<unknown> {
++    // The Firefox worker already owns this native bridge. Expose only a
++    // generation-fenced loopback connection, never its owner authentication
++    // token, profile directory, cookies or proxy configuration.
++    const launch = this.deps.store.getLaunch(profileId);
++    if (!isFirefoxLaunch(launch) || !(await this.deps.launcher.certifiedActive(profileId))) {
++      throw agentError("browser_not_firefox", "A safely running AliasMode Firefox profile is required");
++    }
++    if (this.deps.store.getProfile(profileId)?.firefox?.config.allowMainWorld !== true || !controlledFirefox(this.deps.store.getProfile(profileId))) {
++      throw agentError("firefox_configuration_required", "This profile lacks the native page-query opt-in. Existing identities were not migrated; use a freshly provisioned profile.");
++    }
++    const call = this.deps.firefoxCall ?? callFirefoxOwner;
++    const before: any = await call(launch.firefoxOwner, "status", {});
++    const bridge: any = await call(launch.firefoxOwner, "playwright-endpoint", {});
++    const after: any = await call(launch.firefoxOwner, "status", {});
++    const current = this.deps.store.getLaunch(profileId);
++    let endpoint: URL;
++    try { endpoint = new URL(bridge?.endpoint); } catch { throw agentError("connection_unverified", "Firefox connection is unavailable"); }
++    if (!isFirefoxLaunch(current) || current.ws !== launch.ws
++      || current.firefoxOwner.generation !== launch.firefoxOwner.generation
++      || !(await this.deps.launcher.certifiedActive(profileId))
++      || before?.generation !== launch.firefoxOwner.generation || after?.generation !== before.generation
++      || before.profileId !== profileId || after.profileId !== profileId
++      || before.browserPid !== after.browserPid || before.browserPid !== launch.firefoxOwner.browserPid
++      || !Number.isSafeInteger(after.browserPid) || after.browserPid < 1
++      || typeof current.headless !== "boolean"
++      || !["ws:", "wss:"].includes(endpoint.protocol) || endpoint.hostname !== "127.0.0.1"
++      || !endpoint.port || endpoint.username || endpoint.password || endpoint.search || endpoint.hash
++      || !/^\/[a-f0-9]{64}$/.test(endpoint.pathname)) {
++      throw agentError("connection_unverified", "Firefox changed while its connection was being verified");
++    }
++    return {
++      version: "COMPELOS_FIREFOX_CONTROL_V1", profileId, engine: "firefox", protocol: "playwright", evaluation: "native-main-world", startupMode: "blank",
++      endpoint: endpoint.href, instanceId: current.ws, generation: after.generation,
++      pid: after.browserPid, headless: current.headless,
++    };
++  }
++
+   private async firefoxCall(profileId: string, operation: string, payload: Record<string, unknown>): Promise<unknown> {
+     const launch = this.deps.store.getLaunch(profileId) as (ReturnType<ProfileStore["getLaunch"]> & FirefoxLaunch) | null;
+     if (!isFirefoxLaunch(launch)) throw agentError("browser_not_firefox", "This profile is not running in Firefox");
+@@ -387,6 +475,10 @@ export class AgentControlSession {
+ 
+   private async createProfile(params: Record<string, unknown>): Promise<{ id: string; temporary: boolean }> {
+     const input = object(params.input ?? {});
++    // New agent/CLI profiles use Firefox. Explicit Chromium and the legacy
++    // stored-profile normalizer retain their previous semantics.
++    if (input.engine === undefined && input.chromiumRuntime === undefined) input.engine = "firefox";
++    if (input.nativeIdentity === undefined) input.nativeIdentity = true;
+     const temporary = params.temporary === true;
+     let id: string;
+     if (this.deps.remote && input.chromiumRuntime) throw new Error("Chromium 155 beta is unavailable in legacy Remote mode");
+diff --git a/agent/aliasmode-mcp.ts b/agent/aliasmode-mcp.ts
+index db2bfa8..d87d84e 100644
+--- a/agent/aliasmode-mcp.ts
++++ b/agent/aliasmode-mcp.ts
+@@ -5,6 +5,8 @@ import process from "node:process";
+ import { discoverRuntime } from "./runtime-client.mjs";
+ import { configureClients, type SetupClient } from "./setup.ts";
+ import { ALIASMODE_VERSION } from "../version.ts";
++import { COMPELOS_NATIVE_READBACK_TAG, COMPELOS_READBACK_PATCH } from "../fingerprint.ts";
++import { NATIVE_IDENTITY_TAG, NATIVE_IDENTITY_PATCH } from "../native-clock.ts";
+ 
+ const VERSION = ALIASMODE_VERSION;
+ // Tauri keeps Linux resources in lib/<productName> beside bin.
+@@ -170,7 +172,63 @@ async function profiles(args: string[]): Promise<unknown> {
+     const profileId = requireProfile(rest);
+     return await withRuntime((client) => client.call("profiles.delete", { profileId }));
+   }
+-  throw new Error("profiles requires list, create, or delete");
++  if (action === "readback") {
++    const mode = value(rest, "mode") ?? "status";
++    if (mode === "capability") return await withRuntime((client) => client.call("profiles.readbackStatus"));
++    const profileId = requireProfile(rest);
++    if (!["status", "native", "seeded"].includes(mode)) throw new Error("readback mode requires status, native or seeded");
++    return await withRuntime(async (client) => {
++      // Ask the running manager, so a patched helper cannot certify an old
++      // unpatched launcher that would silently keep altering the readback.
++      const capability = await client.call("profiles.readbackStatus", { profileId });
++      if (capability.patchVersion !== COMPELOS_READBACK_PATCH) throw new Error("the running manager lacks the native readback patch");
++      if (mode !== "status" && capability.supported !== true) throw new Error("native readback requires AliasMode Chromium");
++      const roster = await client.call("profiles.list");
++      const profile = roster.profiles.find((p: { id: string }) => p.id === profileId);
++      if (!profile) throw new Error("profile not found");
++      const tags: string[] = Array.isArray(profile.tags) ? profile.tags : [];
++      if (mode !== "status" && tags.includes(NATIVE_IDENTITY_TAG)) {
++        if (mode === "native" && capability.mode === "native") return capability;
++        throw new Error("use profiles identity to change a native identity profile");
++      }
++      const current = capability.mode;
++      if (mode !== "status" && mode !== current) {
++        if (profile.running) throw new Error("close the profile before changing readback mode");
++        if (!Number.isSafeInteger(profile.expectedVersion) || profile.permission !== "edit") throw new Error("readback changes require an editable Cloud profile and its current version");
++        const nextTags = tags.filter(t => t !== COMPELOS_NATIVE_READBACK_TAG);
++        if (mode === "native") nextTags.push(COMPELOS_NATIVE_READBACK_TAG);
++        await client.call("profiles.update", { profileId, expectedVersion: profile.expectedVersion, set: { tags: nextTags } });
++        const updated = await client.call("profiles.list");
++        const saved = updated.profiles.find((p: { id: string }) => p.id === profileId);
++        if (!saved || (saved.tags?.includes(COMPELOS_NATIVE_READBACK_TAG) ? "native" : "seeded") !== mode) throw new Error("readback configuration was not confirmed");
++      }
++      const observed = await client.call("profiles.readbackStatus", { profileId });
++      if (observed.mode !== (mode === "status" ? current : mode) || observed.patchVersion !== COMPELOS_READBACK_PATCH) throw new Error("manager readback configuration was not confirmed");
++      return observed;
++    });
++  }
++  if (action === "identity") {
++    const mode = value(rest, "mode") ?? "status";
++    if (mode === "capability") return await withRuntime(client => client.call("profiles.nativeIdentityStatus"));
++    const profileId = requireProfile(rest), targetId = value(rest, "target"), timezone = value(rest, "timezone");
++    if (!["status", "host", "composed"].includes(mode) || targetId && mode !== "status" || timezone && mode !== "host") throw new Error("identity mode requires status, host or composed; timezone changes require host mode");
++    return await withRuntime(async client => {
++      const capability = await client.call("profiles.nativeIdentityStatus", { profileId });
++      if (capability.patchVersion !== NATIVE_IDENTITY_PATCH) throw new Error("the running manager lacks native identity support");
++      if (mode !== "status" && capability.supported !== true) throw new Error("native identity requires the validated Windows AliasMode Chromium core");
++      if (mode !== "status" && (mode !== capability.mode || timezone && timezone !== capability.timezone)) {
++        const roster = await client.call("profiles.list"), profile = roster.profiles.find((p: { id: string }) => p.id === profileId);
++        if (!profile || profile.running || profile.permission !== "edit" || !Number.isSafeInteger(profile.expectedVersion)) throw new Error("native identity changes require a closed editable profile and current version");
++        const tags: string[] = Array.isArray(profile.tags) ? profile.tags.filter((t: string) => t !== NATIVE_IDENTITY_TAG) : [];
++        if (mode === "host") tags.push(NATIVE_IDENTITY_TAG);
++        await client.call("profiles.update", { profileId, expectedVersion: profile.expectedVersion, set: { tags, ...(timezone ? { timezone } : {}) } });
++      }
++      const observed = await client.call("profiles.nativeIdentityStatus", { profileId, ...(targetId ? { targetId } : {}) });
++      if (observed.mode !== (mode === "status" ? capability.mode : mode) || observed.patchVersion !== NATIVE_IDENTITY_PATCH || targetId && !observed.clockReady || timezone && observed.timezone !== timezone) throw new Error("native identity configuration was not confirmed");
++      return observed;
++    });
++  }
++  throw new Error("profiles requires list, create, readback, identity or delete");
+ }
+ 
+ async function browser(args: string[]): Promise<unknown> {
+diff --git a/agent/runtime-client.mjs b/agent/runtime-client.mjs
+index 0f3ad40..c465ff1 100644
+--- a/agent/runtime-client.mjs
++++ b/agent/runtime-client.mjs
+@@ -9,6 +9,11 @@ import NodeWebSocket from "ws";
+ export const RUNTIME_PROTOCOL = "aliasmode-runtime-v1";
+ export const AGENT_PROTOCOL = "aliasmode-agent-v1";
+ export const AGENT_PATH = "/api/agent/v1/connect";
++export const COMPELOS_NO_AUTO_LAUNCH = true;
++export function nativeEnvironment(source = process.env) {
++  const allowed = new Set(["PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "HOMEDRIVE", "HOMEPATH"]);
++  return Object.fromEntries(Object.entries(source).filter(([key]) => allowed.has(key.toUpperCase())));
++}
+ const VERSION = process.env.ALIASMODE_APP_VERSION || "0.1.0-beta.32";
+ const STARTUP_WAIT_MS = 180_000;
+ // Replies can be much larger than requests, e.g. a profile list for a large Cloud workspace.
+@@ -81,7 +86,7 @@ async function processStartIdentity(pid) {
+     const { stdout } = await execFileAsync(
+       command.executable,
+       command.args,
+-      { windowsHide: true, timeout: 5_000, maxBuffer: 1024 },
++      { windowsHide: true, timeout: 5_000, maxBuffer: 1024, env: nativeEnvironment() },
+     );
+     const value = stdout.trim();
+     if (!/^\d+$/.test(value)) throw new Error("desktop process identity is invalid");
+@@ -336,6 +341,9 @@ export async function discoverRuntime(options = {}) {
+       return { client, descriptor };
+     } catch (error) {
+       lastError = error instanceof Error ? error : lastError;
++      // Callers holding database/account configuration must not forward that
++      // process environment into an automatically spawned desktop application.
++      if (options.launch === false) throw lastError;
+       if (launched?.exitCode !== null && launched?.exitCode !== undefined) {
+         throw new Error(`AliasMode desktop exited before runtime readiness with code ${launched.exitCode}`);
+       }
+diff --git a/cloud-browser.test.ts b/cloud-browser.test.ts
+index eac5db1..1024a11 100644
+--- a/cloud-browser.test.ts
++++ b/cloud-browser.test.ts
+@@ -45,6 +45,32 @@ function payload(): PortableProfileV1 {
+   };
+ }
+ 
++test("controlled Firefox restores Cloud cookies/storage without opening saved, home or requested pages", async () => {
++  for (const nativeSessionAvailable of [false, true]) {
++    const original = productionCloudPayload("firefox", "profile1");
++    original.profile.tags = ["compelos-firefox-native-v1"];
++    original.session = { ...original.session, tabs: ["https://saved.example/private"], origins: [{ origin: "https://saved.example", localStorage: [{ name: "fixture", value: "kept" }] }] };
++    const state = setup({ nativeSessionAvailable });
++    const options = (state.coordinator as any).options;
++    options.cloud.openProfile = async () => ({ ok: true, registrationId: "registration1", baseVersion: 4, payload: original, activeOpens: [] });
++    const applied: any[] = [];
++    options.applySession = async (_ws: string, bundle: string, urls: string[]) => applied.push({ bundle: JSON.parse(bundle), urls });
++    if (nativeSessionAvailable) options.launcher.matchesCloudSession = () => true;
++    try {
++      expect(await state.coordinator.open("profile1", ["--window-size=1200,800", "https://explicit.example/private"])).toMatchObject({ ok: true });
++      expect(state.nativeNavigations).toEqual([]);
++      if (!nativeSessionAvailable) {
++        expect(applied).toHaveLength(1);
++        expect(applied[0].urls).toEqual([]);
++        expect(applied[0].bundle.tabs).toEqual([]);
++        expect(applied[0].bundle.cookies).toEqual(original.session.cookies);
++        expect(applied[0].bundle.origins).toEqual(original.session.origins);
++      } else expect(applied).toEqual([]);
++      expect(original.session.tabs).toEqual(["https://saved.example/private"]);
++    } finally { state.queue.close(); state.store.close(); }
++  }
++});
++
+ function instagramSession(marker: string): PortableProfileV1["session"] {
+   return {
+     cookies: [{
+diff --git a/cloud-browser.ts b/cloud-browser.ts
+index 1e0667e..e878ca5 100644
+--- a/cloud-browser.ts
++++ b/cloud-browser.ts
+@@ -29,6 +29,7 @@ import {
+ import { PlaywrightWorkerError } from "./playwright-runtime.ts";
+ import { decodePortableProfile, encodePortableProfile } from "./portable-profile.ts";
+ import { completeProfileFingerprint } from "./firefox-config.ts";
++import { controlledFirefox, withoutStartupTabs } from "./firefox-control.ts";
+ import { proxyHostPort } from "./proxy.ts";
+ import {
+   bundleHasRestorableLogin,
+@@ -754,6 +755,7 @@ export class CloudBrowserCoordinator implements CloudBrowserLifecycle {
+       this.options.store.setTimezone(decoded.id, decoded.timezone);
+       this.options.store.setHardware(decoded.id, decoded.hardware);
+       const profile = this.options.store.getProfile(profileId)!;
++      const controlled = controlledFirefox(profile);
+       this.proxyCacheVersions.set(profileId, opened.baseVersion);
+ 
+       stage = "browser_launch";
+@@ -841,8 +843,8 @@ export class CloudBrowserCoordinator implements CloudBrowserLifecycle {
+       // ONE CDP attach: restore the authoritative bundle (no-op attach-free when
+       // the bundle is empty) and open explicit pages after its saved tabs.
+       const home = platformHomeUrl(profile.platform, telegramHomeClient(sessionBundle));
+-      const savedTabs = bundleTabUrls(sessionBundle);
+-      const urls = startupUrls.length > 0
++      const savedTabs = controlled ? [] : bundleTabUrls(sessionBundle);
++      const urls = controlled ? [] : startupUrls.length > 0
+         ? startupUrls
+         : savedTabs.length === 0 && home
+           ? [home]
+@@ -854,13 +856,13 @@ export class CloudBrowserCoordinator implements CloudBrowserLifecycle {
+         // Portable seeding blanks origin pages and replaces tabs. Native restore
+         // already has newer local state and preserves the full Chromium layout.
+         if (!nativeState) {
+-          await this.options.applySession(verifiedLaunch.ws, sessionBundle, urls);
++          await this.options.applySession(verifiedLaunch.ws, controlled ? withoutStartupTabs(sessionBundle) : sessionBundle, urls);
+         } else if (!launched.nativeSessionRestored && savedTabs.length + urls.length > 0) {
+           // Chromium loaded this device's last session but showed no page. Its cookies are at least
+           // as new as the Cloud copy, so open the saved tabs without replacing them.
+           await this.options.launcher.navigate(verifiedLaunch.ws, [...savedTabs, ...urls], true)
+             .catch(() => { throw new SessionRestoreError("navigation", "failed"); });
+-        } else if (launched.nativeSessionRestored && startupUrls.length > 0) {
++        } else if (!controlled && launched.nativeSessionRestored && startupUrls.length > 0) {
+           // Start URLs open in new tabs beside the restored session.
+           await this.options.launcher.navigate(verifiedLaunch.ws, startupUrls)
+             .catch(() => { throw new SessionRestoreError("navigation", "failed"); });
+diff --git a/create.test.ts b/create.test.ts
+index 414ff24..56643fb 100644
+--- a/create.test.ts
++++ b/create.test.ts
+@@ -3,6 +3,22 @@ import { buildNewProfile, defaultProfileEngine, defaultScreen, generateId, hostS
+ import { graphicsIdentity } from "./firefox-config.ts";
+ import { deterministicSeed, deriveFingerprintFlags, hostPlatformOs, platformFromUA } from "./fingerprint.ts";
+ import { ProfileStore } from "./store.ts";
++import { NATIVE_IDENTITY_TAG } from "./native-clock.ts";
++
++test("new native identities are an explicit persistent setting and do not alter composed imports or other engines", () => {
++  const input = { engine: "chromium" as const, chromiumRuntime: "aliasmode", nativeIdentity: true };
++  expect(buildNewProfile(input, () => false).tags).toContain(NATIVE_IDENTITY_TAG);
++  expect(buildNewProfile({ ...input, nativeIdentity: false }, () => false).tags).toBeUndefined();
++  expect(buildNewProfile({ ...input, chromiumRuntime: "cloakbrowser" }, () => false).tags).toBeUndefined();
++  expect(input).toEqual({ engine: "chromium", chromiumRuntime: "aliasmode", nativeIdentity: true });
++  expect(() => buildNewProfile({ ...input, nativeIdentity: "true" as any }, () => false)).toThrow("boolean");
++});
++test("new Firefox profiles enable explicit native page queries without disabling default world isolation", () => {
++  const p = buildNewProfile({ engine: "firefox" }, () => false);
++  expect(p.firefox?.config.allowMainWorld).toBe(true);
++  expect(p.firefox?.config.disableWorldIsolation).toBeUndefined();
++  expect(p.firefox?.config.forceScopeAccess).toBeUndefined();
++});
+ 
+ test("buildNewProfile makes a unique id with a seed-derived fingerprint and no forced UA", () => {
+   const p = buildNewProfile({ engine: "chromium", name: "sophia", group: "va1" }, () => false);
+diff --git a/create.ts b/create.ts
+index 881ba27..59a6984 100644
+--- a/create.ts
++++ b/create.ts
+@@ -12,12 +12,16 @@
+ 
+ import type { Profile, ProfileEngine, ProxySpec } from "./types.ts";
+ import { completeProfileFingerprint, createFirefoxProfileConfig, normalizeChromiumRuntime, syncFirefoxTimezone } from "./firefox-config.ts";
++import { NATIVE_FIREFOX_TAG } from "./firefox-control.ts";
+ import { chromiumDeviceScale, defaultChromiumRuntime, hostDisplayScale, hostDisplaySize } from "./aliasmode-chromium.ts";
+ import { deterministicSeed, generateProfileHardware, hostPlatformOs } from "./fingerprint.ts";
+ import { normalizeProxySpec } from "./proxy.ts";
++import { NATIVE_IDENTITY_TAG } from "./native-clock.ts";
+ import { parseStrictCustomNo, parseStrictResolution, parsePlatformOs } from "./parse.ts";
+ 
+ export interface NewProfileInput {
++  /** Explicit choice from the normal creation entry points, never an import migration. */
++  nativeIdentity?: boolean;
+   /** Browser identity engine. Omitted means this computer's default engine. */
+   engine?: ProfileEngine;
+   /** "aliasmode" (Chromium 155) or "cloakbrowser". Omitted means Chromium 155 where this computer can run it. */
+@@ -105,6 +109,7 @@ export function generateId(exists: (id: string) => boolean): string {
+ }
+ 
+ export function buildNewProfile(input: NewProfileInput, exists: (id: string) => boolean): Profile {
++  if (input.nativeIdentity !== undefined && typeof input.nativeIdentity !== "boolean") throw new Error("nativeIdentity must be a boolean");
+   const id = generateId(exists);
+ 
+   const proxy: ProxySpec | null = normalizeProxySpec(input.proxy);
+@@ -123,6 +128,10 @@ export function buildNewProfile(input: NewProfileInput, exists: (id: string) =>
+   const firefox = engine === "firefox"
+     ? createFirefoxProfileConfig(selected.width, selected.height, platformOs, deterministicSeed(id))
+     : undefined;
++  // New profiles opt into the core's documented native main-world query
++  // interface. Keep default isolation, identity composition and rendering
++  // unchanged. Existing stored/imported profiles are never migrated here.
++  if (firefox) firefox.config.allowMainWorld = true;
+   const firefoxUa = firefox?.config["navigator.userAgent"];
+   const firefoxScreenWidth = firefox?.config["screen.width"];
+   const firefoxScreenHeight = firefox?.config["screen.height"];
+@@ -155,6 +164,8 @@ export function buildNewProfile(input: NewProfileInput, exists: (id: string) =>
+     screenWidth: typeof firefoxScreenWidth === "number" ? firefoxScreenWidth : selected.width,
+     screenHeight: typeof firefoxScreenHeight === "number" ? firefoxScreenHeight : selected.height,
+     fingerprintSeed: deterministicSeed(id),
++    ...(input.nativeIdentity === true && chromiumRuntime === "aliasmode" ? { tags: [NATIVE_IDENTITY_TAG] } : {}),
++    ...(firefox ? { tags: [NATIVE_FIREFOX_TAG] } : {}),
+     cookies: [],
+     seeded: false,
+   });
+diff --git a/fingerprint.test.ts b/fingerprint.test.ts
+index 18f5ce7..16d4415 100644
+--- a/fingerprint.test.ts
++++ b/fingerprint.test.ts
+@@ -9,8 +9,10 @@ import {
+   isMobileUserAgent,
+   convertMobilePersonaToDesktop,
+   hostPlatformOs,
++  COMPELOS_NATIVE_READBACK_TAG,
+ } from "./fingerprint.ts";
+ import type { Profile } from "./types.ts";
++import { NATIVE_IDENTITY_TAG } from "./native-clock.ts";
+ 
+ const UA_WIN = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
+ const UA_MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
+@@ -36,6 +38,23 @@ function profile(overrides: Partial<Profile> = {}): Profile {
+   };
+ }
+ 
++test("explicit native readback removes only the noise switch; existing profile flags remain unchanged", () => {
++  const original = profile({ chromiumRuntime: "aliasmode", tags: ["keep-this-tag"] });
++  const before = structuredClone(original);
++  const seeded = deriveFingerprintFlags(original, 4);
++  const native = deriveFingerprintFlags({ ...original, tags: [...original.tags!, COMPELOS_NATIVE_READBACK_TAG] }, 4);
++  expect(seeded).toContain("--fingerprint-noise");
++  expect(native).toEqual(seeded.filter(flag => flag !== "--fingerprint-noise"));
++  expect(original).toEqual(before);
++  expect(deriveFingerprintFlags({ ...original, tags: ["compelos-native-readback-v0"] }, 4)).toEqual(seeded);
++});
++test("native identity opts out of composition without rewriting the stored seed or legacy flags", () => {
++  const original = profile({ chromiumRuntime: "aliasmode", tags: ["keep"] }), before = structuredClone(original);
++  const oldFlags = deriveFingerprintFlags(original);
++  expect(deriveFingerprintFlags({ ...original, tags: ["keep", NATIVE_IDENTITY_TAG] })).toEqual(["--fingerprint=host"]);
++  expect(original).toEqual(before); expect(deriveFingerprintFlags(original)).toEqual(oldFlags);
++});
++
+ test("deterministicSeed is stable and non-zero for the same id", () => {
+   const a = deterministicSeed("k1d0cd11");
+   const b = deterministicSeed("k1d0cd11");
+diff --git a/fingerprint.ts b/fingerprint.ts
+index f046be1..7a9dc9a 100644
+--- a/fingerprint.ts
++++ b/fingerprint.ts
+@@ -16,6 +16,15 @@
+ import { availableParallelism } from "node:os";
+ import type { Profile, ProfileEngine, ProfileHardware } from "./types.ts";
+ import { proxyUrl } from "./proxy.ts";
++import { nativeIdentity } from "./native-clock.ts";
++
++// CompelOS local patch: explicit, persistent opt-out for native readback.
++// Untagged profiles retain their original identity and existing launch flags.
++export const COMPELOS_NATIVE_READBACK_TAG = "compelos-native-readback-v1";
++export const COMPELOS_READBACK_PATCH = "COMPELOS_ALIASMODE_READBACK_V1";
++export function nativeReadback(profile: Pick<Profile, "tags">): boolean {
++  return profile.tags?.includes(COMPELOS_NATIVE_READBACK_TAG) === true;
++}
+ 
+ /** FNV-1a 32-bit hash → positive integer. Stable across runs and platforms. */
+ export function deterministicSeed(profileId: string): number {
+@@ -210,6 +219,9 @@ export function convertMobilePersonaToDesktop(profile: Profile): MobilePersonaCo
+  * not change with that cosmetic flag.
+  */
+ export function deriveFingerprintFlags(profile: Profile, hostCores = availableParallelism()): string[] {
++  // Explicit native mode reports real hardware. The manager configures only
++  // the profile timezone through Chromium's native protocol before navigation.
++  if (nativeIdentity(profile)) return ["--fingerprint=host"];
+   const flags = [
+     `--fingerprint=${profile.fingerprintSeed}`,
+     `--fingerprint-screen-width=${profile.screenWidth}`,
+@@ -242,7 +254,7 @@ export function deriveFingerprintFlags(profile: Profile, hostCores = availablePa
+   // Without this flag every Chromium 155 profile on one computer draws the same canvas
+   // and WebGL image, so a site can link them. The noise comes from the profile seed,
+   // so each profile keeps its own image on every launch.
+-  if (profile.chromiumRuntime) flags.push("--fingerprint-noise");
++  if (profile.chromiumRuntime && !nativeReadback(profile)) flags.push("--fingerprint-noise");
+   return flags;
+ }
+ 
+diff --git a/launcher.test.ts b/launcher.test.ts
+index 19e11cd..7287aa2 100644
+--- a/launcher.test.ts
++++ b/launcher.test.ts
+@@ -46,9 +46,38 @@ import { parseExport } from "./parse.ts";
+ import { buildNewProfile } from "./create.ts";
+ import { SessionRestoreError } from "./session.ts";
+ import type { FingerprintSample } from "./diagnose.ts";
++import { NATIVE_IDENTITY_TAG } from "./native-clock.ts";
+ 
+ const linuxTest = process.platform === "win32" ? test.skip : test;
+ 
++test("native profiles prepare the clock before capture, retain saved session files and stop only their own generation on clock loss", async () => {
++  const store = seeded(); makeDirect(store);
++  const p = buildNewProfile({ chromiumRuntime: "aliasmode", nativeIdentity: true }, () => false); store.upsertProfile(p);
++  const f = fleet(), args: string[][] = [], events: string[] = [], clocks: Array<{ alive: boolean; fault(): void }> = [];
++  const launcher = newLauncher(store, f, args, undefined, undefined, { hostPlatform: "win32", ensureAliasmodeChromium: async () => "/fake/chromium/chrome.exe",
++    captureFingerprint: async () => { events.push("capture"); return null; },
++    watchNativeClock: async (_ws, zone, options) => {
++      expect(zone).toBe(p.timezone); events.push("clock"); const state = { alive: true, fault: options?.onFault ?? (() => {}) }; clocks.push(state);
++      return { healthy: () => state.alive, failure: () => undefined, createBlank: async () => { events.push("blank"); }, configureTarget: async id => { events.push("target:" + id); }, stop: () => { state.alive = false; } };
++    },
++  });
++  const sessionDir = join(launcher.userDataDir(p.id), "Default", "Sessions"); mkdirSync(sessionDir, { recursive: true }); const sessionFile = join(sessionDir, "Session_123"); writeFileSync(sessionFile, "retained fixture session");
++  try {
++    await launcher.start("k1d0cd11"); events.length = 0;
++    await launcher.start(p.id, [], { resetStorage: false });
++    expect(events.indexOf("clock")).toBeLessThan(events.indexOf("blank")); expect(events.indexOf("blank")).toBeLessThan(events.indexOf("capture"));
++    const nativeArgs = args[1]!; expect(nativeArgs).toContain("--fingerprint=host"); expect(nativeArgs).toContain("--no-startup-window"); expect(nativeArgs).not.toContain("--restore-last-session");
++    const proxied = { ...p, proxy: { type: "http" as const, host: "127.0.0.1", port: "12345", user: "", pass: "" } };
++    const proxiedArgs = launcher.buildArgs(proxied, 9334, launcher.userDataDir(p.id), [], 12345, false, false, "203.0.113.1");
++    expect(proxiedArgs.filter(a => a.startsWith("--fingerprint"))).toEqual(["--fingerprint=host"]);
++    expect(nativeArgs.some(a => a.startsWith("--fingerprint-timezone=") || a.startsWith("--fingerprint-screen") || a === "--fingerprint-noise")).toBe(false);
++    expect(readFileSync(sessionFile, "utf8")).toBe("retained fixture session"); expect(store.getProfile(p.id)!.tags).toContain(NATIVE_IDENTITY_TAG);
++    await launcher.prepareNativeTarget(p.id, "owned-target"); expect(events).toContain("target:owned-target");
++    clocks[0]!.alive = false; clocks[0]!.fault(); await launcher.stop(p.id); expect(await launcher.active("k1d0cd11")).toBe(true);
++    await launcher.start(p.id, [], { resetStorage: false }); clocks[0]!.fault(); await Promise.resolve(); expect(launcher.nativeClockReady(p.id)).toBe(true); expect(await launcher.active(p.id)).toBe(true);
++  } finally { await launcher.stop(p.id); await launcher.stop("k1d0cd11"); store.close(); }
++});
++
+ /** Unit tests use fake executables, hosts, and CDP fleets. */
+ class Launcher extends ProductionLauncher {
+   constructor(opts: ConstructorParameters<typeof ProductionLauncher>[0]) {
+diff --git a/launcher.ts b/launcher.ts
+index 50eef7a..a73d431 100644
+--- a/launcher.ts
++++ b/launcher.ts
+@@ -40,7 +40,7 @@ import { AUTOFILL_EXTENSION_REVISION, autofillExtensionDir } from "./autofill-ex
+ import { allocatePort } from "./ports.ts";
+ import {
+   DEFAULT_WINDOW_HEIGHT_SCALE, DEFAULT_WINDOW_WIDTH_SCALE, deriveFingerprintFlags, isMobileUserAgent, launchWindowSize,
+-  platformFromUA, proxyServerFlag,
++  platformFromUA, proxyServerFlag, nativeReadback,
+ } from "./fingerprint.ts";
+ export { isMobileUserAgent } from "./fingerprint.ts";
+ import { startProxyRelay, type ProxyRelay } from "./proxy-relay.ts";
+@@ -50,10 +50,12 @@ import { dpapiKeysReadable, localStateDpapiKey } from "./dpapi.ts";
+ import { captureFingerprint, recordCapture } from "./fingerprint-capture.ts";
+ import type { FingerprintSample } from "./diagnose.ts";
+ import { claimedScreenArea, watchWindowFit } from "./window-fit.ts";
++import { nativeIdentity, watchNativeClock, type NativeClock } from "./native-clock.ts";
+ import { applySessionToEndpoint, bundleTabUrls, bundleTelegramClient, canonicalUserPageUrl, parseCapturedSessionBundle, readSessionInSubprocess, sessionCaptureSeed, SessionRestoreError } from "./session.ts";
+ import { resolvePlaywrightRuntime, runPlaywrightWorker } from "./playwright-runtime.ts";
+ import { callFirefoxOwner, closeFirefoxOwner, firefoxEndpoint, forgetFirefoxOwner, reserveFirefoxOwner, startFirefoxOwner, type FirefoxOwner } from "./firefox-runtime.ts";
+ import { matchFirefoxProcesses } from "./firefox-lifecycle.ts";
++import { controlledFirefox, withoutStartupTabs } from "./firefox-control.ts";
+ import { isDeepStrictEqual } from "node:util";
+ import {
+   completeProfileFingerprint, FIREFOX_RUNTIME_VERSION, firefoxLaunchConfig, firefoxPersonaOs, firefoxStartupPrefs, intelMacGraphicsVendor,
+@@ -532,6 +534,7 @@ export interface LauncherOptions {
+   labelWindow?: WindowLabeler;
+   /** Keep a Chromium 155 window no larger than the profile's screen. Injectable for tests. */
+   watchWindowFit?: typeof watchWindowFit;
++  watchNativeClock?: typeof watchNativeClock;
+   /** Cross-platform kill-by-pid for the no-handle (post-restart) path. Injectable for tests. */
+   killPid?: (pid: number) => Promise<void>;
+   /** Linux-only dedicated process-group signal. Injectable for tests. */
+@@ -862,6 +865,8 @@ export class Launcher {
+   private skipDefaultWindowLabel: boolean;
+   private watchWindowFitFn?: typeof watchWindowFit;
+   private windowFits = new Map<string, { stop(): void }>();
++  private nativeClockFn: typeof watchNativeClock;
++  private nativeClocks = new Map<string, { clock: NativeClock; port: number; startedAt: number }>();
+   private killPidFn: (pid: number) => Promise<void>;
+   private killProcessGroupFn: (processGroupId: number) => Promise<void>;
+   private readProcessSnapshotFn?: () => Promise<HostProcessSnapshot | null>;
+@@ -981,6 +986,7 @@ export class Launcher {
+     this.labelWindowFn = opts.labelWindow ?? defaultLabelWindow;
+     this.skipDefaultWindowLabel = this.unsafeDisableIdentityGates && opts.labelWindow === undefined;
+     this.watchWindowFitFn = opts.watchWindowFit ?? (this.unsafeDisableIdentityGates ? undefined : watchWindowFit);
++    this.nativeClockFn = opts.watchNativeClock ?? watchNativeClock;
+     this.killPidFn = opts.killPid ?? killByPid;
+     this.killProcessGroupFn = opts.killProcessGroup ?? killProcessGroup;
+     this.readProcessSnapshotFn = opts.readProcessSnapshot
+@@ -1347,11 +1353,11 @@ export class Launcher {
+     // Chrome blocks WebGL on a Windows computer with no graphics card, and in most remote desktop
+     // sessions. Chromium 155 then shows no card at all. With the blocklist ignored, it shows the
+     // card that the profile seed selects, with WebGL 2 and WebGPU to match.
+-    if (this.hostPlatform === "win32" && profile.chromiumRuntime) args.push("--ignore-gpu-blocklist");
++    if (this.hostPlatform === "win32" && profile.chromiumRuntime && !nativeIdentity(profile)) args.push("--ignore-gpu-blocklist");
+     // Chromium 155 draws pages at this scale. Without it, Windows stretches pages drawn at 100%
+     // on a 125% or 150% display and they look blurry. A build without the host-scale patch
+     // still draws at the profile's 100%, so it gets 1.
+-    if (this.hostPlatform === "win32" && profile.chromiumRuntime) args.push(`--force-device-scale-factor=${this.deviceScale(profile)}`);
++    if (this.hostPlatform === "win32" && profile.chromiumRuntime && !nativeIdentity(profile)) args.push(`--force-device-scale-factor=${this.deviceScale(profile)}`);
+     // The engine shows the label in the native window title and leaves page titles alone.
+     if (this.nativeWindowLabel(profile)) {
+       const displayNo = profileDisplayNo(profile.customNo, this.store.getSerial(profile.id));
+@@ -1361,15 +1367,24 @@ export class Launcher {
+     args.push(`--force-webrtc-ip-handling-policy=${webRtcPolicy(profile)}`);
+     // The engine sends no WebRTC packet behind the proxy, and shows a page the proxy's exit IP as
+     // its public address, as a browser at that exit would, in place of no candidate at all.
+-    if (webRtcIp && this.chromiumWebRtcIp(profile)) args.push(`--fingerprint-webrtc-ip=${webRtcIp}`);
++    // Host mode must not compose synthetic fingerprint fields. Keep the normal
++    // no-unproxied-UDP policy above; an absent public candidate is allowed.
++    if (webRtcIp && !nativeIdentity(profile) && this.chromiumWebRtcIp(profile)) args.push(`--fingerprint-webrtc-ip=${webRtcIp}`);
+     // We launch the raw stealth chromium binary, which behaves like stock
+     // Chromium: the PRESENCE of --headless (any value, even "false") turns
+     // headless ON. So headful = omit the flag entirely; headless = pass it.
+     // Headful matches AdsPower (real windows) and avoids the headless signal.
+     if (headless) args.push("--headless=new");
+-    if (restoreLastSession) args.push("--restore-last-session");
++    if (restoreLastSession && !nativeIdentity(profile)) args.push("--restore-last-session");
++    if (nativeIdentity(profile)) {
++      if (this.hostPlatform !== "win32" || !ALIASMODE_CHROMIUM_KEEP_ALIVE) throw new Error("native identity requires the validated Windows Chromium core");
++      // No account document is restored before the native clock guardian is
++      // ready. Saved cookies/storage/session files are retained, never reset.
++      args.push("--no-startup-window");
++      if (!args.includes("--aliasmode-keep-alive")) args.push("--aliasmode-keep-alive");
++    }
+     // On macOS the browser outlives its last window anyway. Elsewhere only AliasMode's own build can.
+-    if (keepAlive && this.hostPlatform === "win32" && profile.chromiumRuntime && ALIASMODE_CHROMIUM_KEEP_ALIVE) {
++    if (keepAlive && this.hostPlatform === "win32" && profile.chromiumRuntime && ALIASMODE_CHROMIUM_KEEP_ALIVE && !args.includes("--aliasmode-keep-alive")) {
+       args.push("--aliasmode-keep-alive");
+     }
+     // Relayed proxies use a loopback HTTP endpoint. Everything else uses the
+@@ -1435,6 +1450,8 @@ export class Launcher {
+       profile.screenWidth,
+       profile.screenHeight,
+       profile.fingerprintSeed,
++      nativeReadback(profile),
++      nativeIdentity(profile),
+       launch.debugPort,
+       launch.ws,
+       launch.startedAt,
+@@ -1489,7 +1506,7 @@ export class Launcher {
+     if (!this.watchWindowFitFn || this.windowFits.has(profileId)) return;
+     const profile = this.store.getProfile(profileId);
+     const launch = this.store.getLaunch(profileId);
+-    if (!profile?.chromiumRuntime || !launch || launch.headless || launch.engine === "firefox") return;
++    if (!profile?.chromiumRuntime || nativeIdentity(profile) || !launch || launch.headless || launch.engine === "firefox") return;
+     const ws = await this.probeLaunchCdp(launch);
+     if (ws && !this.windowFits.has(profileId)) this.startWindowFit(profile, ws, null);
+   }
+@@ -1508,6 +1525,17 @@ export class Launcher {
+     this.certifiedLaunches.delete(profileId);
+   }
+ 
++  nativeClockReady(profileId: string): boolean { return this.nativeClocks.get(profileId)?.clock.healthy() === true; }
++
++  async prepareNativeTarget(profileId: string, targetId: string): Promise<void> {
++    const profile = this.store.getProfile(profileId), lease = this.nativeClocks.get(profileId);
++    if (!profile || !nativeIdentity(profile) || !lease?.clock.healthy()) throw new Error("native profile clock is unavailable");
++    const launch = this.store.getLaunch(profileId);
++    if (launch?.debugPort !== lease.port || launch.startedAt !== lease.startedAt) throw new Error("native clock launch generation changed");
++    await lease.clock.configureTarget(targetId);
++    if (!lease.clock.healthy()) throw new Error("native profile clock failed while preparing its target");
++  }
++
+   private requireUnchangedProfile(profileId: string, snapshot: string, stage: string): Profile {
+     const current = this.store.getProfile(profileId);
+     if (!current) throw new Error(`profile ${profileId} was deleted during ${stage}; launch aborted`);
+@@ -1681,6 +1709,10 @@ export class Launcher {
+     validateForwardedLaunchArgs(chromeArgs);
+     let profile = this.store.getProfile(profileId);
+     if (!profile) throw new Error(`Unknown profile: ${profileId}`);
++    if (controlledFirefox(profile)) {
++      opts = { ...opts, autoNavigate: false, restoreLastSession: false };
++      startupUrls.length = 0;
++    }
+     if (profile.proxyError) {
+       throw new BrowserLaunchError("preflight", "proxy_invalid");
+     }
+@@ -1912,7 +1944,7 @@ export class Launcher {
+       throw new BrowserLaunchError("preflight", "cookie_key_unreadable");
+     }
+ 
+-    const nativeRestoreRequested = !pendingSession && opts.restoreLastSession !== false;
++    const nativeRestoreRequested = !nativeIdentity(profile) && !pendingSession && opts.restoreLastSession !== false;
+     let searchBootstrapRevision: number | undefined;
+ 
+     // Repair a corrupt Preferences before launch. A previous unclean exit (force-kill
+@@ -2058,6 +2090,16 @@ export class Launcher {
+       const ws = await this.waitForCdp(port, proc);
+       this.log(`${profileId}: launch stage CDP ready`);
+       profile = this.requireUnchangedProfile(profileId, profileSnapshot, "browser startup");
++      if (nativeIdentity(profile)) {
++        let clock: NativeClock | undefined;
++        clock = await this.nativeClockFn(ws, profile.timezone, { onFault: () => {
++          if (!clock || this.nativeClocks.get(profileId)?.clock !== clock) return;
++          const current = this.store.getLaunch(profileId);
++          if (current?.debugPort === port && current.startedAt === launchStartedAt) void this.stop(profileId).catch(() => {});
++        } });
++        this.nativeClocks.set(profileId, { clock, port, startedAt: launchStartedAt });
++        await clock.createBlank();
++      }
+ 
+       // Record what this browser actually reports, and check it against any
+       // attestation an import supplied. Best-effort by construction — see
+@@ -2261,9 +2303,10 @@ export class Launcher {
+       if (pendingSession) this.store.markSessionRestored(profileId, pendingSession);
+       // A page sees the real window against the profile's screen, so a window maximized on a
+       // larger display would be bigger than that screen. Keep the window no larger than it.
+-      if (profile.chromiumRuntime && !headless && this.watchWindowFitFn) {
++      if (profile.chromiumRuntime && !nativeIdentity(profile) && !headless && this.watchWindowFitFn) {
+         this.startWindowFit(profile, ws, sample);
+       }
++      if (nativeIdentity(profile) && !this.nativeClockReady(profileId)) throw new Error("native profile clock failed during startup");
+       return { ws, port, nativeSessionRestored, ...(restoreLastSession ? { nativeSessionLoaded: true } : {}) };
+     } catch (err) {
+       // Roll back partial state so a failed start can't leak a zombie — including the relay, which
+@@ -2343,6 +2386,8 @@ export class Launcher {
+           teardownConfirmed = false;
+           this.log(`failed start ${profileId}: launch generation changed during rollback; retained replacement ownership`);
+         } else {
++          const nativeLease = this.nativeClocks.get(profileId);
++          if (nativeLease?.port === port && nativeLease.startedAt === launchStartedAt) { nativeLease.clock.stop(); this.nativeClocks.delete(profileId); }
+           this.closeRelay(profileId);
+           this.procs.delete(profileId);
+           this.liveReserved.delete(port);
+@@ -2362,6 +2407,7 @@ export class Launcher {
+   ): Promise<LaunchStartResult> {
+     const profileId = profile.id;
+     const headless = opts.headless ?? this.headless;
++    const controlled = controlledFirefox(profile);
+     let snapshot = JSON.stringify(profile);
+     const webRtcIp = this.webRtcExitIp(profile, exit);
+     let binary: { path: string; sha256: string };
+@@ -2403,13 +2449,13 @@ export class Launcher {
+       }
+     }
+     mkdirSync(userDataDir, { recursive: true });
+-    const nativeRestoreRequested = !pendingSession && opts.restoreLastSession !== false;
+-    const closedTabs = nativeRestoreRequested ? this.closedFirefoxTabs(profileId) : undefined;
++    const nativeRestoreRequested = !pendingSession && (controlled || opts.restoreLastSession !== false);
++    const closedTabs = nativeRestoreRequested && !controlled ? this.closedFirefoxTabs(profileId) : undefined;
+     const sessionFileExists = nativeRestoreRequested && [
+       "sessionstore.jsonlz4", "sessionstore-backups/recovery.jsonlz4", "sessionstore-backups/previous.jsonlz4",
+     ].some((file) => existsSync(join(userDataDir, file)));
+     const sessionRestoresPage = sessionFileExists ? firefoxSessionRestoresPage(userDataDir) : null;
+-    const restoreLastSession = sessionFileExists && !(this.hostPlatform === "darwin" && closedTabs !== undefined) &&
++    const restoreLastSession = !controlled && sessionFileExists && !(this.hostPlatform === "darwin" && closedTabs !== undefined) &&
+       sessionRestoresPage !== false;
+     // Firefox opens its own readable last session (cookies included) whether or not it reopens its pages.
+     let nativeSessionLoaded = sessionFileExists && sessionRestoresPage !== null;
+@@ -2513,7 +2559,7 @@ export class Launcher {
+         const urls = (opts.autoNavigate ?? true)
+           ? startupUrls.length ? startupUrls : !bundleTabUrls(pendingSession).length && home ? [home] : []
+           : [];
+-        try { await this.applySessionFn(launch.ws, pendingSession, urls); }
++        try { await this.applySessionFn(launch.ws, controlled ? withoutStartupTabs(pendingSession) : pendingSession, urls); }
+         catch (error) {
+           if (!(error instanceof SessionRestoreError) || error.operation !== "navigation") throw error;
+           this.log(`${profileId}: session restored, but startup navigation failed; open the site manually`);
+@@ -2941,6 +2987,8 @@ export class Launcher {
+     // Delete durable ownership first. If SQLite refuses the write, leave every
+     // in-memory resource intact so a later retry still knows what it owns.
+     this.store.clearLaunch(profileId);
++    const nativeLease = this.nativeClocks.get(profileId);
++    if (nativeLease?.port === launch.debugPort && nativeLease.startedAt === launch.startedAt) { nativeLease.clock.stop(); this.nativeClocks.delete(profileId); }
+     this.windowFits.get(profileId)?.stop();
+     if (launch.firefoxOwner) forgetFirefoxOwner(launch.firefoxOwner);
+     this.autofill?.retire(profileId, launch);
+@@ -3629,6 +3677,12 @@ export class Launcher {
+       this.clearIdentityCertification(profileId);
+       return false;
+     }
++    const profile = this.store.getProfile(profileId);
++    if (profile && nativeIdentity(profile) && !this.nativeClockReady(profileId)) {
++      this.clearIdentityCertification(profileId);
++      await this.stop(profileId).catch(() => false);
++      return false;
++    }
+     if (this.isIdentityCertified(profileId)) return true;
+     const existing = this.certificationsInFlight.get(profileId);
+     if (existing) return existing;
+diff --git a/native-clock.test.ts b/native-clock.test.ts
+new file mode 100644
+index 0000000..d1e952e
+--- /dev/null
++++ b/native-clock.test.ts
+@@ -0,0 +1,41 @@
++import { expect, test } from "bun:test";
++import { watchNativeClock } from "./native-clock.ts";
++
++class Socket {
++  static current: Socket;
++  readyState = 0;
++  onopen?: () => void;
++  onmessage?: (event: { data: string }) => void;
++  onerror?: () => void;
++  onclose?: () => void;
++  calls: any[] = [];
++  constructor(_endpoint: string) { Socket.current = this; queueMicrotask(() => { this.readyState = 1; this.onopen?.(); }); }
++  send(wire: string) {
++    const m = JSON.parse(wire); this.calls.push(m);
++    if (m.method === "Emulation.setTimezoneOverride") return;
++    queueMicrotask(() => this.emit({ id: m.id, result: m.method === "Target.getTargets" ? { targetInfos: [] } : {} }));
++  }
++  emit(message: object) { this.onmessage?.({ data: JSON.stringify(message) }); }
++  close() { this.readyState = 3; this.onclose?.(); }
++}
++const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
++test("a terminated worker retires its unanswered command without marking the live clock failed", async () => {
++  let faults = 0;
++  const clock = await watchNativeClock("ws://fixture", "America/New_York", { WebSocket: Socket as unknown as typeof WebSocket, timeoutMs: 30, onFault: () => { faults++; } });
++  try {
++    Socket.current.emit({ method: "Target.attachedToTarget", params: { sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" } } });
++    Socket.current.emit({ method: "Target.detachedFromTarget", params: { sessionId: "worker-session" } });
++    await pause(60); expect(clock.healthy()).toBe(true); expect(faults).toBe(0);
++    expect(Socket.current.calls.some(c => c.method === "Runtime.enable")).toBe(false);
++  } finally { clock.stop(); }
++});
++test("an unanswered clock command on a live worker remains a blocking failure after ordered startup resume", async () => {
++  let faults = 0;
++  const clock = await watchNativeClock("ws://fixture", "America/New_York", { WebSocket: Socket as unknown as typeof WebSocket, timeoutMs: 30, onFault: () => { faults++; } });
++  try {
++    Socket.current.emit({ method: "Target.attachedToTarget", params: { sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" } } });
++    await pause(60); expect(clock.healthy()).toBe(false); expect(faults).toBe(1); expect(clock.failure()).toContain("worker timed out");
++    expect(Socket.current.calls.findIndex(c => c.method === "Emulation.setTimezoneOverride")).toBeLessThan(Socket.current.calls.findIndex(c => c.method === "Runtime.runIfWaitingForDebugger"));
++    expect(Socket.current.calls.some(c => c.method === "Runtime.enable")).toBe(false);
++  } finally { clock.stop(); }
++});
+diff --git a/native-clock.ts b/native-clock.ts
+new file mode 100644
+index 0000000..26dfaf4
+--- /dev/null
++++ b/native-clock.ts
+@@ -0,0 +1,112 @@
++/** Native Chromium timezone configuration. No Runtime subscription or page code. */
++export const NATIVE_IDENTITY_TAG = "compelos-native-identity-v1";
++export const NATIVE_IDENTITY_PATCH = "COMPELOS_NATIVE_IDENTITY_V1";
++export function nativeIdentity(profile: { chromiumRuntime?: unknown; tags?: string[] }): boolean {
++  return profile.chromiumRuntime === "aliasmode" && profile.tags?.includes(NATIVE_IDENTITY_TAG) === true;
++}
++export interface NativeClock {
++  healthy(): boolean;
++  failure(): string | undefined;
++  configureTarget(targetId: string): Promise<void>;
++  createBlank(): Promise<void>;
++  stop(): void;
++}
++const JS_TYPES = new Set(["page", "iframe", "worker", "service_worker", "shared_worker", "background_page"]);
++const FILTER = [...[...JS_TYPES, "tab"].map(type => ({ type, exclude: false })), { exclude: true }];
++export async function watchNativeClock(endpoint: string, timezoneId: string, opts: {
++  WebSocket?: typeof WebSocket; timeoutMs?: number; onFault?: () => void;
++} = {}): Promise<NativeClock> {
++  if (!timezoneId) throw new Error("native identity requires a configured timezone");
++  new Intl.DateTimeFormat("en-US", { timeZone: timezoneId }).format();
++  const Socket = opts.WebSocket ?? WebSocket, socket = new Socket(endpoint), timeout = opts.timeoutMs ?? 10_000;
++  const pending = new Map<number, { resolve(v: any): void; reject(e: Error): void; timer: ReturnType<typeof setTimeout>; sessionId?: string }>();
++  const sessions = new Map<string, { targetId: string; type: string; detached: boolean; task: Promise<void> }>();
++  let next = 0, stopped = false, failed = false, ready = false, failure: string | undefined;
++  const fault = (reason = "connection closed") => { if (stopped || failed) return; failed = true; failure = reason; ready = false; try { opts.onFault?.(); } catch {} };
++  const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> => new Promise((resolve, reject) => {
++    if (stopped || failed || socket.readyState !== 1) return reject(new Error("native clock is unavailable"));
++    if (pending.size >= 256) { fault(); return reject(new Error("native clock command bound exceeded")); }
++    const id = ++next, timer = setTimeout(() => { pending.delete(id); fault(method + " " + (sessionId ? sessions.get(sessionId)?.type ?? "detached" : "browser") + " timed out"); reject(new Error("native clock command timed out")); }, timeout);
++    pending.set(id, { resolve, reject, timer, sessionId });
++    try { socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })); }
++    catch { clearTimeout(timer); pending.delete(id); fault(); reject(new Error("native clock connection failed")); }
++  });
++  const attach = (sessionId: string, info: { targetId: string; type: string }) => {
++    const existing = sessions.get(sessionId); if (existing) return existing.task;
++    const state = { targetId: info.targetId, type: info.type, detached: false, task: Promise.resolve() };
++    sessions.set(sessionId, state);
++    state.task = (async () => {
++      try {
++        const worker = ["worker", "service_worker", "shared_worker"].includes(info.type);
++        const timezone = JS_TYPES.has(info.type) ? send("Emulation.setTimezoneOverride", { timezoneId }, sessionId) : Promise.resolve();
++        timezone.catch(() => {});
++        // A paused worker creates its V8 context only when resumed. Queue the
++        // native override first, then release its startup pause; awaiting the
++        // override before resume deadlocks context initialization. The first-
++        // script fixture checks the resulting clock, not just a later read.
++        if (worker) await send("Runtime.runIfWaitingForDebugger", {}, sessionId);
++        await timezone;
++        // Recursion includes nested workers and cross-process frames. The tab
++        // target itself has no JS realm; its child page receives the setting.
++        try { await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: FILTER }, sessionId); }
++        catch (e) { if (!["worker", "service_worker", "shared_worker"].includes(info.type) || !(e as Error).message.includes("-32601")) throw e; }
++        try { if (!worker) await send("Runtime.runIfWaitingForDebugger", {}, sessionId); }
++        catch (e) { if (info.type !== "tab" || !(e as Error).message.includes("-32601")) throw e; }
++      } catch (e) { if (!state.detached && !stopped) { fault(info.type + ": " + (e as Error).message); throw e; } }
++    })();
++    state.task.catch(() => {});
++    return state.task;
++  };
++  socket.onmessage = ({ data }) => {
++    let message: any; try { message = JSON.parse(String(data)); } catch { fault(); return; }
++    if (message.id !== undefined) {
++      const item = pending.get(message.id); if (!item) return;
++      clearTimeout(item.timer); pending.delete(message.id);
++      if (message.error) item.reject(new Error("native clock protocol error " + String(message.error.code) + ": " + String(message.error.message).slice(0,160)));
++      else item.resolve(message.result);
++    } else if (message.method === "Target.attachedToTarget") {
++      const { sessionId, targetInfo } = message.params ?? {};
++      if (typeof sessionId === "string" && targetInfo && (JS_TYPES.has(targetInfo.type) || targetInfo.type === "tab")) void attach(sessionId, targetInfo);
++    } else if (message.method === "Target.detachedFromTarget") {
++      const sessionId = message.params?.sessionId, state = sessions.get(sessionId); if (state) state.detached = true;
++      // A completed worker or removed frame can disappear with a command in
++      // flight. Retire its own requests, without hiding a timeout on a live target.
++      for (const [id, item] of pending) if (item.sessionId === sessionId) {
++        clearTimeout(item.timer); pending.delete(id); item.reject(new Error("native clock target closed"));
++      }
++      sessions.delete(sessionId);
++    }
++  };
++  const stoppedSocket = () => {
++    for (const item of pending.values()) { clearTimeout(item.timer); item.reject(new Error("native clock connection closed")); }
++    pending.clear(); fault();
++  };
++  socket.onclose = stoppedSocket; socket.onerror = stoppedSocket;
++  const stop = () => { if (stopped) return; stopped = true; ready = false; stoppedSocket(); try { socket.close(); } catch {} };
++  const configureTarget = async (targetId: string) => {
++    if (stopped || failed) throw new Error("native clock is unavailable");
++    const existing = [...sessions.values()].find(s => s.targetId === targetId && !s.detached);
++    if (existing) { await existing.task; if (existing.detached) throw new Error("native clock target closed"); return; }
++    const { targetInfo } = await send("Target.getTargetInfo", { targetId });
++    if (!targetInfo || !JS_TYPES.has(targetInfo.type)) throw new Error("native clock target is not an executable page or worker");
++    const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
++    await attach(sessionId, targetInfo);
++  };
++  try {
++    await new Promise<void>((resolve, reject) => {
++      const timer = setTimeout(() => reject(new Error("native clock connection timed out")), timeout);
++      socket.onopen = () => { clearTimeout(timer); resolve(); };
++      const previous = socket.onerror; socket.onerror = event => { clearTimeout(timer); previous?.call(socket, event); reject(new Error("native clock connection failed")); };
++    });
++    // The root attaches to tab containers; their page and worker targets are
++    // paused by the recursive sessions until the native timezone is applied.
++    await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: "page", exclude: true }, ...FILTER] });
++    const { targetInfos } = await send("Target.getTargets");
++    for (const target of targetInfos ?? []) if (JS_TYPES.has(target.type)) await configureTarget(target.targetId);
++    await Promise.all([...sessions.values()].map(s => s.task));
++    if (failed) throw new Error("native clock configuration failed");
++    ready = true;
++    return { healthy: () => ready && !stopped && !failed, failure: () => failure, configureTarget,
++      createBlank: async () => { const { targetId } = await send("Target.createTarget", { url: "about:blank", newWindow: true }); await configureTarget(targetId); }, stop };
++  } catch (e) { stop(); throw e; }
++}
+diff --git a/ui.test.ts b/ui.test.ts
+index eda443e..03429b3 100644
+--- a/ui.test.ts
++++ b/ui.test.ts
+@@ -2812,7 +2812,7 @@ test("app mode API exposes unconfigured first launch and persists Local selectio
+   // The dashboard starts new Chrome profiles on Chromium 155 only where this computer can run it.
+   expect(defaultChromiumRuntime).toBe(supportsChromium155Host(process.platform, process.arch) ? "aliasmode" : undefined);
+   // New profiles start on AliasMode Chromium on Windows and AliasMode Firefox on macOS and Linux.
+-  expect(defaultEngine).toBe(process.platform === "win32" ? "chromium" : "firefox");
++  expect(defaultEngine).toBe("firefox");
+ 
+   const selected = await handleUiRequest(
+     new Request("http://x/ui/api/app-mode", {
+diff --git a/ui.ts b/ui.ts
+index 4e83f46..03bb1e6 100644
+--- a/ui.ts
++++ b/ui.ts
+@@ -36,7 +36,7 @@ import { handleProxyToolsRequest } from "./proxy-tools.ts";
+ import { handleTrashRequest } from "./trash.ts";
+ import { importInbox, importBuffers, prepareImportBuffers, ProfileImportError, type ImportOverrides } from "./inbox.ts";
+ import { hostChromiumRuntime, supportsChromium155Host } from "./aliasmode-chromium.ts";
+-import { buildNewProfile, defaultProfileEngine, type NewProfileInput } from "./create.ts";
++import { buildNewProfile, type NewProfileInput } from "./create.ts";
+ import { firefoxGraphicsRenderer } from "./firefox-config.ts";
+ import { attachTimezones, lookupExitLocation, type FetchLike } from "./geoip.ts";
+ import { localeForCountry, localeForTimezone, normalizeProfileLocale } from "./profile-locale.ts";
+@@ -733,7 +733,7 @@ export async function handleUiRequest(
+       ...(options.runtimeMode ? { restartRequired: config.mode !== options.runtimeMode } : {}),
+       ...(hostChromiumRuntime() ? { chromiumRuntime: hostChromiumRuntime() } : {}),
+       ...(!remote && supportsChromium155Host(process.platform, process.arch) ? { defaultChromiumRuntime: "aliasmode" } : {}),
+-      ...(!remote ? { defaultEngine: defaultProfileEngine() } : {}),
++      ...(!remote ? { defaultEngine: "firefox" } : {}),
+     });
+   }
+ 
+@@ -1310,6 +1310,7 @@ export async function handleUiRequest(
+     // Create a new profile: unique id → unique seed → unique fingerprint/UA.
+     try {
+       const input = (await req.json()) as NewProfileInput;
++      if (input.nativeIdentity === undefined) input.nativeIdentity = true;
+       if (remote && input.chromiumRuntime) throw new Error("Chromium 155 beta is unavailable in legacy Remote mode");
+       if (remote) {
+         const { id } = await remote.createProfile(input);
+diff --git a/agent/runtime-client-no-launch.test.ts b/agent/runtime-client-no-launch.test.ts
+new file mode 100644
+index 0000000..e08a698
+--- /dev/null
++++ b/agent/runtime-client-no-launch.test.ts
+@@ -0,0 +1,14 @@
++import { test, expect } from "bun:test";
++import { join } from "node:path";
++import { tmpdir } from "node:os";
++import { discoverRuntime, COMPELOS_NO_AUTO_LAUNCH, nativeEnvironment } from "./runtime-client.mjs";
++test("explicit no-launch discovery reports an unavailable descriptor without spawning a desktop", async () => {
++  expect(COMPELOS_NO_AUTO_LAUNCH).toBe(true);
++  const missing = join(tmpdir(), "compelos-no-launch-" + crypto.randomUUID());
++  await expect(discoverRuntime({ launch: false, descriptorPath: missing + ".json", desktopExecutable: missing + ".exe", version: "0.1.0-beta.69", waitMs: 10000 }))
++    .rejects.toThrow("runtime descriptor is unavailable");
++});
++test("native process verification forwards only OS configuration", () => {
++  expect(nativeEnvironment({ PATH: "fixture-path", SYSTEMROOT: "fixture-system", DATABASE_URL: "private-db", API_KEY: "private-key", AUTH_SECRET: "private-auth" }))
++    .toEqual({ PATH: "fixture-path", SYSTEMROOT: "fixture-system" });
++});
+diff --git a/firefox-control.ts b/firefox-control.ts
+new file mode 100644
+index 0000000..354c5e5
+--- /dev/null
++++ b/firefox-control.ts
+@@ -0,0 +1,13 @@
++// Operational startup policy only. Never changes a stored device identity.
++export const NATIVE_FIREFOX_TAG = "compelos-firefox-native-v1";
++export function controlledFirefox(profile: { engine?: string; tags?: string[] } | null | undefined): boolean {
++  return profile?.engine === "firefox" && profile.tags?.includes(NATIVE_FIREFOX_TAG) === true;
++}
++export function withoutStartupTabs(bundle: string): string {
++  if (!bundle) return bundle;
++  const data = JSON.parse(bundle);
++  if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("invalid saved session");
++  // Filter a launch-local copy. Cookie/origin restoration still uses the
++  // existing validator; the saved bundle and browser history stay intact.
++  return JSON.stringify({ ...data, tabs: [] });
++}
+diff --git a/firefox-control.test.ts b/firefox-control.test.ts
+new file mode 100644
+index 0000000..2187fc1
+--- /dev/null
++++ b/firefox-control.test.ts
+@@ -0,0 +1,14 @@
++import { test, expect } from "bun:test";
++import { NATIVE_FIREFOX_TAG, controlledFirefox, withoutStartupTabs } from "./firefox-control.ts";
++test("blank startup is explicit and does not select legacy Firefox or any Chromium identity", () => {
++  expect(controlledFirefox({ engine: "firefox", tags: [NATIVE_FIREFOX_TAG] })).toBe(true);
++  expect(controlledFirefox({ engine: "firefox" })).toBe(false);
++  expect(controlledFirefox({ engine: "chromium", tags: [NATIVE_FIREFOX_TAG] })).toBe(false);
++});
++test("launch-local tab filtering preserves every cookie/storage value and the original bundle", () => {
++  const data = { version: 3, cookies: [{ name: "fixture-session", value: "fixture-only" }], origins: [{ origin: "https://fixture.test", localStorage: [{ name: "state", value: "kept" }] }], tabs: ["https://fixture.test/in/old"] };
++  const original = JSON.stringify(data), filtered = JSON.parse(withoutStartupTabs(original));
++  expect(filtered).toEqual({ ...data, tabs: [] });
++  expect(JSON.parse(original)).toEqual(data);
++  expect(withoutStartupTabs("")).toBe("");
++});

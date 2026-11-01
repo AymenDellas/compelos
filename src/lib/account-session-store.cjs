@@ -29,7 +29,7 @@ function publicState(a){const e=a.session_evidence||{},g=e.gate,local=Array.isAr
 async function configure(pool,input){
  await ensure(pool);const allowed=['accountId','revision','engine','launchMode','proxyId','proxyHost','proxyPort','proxyCountry','proxyTimezone','expectedExitIp','policy'];
  if(!input||Object.keys(input).some(k=>!allowed.includes(k))||typeof input.accountId!=='string'||!Number.isInteger(input.revision))throw Error('Invalid session settings; proxy passwords belong in AliasMode.');
- if(!['aliasmode-chromium','cloakbrowser'].includes(input.engine)||!['headful','headless'].includes(input.launchMode))throw Error('Choose a supported engine and launch mode.');
+ if(!['aliasmode-firefox','aliasmode-chromium','cloakbrowser'].includes(input.engine)||!['headful','headless'].includes(input.launchMode))throw Error('Choose a supported engine and launch mode.');
  const text=(value,max)=>{if(typeof value!=='string'||value.length>max||/[\u0000-\u001f]/.test(value))throw Error('Invalid proxy binding.');return value.trim();};
  const id=text(input.proxyId||'',120),host=text(input.proxyHost||'',253),country=text(input.proxyCountry||'',2).toUpperCase(),zone=text(input.proxyTimezone||'',100),ip=text(input.expectedExitIp||'',64);
  if(id){if(!/^[a-zA-Z0-9_.:-]+$/.test(id)||!host||!(/^[a-zA-Z0-9.-]+$/.test(host)||require('node:net').isIP(host))||!Number.isInteger(input.proxyPort)||input.proxyPort<1||input.proxyPort>65535||!/^[A-Z]{2}$/.test(country)||!require('node:net').isIP(ip))throw Error('Enter the proxy reference, plain hostname, port, country, timezone and fixed exit IP; credentials belong in AliasMode.');try{new Intl.DateTimeFormat('en',{timeZone:zone}).format();}catch{throw Error('Enter the proxy’s IANA timezone.');}}
@@ -65,7 +65,7 @@ module.exports.approveUnknown=async(pool,{accountId,revision,reportId})=>{
   await c.query('BEGIN');const a=(await c.query('SELECT * FROM compel_linkedin_accounts WHERE id=$1 AND NOT archived FOR UPDATE',[accountId])).rows[0],e=a?.session_evidence||{},g=e.gate;
   if(!a||Number(a.session_revision)!==revision||g?.reportId!==reportId)throw Error('The report or configuration changed. Review the current report before approving.');
   if(a.attention_reason||a.processing_enabled||e.drift||e.command)throw Error('Pause processing, resolve the account hold and finish current checks before reviewing the report.');
-  const admission=require('./diagnostic-admission.cjs').assess(g.sites);
+  const admission=require('./diagnostic-admission.cjs').assess(g.sites,{engine:a.engine});
   if(g.verdict!=='UNKNOWN'||!Array.isArray(g.sites)||admission.verdict==='FAIL')throw Error('Only unclear results can be approved. Confirmed failures must be resolved.');
   if(g.key!==policy.evidenceKey(a)||!e.fingerprint?.hash||g.fingerprintHash!==e.fingerprint.hash||e.network?.verdict!=='PASS'||e.network.key!==g.key)throw Error('Browser identity or network evidence is stale. Run the checks again.');
   const gate={...g,admission,verdict:'HUMAN_APPROVED',originalVerdict:'UNKNOWN',approvedBy:'local-admin',approvedAt:new Date().toISOString(),reason:'The local administrator reviewed this report and explicitly accepted its unclear checks. This is not an automated detector pass.'};

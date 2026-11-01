@@ -21,11 +21,16 @@ function fingerprint(probe,metadata={}){
  // explicit rendering change adds a new identity component and needs review.
  if(metadata.readbackMode==='native')Object.assign(fields,{readbackMode:'native',providerPatchVersion:metadata.providerPatchVersion??null});
  if(metadata.nativeIdentityMode==='host')Object.assign(fields,{nativeIdentityMode:'host',nativeClockVersion:metadata.nativeClockVersion??null});
+ if(metadata.engine==='aliasmode-firefox'){
+  const r=probe.rendering;
+  if(metadata.identityMode!=='aliasmode-firefox-profile'||metadata.providerControlVersion!=='ALIASMODE_FIREFOX_NATIVE_V1'||metadata.browserVersion!=='156.0.1-beta.36'||r?.version!=='RENDERED_READBACK_V2'||!['canvas','webgl','audio','fonts'].every(k=>typeof r[k]==='string'&&/^[a-f0-9]{64}$/.test(r[k])))throw Error('Native Firefox rendering identity is incomplete.');
+  Object.assign(fields,{identityMode:metadata.identityMode,providerControlVersion:metadata.providerControlVersion,browserVersion:metadata.browserVersion,rendering:{...r}});
+ }
  return {hash:createHash('sha256').update(JSON.stringify(fields)).digest('hex'),fields};
 }
 // A report captured by obsolete result readers cannot authorize this setup.
 // Invalidate by key; preserve saved evidence, fingerprint fields and all holds.
-function evidenceKey(account){return createHash('sha256').update(JSON.stringify([account.aliasmode_profile_id,Number(account.binding_revision||0),Number(account.session_revision||0),account.engine,account.launch_mode,account.proxy_id,require('./browser-control-version.cjs'),require('./stealth-self-test.cjs').VERSION,clock.VERSION,require('./diagnostic-admission.cjs').VERSION])).digest('hex');}
+function evidenceKey(account){return createHash('sha256').update(JSON.stringify([account.aliasmode_profile_id,Number(account.binding_revision||0),Number(account.session_revision||0),account.engine,account.launch_mode,account.proxy_id,account.engine==='aliasmode-firefox'?'ALIASMODE_FIREFOX_NATIVE_V1':require('./browser-control-version.cjs'),require('./stealth-self-test.cjs').VERSION,clock.VERSION,account.engine==='aliasmode-firefox'?'LOCAL_DIAGNOSTIC_ADMISSION_FIREFOX_V1':require('./diagnostic-admission.cjs').VERSION])).digest('hex');}
 function localDay(now,timezone='UTC'){return new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));}
 function dayNumber(day){return Math.floor(Date.parse(day+'T00:00:00Z')/DAY);}
 function lifecycle(account,{now=Date.now(),day=localDay(now,account.proxy_timezone||'UTC')}={}){
