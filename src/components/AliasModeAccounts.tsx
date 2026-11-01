@@ -8,6 +8,7 @@ import {
 import type {WorkerAccount,WorkerSettings} from '@/lib/linkedin-workers.cjs';
 import type {AliasModeSettings} from '@/lib/aliasmode-store.cjs';
 import type {SupervisorStatus} from '@/lib/worker-supervisor-control.cjs';
+import FeedWarmupPanel from './FeedWarmupPanel';
 
 /* ── helpers ─────────────────────────────────────────────────────── */
 
@@ -30,7 +31,7 @@ function accountStatus(a:WorkerAccount):{status:Status;label:string;badge:string
   if(a.session?.lifecycle.state==='PROVISION')return {status:'setup',label:'Setup required',badge:'badge badge-warn',dot:'dot-warn'};
   if(a.session?.lifecycle.state==='RECOVERY')return {status:'recovery',label:'Recovery',badge:'badge badge-warn',dot:'dot-warn'};
   if(a.session?.lifecycle.state==='HOLD')return {status:'hold',label:'Identity review',badge:'badge badge-bad',dot:'dot-bad'};
-  if(a.session?.lifecycle.state==='WARMUP')return {status:'warmup',label:`Warmup ${a.session.lifecycle.done||0}/${a.session.lifecycle.required}`,badge:'badge badge-info',dot:'dot-live'};
+  if(a.session?.lifecycle.state==='WARMUP')return {status:'warmup',label:a.session.lifecycle.completedToday?'Today’s warm-up complete':a.processingEnabled?(a.status==='WARMUP'?'Browsing feed':'Warm-up starting'):'Warm-up ready',badge:'badge badge-info',dot:a.processingEnabled?'dot-live':'dot-idle'};
   if(a.processingEnabled)return a.status==='processing'?{status:'processing',label:'Processing',badge:'badge badge-ok',dot:'dot-live'}:a.status==='sleeping'?{status:'processing',label:'Waiting…',badge:'badge badge-ok',dot:'dot-live'}:{status:'processing',label:'Starting…',badge:'badge badge-info',dot:'dot-live'};
   return a.connectedAt?{status:'paused',label:'Paused',badge:'badge badge-idle',dot:'dot-idle'}:{status:'offline',label:'Not verified',badge:'badge badge-idle',dot:'dot-idle'};
 }
@@ -145,8 +146,8 @@ export default function AliasModeAccounts(){
             const {status,label:statusLabel,badge,dot}=accountStatus(a);
             return <div key={a.id} className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)]" role="group" aria-label={a.label}>
               {/* card header */}
-              <div className="flex items-center gap-3 px-4 py-3">
-                <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+                <div className="min-w-0 flex-1 basis-full sm:basis-0">
                   <div className="flex items-center gap-2">
                     <span className={dot}/>
                     <strong className="text-sm font-medium truncate">{a.label}</strong>
@@ -160,16 +161,16 @@ export default function AliasModeAccounts(){
                 </div>
 
                 {/* actions */}
-                <div className="flex items-center gap-1 shrink-0">
+                <div className="flex items-center gap-1 shrink-0 ml-auto">
                   {/* primary action */}
                   {a.processingEnabled||a.session?.diagnosticRequested==='warmup-experiment'
                     ?<button className="btn btn-outline !text-xs !py-1.5" onClick={()=>void run(a.id,()=>api('/api/linkedin-accounts',{id:a.id,action:'pause'}),'Paused.')}>
-                      <Pause className="w-3.5 h-3.5"/>{a.session?.diagnosticRequested==='warmup-experiment'?'Stop':'Pause'}
+                      <Pause className="w-3.5 h-3.5"/>{a.session?.lifecycle.state==='WARMUP'?'Stop warm-up':a.session?.diagnosticRequested==='warmup-experiment'?'Stop':'Pause'}
                     </button>
                     :<button className="btn btn-primary !text-xs !py-1.5"
-                      disabled={!!pending||!online||!connected||(accounts?.activeCount??0)===0||!a.enabled||!a.connectedAt||!!a.attentionReason||a.closePending||a.loginPending||(!!a.session&&['PROVISION','HOLD','RECOVERY'].includes(a.session.lifecycle.state))||a.status==='awaiting_login'}
+                      disabled={!!pending||!online||!connected||(accounts?.activeCount??0)===0||!a.enabled||!a.connectedAt||!!a.attentionReason||a.closePending||a.loginPending||a.session?.lifecycle.completedToday||(!!a.session&&['PROVISION','HOLD','RECOVERY'].includes(a.session.lifecycle.state))||a.status==='awaiting_login'}
                       onClick={()=>void run(a.id,()=>api('/api/linkedin-accounts',{id:a.id,action:'start'}),a.session?.lifecycle.state==='WARMUP'?'Warmup started.':'Processing started.')}>
-                      <Play className="w-3.5 h-3.5"/>{a.session?.lifecycle.state==='WARMUP'?'Warmup':'Start'}
+                      <Play className="w-3.5 h-3.5"/>{a.session?.lifecycle.state==='WARMUP'?'Start warm-up':'Start processing'}
                     </button>}
 
                   {/* menu */}
@@ -197,7 +198,10 @@ export default function AliasModeAccounts(){
                 {a.browserOpen!==undefined&&<span>{a.browserOpen?'Browser open':'Browser closed'}</span>}
                 {a.browserOpen&&a.browserMode&&<span>{a.browserMode==='headless'?'Headless':a.browserMode==='visible'?'Visible':'Mode unknown'}</span>}
                 {a.nextEligibleAt&&<span>Next: {new Date(a.nextEligibleAt).toLocaleTimeString()}</span>}
+                <button type="button" className="underline underline-offset-2" onClick={()=>setShowSetup(a.id)}>Session setup</button>
               </div>
+              <FeedWarmupPanel key={`${a.id}-${a.session?.policy.warmupMinutes}-${a.session?.policy.warmupDays}`} account={a} disabled={!!pending} onSave={body=>run(a.id,()=>change(body),'Warm-up settings saved.')}/>
+              {a.session&&['PROVISION','HOLD','RECOVERY'].includes(a.session.lifecycle.state)&&<p className="px-4 pb-3 text-xs text-[var(--text-dim)]">{a.session.lifecycle.reason}</p>}
 
               {/* attention reasons */}
               {[...new Set([a.attentionReason,a.startupReason,a.reason].filter(Boolean))].map(reason=>
@@ -252,7 +256,7 @@ export default function AliasModeAccounts(){
       </p>}
     </div>
 
-    <p className="panel-note">Visible processing by default · Each account keeps its own verified session, daily ceiling and 60–150s spacing. Start authorizes processing.</p>
+    <p className="panel-note">Warm-up browses the feed and finishes paused. Qualification begins only when you choose Start processing after warm-up.</p>
   </section>;
 }
 
@@ -390,7 +394,7 @@ function SessionSetupDialog({account:a,provider:_provider,pending:disabled,onlin
   const busy=disabled||a.processingEnabled||a.online||a.closePending;
   const checkDisabled=disabled||!online||a.processingEnabled||!!a.attentionReason||a.closePending||a.loginPending||a.status==='awaiting_login'||!!s?.diagnosticRequested;
   const publishedWarnings=s?.gate?.sites?.flatMap(site=>site.website?.observations||[]).filter(o=>o.value==='FAIL'||o.value.startsWith('FAIL:')||/^Yes\b|^You are using a VPN\b/.test(o.value))||[];
-  const settings:[string,string][]=[['warmupDays','Warmup days'],['warmupProfilesPerDay','Warmup profiles/day'],['rampStepDays','Days per ramp step'],['recoveryDays','Recovery days'],['minIntervalSeconds','Min spacing (s)'],['maxIntervalSeconds','Max spacing (s)'],['staggerSeconds','Startup stagger (s)'],['renderEvery','Render every Nth']];
+  const settings:[string,string][]=[['warmupDays','Warmup days'],['warmupMinutes','Minutes per feed session'],['rampStepDays','Days per ramp step'],['recoveryDays','Recovery days'],['minIntervalSeconds','Min spacing (s)'],['maxIntervalSeconds','Max spacing (s)'],['staggerSeconds','Startup stagger (s)'],['renderEvery','Render every Nth']];
 
   if(!s)return null;
 
@@ -490,7 +494,7 @@ function SessionSetupDialog({account:a,provider:_provider,pending:disabled,onlin
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1"><span className="field-label">Engine</span>
               <select className="field w-full" value={engine} disabled={busy} onChange={e=>setEngine(e.target.value as typeof engine)}>
-                <option value="aliasmode-chromium">AliasMode Chromium</option><option value="cloakbrowser">CloakBrowser</option>
+                <option value="aliasmode-firefox">AliasMode Firefox</option><option value="aliasmode-chromium">AliasMode Chromium</option><option value="cloakbrowser">CloakBrowser</option>
               </select>
             </label>
             <label className="space-y-1"><span className="field-label">Processing mode</span>
@@ -512,7 +516,7 @@ function SessionSetupDialog({account:a,provider:_provider,pending:disabled,onlin
           </button>
           {showAdvanced&&<div className="grid gap-3 sm:grid-cols-2">{settings.map(([key,label])=>
             <label key={key} className="space-y-1"><span className="field-label">{label}</span>
-              <input className="field w-full" type="number" min={key.includes('Interval')?60:key==='staggerSeconds'?0:key==='recoveryDays'?7:1} max={key.includes('Interval')?3600:key==='warmupProfilesPerDay'?20:key==='staggerSeconds'?120:key==='renderEvery'?100:90}
+              <input className="field w-full" type="number" min={key.includes('Interval')?60:key==='staggerSeconds'?0:key==='recoveryDays'?7:1} max={key.includes('Interval')?3600:key==='warmupMinutes'?40:key==='staggerSeconds'?120:key==='renderEvery'?100:90}
                 value={policy[key]??''} disabled={busy} onChange={e=>setPolicy({...policy,[key]:Number(e.target.value)})}/>
             </label>
           )}</div>}

@@ -1,5 +1,16 @@
 # Account session controls and diagnostic evidence
 
+## Feed browsing warm-up — 2 November 2026
+
+The user replaced ordinary profile-visit warm-up with [read-only feed browsing](engine-feed-warmup.md).
+Its default is 20 observed minutes per session, retaining the existing four
+observed-day requirement. It needs no queued lead and opens no target profiles.
+Only scrolling, pointer movement and verified in-feed post-text expansion are
+allowed. Sessions finish paused; qualification requires a separate Start.
+Account review, proxy/identity/diagnostic admission, recovery and qualification
+profile ceilings/spacing remain in force. Earlier profile warm-up studies below
+retain their original results and consumed authorizations.
+
 ## Native Firefox integration — 1 November 2026
 
 The user subsequently authorized [native Firefox integration](engine-firefox-native.md),

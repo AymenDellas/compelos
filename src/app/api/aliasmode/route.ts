@@ -16,6 +16,7 @@ export async function POST(request:Request){try{await authorize(request,true);}c
  else if(body.action==='import')await ads.importProfile(pool,body);
  else if(body.action==='update')await ads.updateAccount(pool,body);
  else if(body.action==='session-policy'){const {action:_action,...input}=body;void _action;await sessions.configure(pool,input);}
+ else if(body.action==='warmup-settings'){const {action:_action,...input}=body;void _action;await sessions.saveWarmupSettings(pool,input);}
  else if(body.action==='session-check')await sessions.request(pool,body.accountId,body.command);
  else if(body.action==='approve-unclear')await sessions.approveUnknown(pool,body);
  else if(body.action==='close'){if(typeof body.accountId!=='string')throw Error('Choose an account.');await ads.requestClose(pool,body.accountId);}
