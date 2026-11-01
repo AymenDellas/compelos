@@ -383,7 +383,7 @@ async function startProcessing(pool,id) {
   if(!a||!a.enabled)throw new Error('Enable this account in settings before starting.');
   if(a.attention_reason)throw new Error('This account needs review. Resolve LinkedIn’s check and complete manual sign-in before starting.');
   if(!a.connected_at||a.signed_out_at||a.login_requested_at||a.logout_requested_at)throw new Error('Complete manual sign-in before starting processing.');
-  if(a.aliasmode_profile_id){const state=require('./account-session-policy.cjs').lifecycle(a,{day:require('./account-session-policy.cjs').localDay(Date.now(),config.daily_timezone||'UTC')});if(!['WARMUP','RAMP','PROCESSING'].includes(state.state))throw Error(state.reason);}
+  if(a.aliasmode_profile_id){const state=require('./account-session-policy.cjs').lifecycle(a,{day:require('./account-session-policy.cjs').localDay(Date.now(),config.daily_timezone||'UTC')});if(!['WARMUP','RAMP','PROCESSING'].includes(state.state)||state.completedToday)throw Error(state.reason);}
   const existing=(await client.query('SELECT status,lease_until>NOW() AS online FROM compel_worker_sessions WHERE account_id=$1',[id])).rows[0];
   if(existing?.online&&existing.status?.runtimeVersion!=='SESSION_V2')throw new Error('The previous account window is still closing. Wait for it to finish.');
   if(existing?.online&&existing.status?.runtimeVersion==='SESSION_V2'&&(['awaiting_login','signing_out'].includes(existing.status?.status)||existing.status?.browserOpen&&!existing.status?.sessionReady&&existing.status?.startupStage!=='SESSION_CHECK_COMPLETE'))
@@ -391,7 +391,8 @@ async function startProcessing(pool,id) {
   if(config.active_count===0)throw new Error('Enable a processing slot in account settings before starting.');
   const stagger=require('node:crypto').randomInt(0,require('./account-session-policy.cjs').config(a.session_policy).staggerSeconds+1)*1000;
   await client.query("UPDATE compel_linkedin_accounts SET processing_enabled=TRUE,processing_until=NULL,session_evidence=jsonb_set(session_evidence,'{startNotBefore}',to_jsonb($2::text)),changed_at=clock_timestamp() WHERE id=$1",[id,new Date(Date.now()+stagger).toISOString()]);
-  await accountEvent(client,id,'processing_started','Processing requested. Authorization persists until Pause, disable or account review.');
+  const warming=a.aliasmode_profile_id&&require('./account-session-policy.cjs').lifecycle(a,{day:require('./account-session-policy.cjs').localDay(Date.now(),config.daily_timezone||'UTC')}).state==='WARMUP';
+  await accountEvent(client,id,warming?'warmup_started':'processing_started',warming?'Feed warm-up requested. Completion leaves qualification paused.':'Processing requested. Authorization persists until Pause, disable or account review.');
  });
 }
 async function pauseProcessing(pool,id,message='Processing paused from account settings.',attention=false,owner=null,version=null) {

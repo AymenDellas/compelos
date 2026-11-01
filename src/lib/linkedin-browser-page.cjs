@@ -119,7 +119,7 @@ async function clickControl(page, selector, match, kind, options={}) {
  }
  return false;
 }
-async function navigateProfile(page,person,{assertActive=async()=>{},onNavigationEvidence,timeout=45000}={}) {
+async function navigateProfile(page,person,{assertActive=async()=>{},onNavigationEvidence,timeout=60000}={}) {
  const expected=profileUrl(person);
  if(!expected)throw problem('PROFILE_IDENTITY','The requested LinkedIn profile URL is invalid.');
  await assertActive();

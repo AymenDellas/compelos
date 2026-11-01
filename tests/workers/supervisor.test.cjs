@@ -64,6 +64,11 @@ test('profile interval waits keep the saved browser alive and do not spin or hol
  f.agent.wake();await f.agent.step();await f.settle();assert.equal(recycles,0,'the 30-second idle threshold must not relaunch Chrome between every profile');
  await f.agent.close();
 });
+test('feed browsing follows its next action time without idle-recycling an active warm-up browser',async()=>{
+ let ticks=0,recycles=0,time=100000;const state={jobsStarted:0,status:'WARMUP',reasonCode:'FEED_BROWSING',nextEligibleAt:new Date(time+5000).toISOString()};
+ const f=fixture({now:()=>time,createBrowser:()=>({isOpen:()=>true,isHeadless:()=>false,close:async()=>{}}),createRuntime:()=>({tick:async()=>{ticks++;state.nextEligibleAt=new Date(time+5000).toISOString();},snapshot:()=>state,recycle:async()=>{recycles++;},requestStop:()=>{},close:async()=>{}})});
+ try{f.accounts[0].authorized=true;await f.agent.step();await f.settle();assert.equal(ticks,1);time+=4000;await f.agent.step();await f.settle();assert.equal(ticks,1);time+=1000;await f.agent.step();await f.settle();assert.equal(ticks,2);for(let i=0;i<12;i++){time+=5000;await f.agent.step();await f.settle();}assert.equal(ticks,14);assert.equal(recycles,0);}finally{await f.agent.close();}
+});
 test('all eligible accounts capture simultaneously while slow work, pauses and review holds remain account-scoped',async()=>{
  let release;const gate=new Promise(resolve=>{release=resolve;}),started=[],completed=[];
  const f=fixture({createBrowser:({account})=>{let open=false;return {profileDirectory:path.join(os.tmpdir(),'compel-parallel-'+account.id),isOpen:()=>open,

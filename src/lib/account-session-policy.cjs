@@ -1,13 +1,14 @@
 'use strict';
 const {createHash,randomInt}=require('node:crypto'),clock=require('./clock-reference.cjs');
 const DAY=86400000;
-const DEFAULTS=Object.freeze({warmupDays:4,warmupProfilesPerDay:10,rampStepDays:7,recoveryDays:7,minIntervalSeconds:60,maxIntervalSeconds:150,staggerSeconds:120,renderEvery:10});
+const DEFAULTS=Object.freeze({warmupDays:4,warmupMinutes:20,warmupProfilesPerDay:10,rampStepDays:7,recoveryDays:7,minIntervalSeconds:60,maxIntervalSeconds:150,staggerSeconds:120,renderEvery:10});
 const integer=(value,name,min,max)=>{if(!Number.isInteger(value)||value<min||value>max)throw Error(`${name} must be ${min}–${max}.`);return value;};
 function config(input={}){
  const result={...DEFAULTS,...input};
  for(const key of Object.keys(result))if(!(key in DEFAULTS))throw Error('Unknown session policy setting: '+key);
  for(const key of ['warmupDays','rampStepDays','recoveryDays'])integer(result[key],key,key==='recoveryDays'?7:1,90);
  integer(result.warmupProfilesPerDay,'warmupProfilesPerDay',1,20);
+ integer(result.warmupMinutes,'warmupMinutes',1,40);
  integer(result.minIntervalSeconds,'minIntervalSeconds',60,3600);integer(result.maxIntervalSeconds,'maxIntervalSeconds',result.minIntervalSeconds,3600);
  integer(result.staggerSeconds,'staggerSeconds',0,120);integer(result.renderEvery,'renderEvery',1,100);
  return result;
@@ -44,7 +45,7 @@ function lifecycle(account,{now=Date.now(),day=localDay(now,account.proxy_timezo
  const recovery=Date.parse(e.recoveryUntil);
  if(Number.isFinite(recovery)&&recovery>now)return {state:'RECOVERY',reason:'Human review was completed; the recovery period has not elapsed.',resumeAt:new Date(recovery).toISOString()};
  const warmupDays=[...new Set(e.warmupDays||[])],first=warmupDays[0];
- if(!first||warmupDays.length<p.warmupDays||dayNumber(day)-dayNumber(first)<p.warmupDays)return {state:'WARMUP',reason:'Rendered-only warmup; qualification jobs remain queued.',done:warmupDays.length,required:p.warmupDays,limit:Math.min(account.daily_limit,p.warmupProfilesPerDay)};
+ if(!first||warmupDays.length<p.warmupDays||dayNumber(day)-dayNumber(first)<p.warmupDays)return {state:'WARMUP',reason:warmupDays.includes(day)?'Today’s warm-up is complete. Come back on another day; qualification stays paused.':'Browse the feed for '+p.warmupMinutes+' minutes. No queued profiles are opened; qualification stays paused.',done:warmupDays.length,required:p.warmupDays,sessionMinutes:p.warmupMinutes,completedToday:warmupDays.includes(day)};
  const start=e.rampStartedAt||e.recoveryUntil||new Date(now).toISOString();
  const step=Math.max(0,Math.floor((now-Date.parse(start))/(p.rampStepDays*DAY))),cap=[15,30,60,100][Math.min(step,3)];
  return {state:step<4?'RAMP':'PROCESSING',reason:'Session prerequisites satisfied.',limit:Math.min(account.daily_limit,cap),rampStartedAt:start};

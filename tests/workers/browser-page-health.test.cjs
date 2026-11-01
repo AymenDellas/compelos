@@ -51,7 +51,7 @@ test('rendered control bounds and pointer input follow completed scrollIntoView'
  assert.deepEqual(calls,['scroll','bounds','click']);
 });
 test('ordinary warmup cannot save an observed day for a failed page',async()=>{
- const guard=require('../../src/lib/account-session-guard.cjs').createSessionGuard({pool:{query:()=>assert.fail('No evidence write for an unavailable page')},owner:'fixture',core:{reserveProfile:async()=>({nextProfileAt:new Date().toISOString()})}});
- const response={status:()=>500},page={$$:async()=>[],waitForNavigation:async()=>response,evaluate:async()=>{},waitForFunction:async()=>{},url:()=>person};
- await assert.rejects(guard.warmup({id:'one',session_evidence:{},session_policy:{}},{linkedinUrl:person,jobId:'job'},page,async()=>{},async r=>assert.equal(r,response)),e=>e.failure.stage==='page');
+ const guard=require('../../src/lib/account-session-guard.cjs').createSessionGuard({pool:{query:()=>assert.fail('No evidence write for an unavailable page')},owner:'fixture',core:{}});
+ const response={status:()=>500},page={goto:async()=>response,url:()=> 'https://www.linkedin.com/feed/'};
+ await assert.rejects(guard.warmup({id:'one',session_evidence:{},session_policy:{}},page,async()=>{},async r=>{throw health.unavailable({url:page.url(),status:r.status()});}),e=>e.failure.stage==='page');
 });

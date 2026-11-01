@@ -83,6 +83,7 @@ function createAgent(options){
    else {await core.pauseProcessing(pool,entry.account.id,'PostgreSQL save retries exhausted: '+state.saveError,false,entry.owner,entry.account.control_version);entry.due=now()+30000;return;}
   }else if(worked)entry.saveFailures=0;
   if(worked){entry.lastWorkAt=now();entry.jobs+=(state.jobsStarted||0)-before;}
+  if(state.reasonCode==='FEED_BROWSING')entry.lastWorkAt=now();
   const manual=['awaiting_login','SESSION_REVIEW'].includes(state.status)||state.startupStage==='SESSION_REVIEW'||state.manualResumeRequired;
   const needsManual=coordinator.reserved.size>=maxBrowsers&&[...entries.values()].some(other=>other!==entry&&!coordinator.reserved.has(other.account.id)&&(other.account.login_token||other.account.close_token));
   if(entry.browser.isOpen()&&state.manualResumeRequired&&entry.browser.isHeadless?.()){
@@ -94,7 +95,7 @@ function createAgent(options){
   }else if(!entry.browser.isOpen()&&coordinator.reserved.has(entry.account.id))await entry.browser.close();
   entry.backoff=state.status==='provider_unavailable'?30000:worked||state.status==='recovering'?2000:Math.min(30000,entry.backoff*2);
   entry.due=state.status!=='provider_unavailable'&&(worked||state.status==='recovering')?now():now()+entry.backoff;
-  if(['PROFILE_INTERVAL','LANE_STAGGER'].includes(state.reasonCode)&&state.nextEligibleAt)entry.due=Math.max(now(),Date.parse(state.nextEligibleAt));
+  if(['PROFILE_INTERVAL','LANE_STAGGER','FEED_BROWSING'].includes(state.reasonCode)&&state.nextEligibleAt)entry.due=Math.max(now(),Date.parse(state.nextEligibleAt));
  }
  function runAccount(entry){
   const before=entry.runtime.snapshot().jobsStarted||0;

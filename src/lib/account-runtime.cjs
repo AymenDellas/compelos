@@ -346,6 +346,13 @@ function createAccountRuntime(options) {
    if(sessionState&&['WARMUP','RAMP','PROCESSING'].includes(sessionState.state)&&Date.parse(a.session_evidence?.startNotBefore)>now()){
     publish('sleeping',{reason:'This account’s requested start is staggered. Other lanes remain available.',reasonCode:'LANE_STAGGER',nextEligibleAt:a.session_evidence.startNotBefore});return;
    }
+   if(sessionState?.state==='WARMUP'){
+    if(sessionState.completedToday){await core.pauseProcessing(pool,accountId,'Today’s feed warm-up is complete. Qualification remains paused.',false,owner,activeVersion);publish('idle',{reason:sessionState.reason,reasonCode:'WARMUP_COMPLETE'});return;}
+    if(!await prepareProcessing(a))return;
+    const progress=await guard.warmup(a,surface.page,assertActive,response=>inspect(false,response));
+    if(progress.done){publish('idle',{reason:progress.stopped?progress.progress.reason:'Feed warm-up complete. Qualification remains paused; Start processing is a separate action.',reasonCode:progress.stopped?'WARMUP_STOPPED':'WARMUP_COMPLETE'});return;}
+    publish('WARMUP',{reason:'Browsing the feed. No queued profiles or qualification reads.',reasonCode:'FEED_BROWSING',nextEligibleAt:progress.progress?.nextActionAt||null});return;
+   }
    const run=!sessionState||['RAMP','PROCESSING'].includes(sessionState.state)?await discoveryStore.claimSource?.(pool,accountId,owner):null;
    if(run) {
     claimedRun=run;if(!await prepareProcessing(a)){await discoveryStore.releaseSource?.(pool,run.id,owner);return;}await setWindowVisibility(false);
@@ -359,10 +366,7 @@ function createAccountRuntime(options) {
     await flushStatistics(null);
     return;
    }
- const day=guard?(a.daily_day||require('./account-session-policy.cjs').localDay(now(),a.proxy_timezone||'UTC')):null;
-   const warmupVisits=sessionState?.state==='WARMUP'?(a.session_evidence?.warmupVisits?.[day]||[]):[];
-   if(sessionState?.state==='WARMUP'&&warmupVisits.length>=require('./account-session-policy.cjs').config(a.session_policy).warmupProfilesPerDay){publish('WARMUP',{reason:'Today’s rendered warmup visits are complete. Qualification jobs remain queued.',reasonCode:'WARMUP_DAILY_COMPLETE'});return;}
-   const reservation=await core.claim(pool,accountId,owner,{excludeProfiles:warmupVisits});
+   const reservation=await core.claim(pool,accountId,owner);
    if(reservation?.disabled)return;
    if(reservation?.limited) {dailyStatus(reservation);return;}
    if(reservation?.paced) {paceStatus(reservation);return;}
@@ -372,10 +376,6 @@ function createAccountRuntime(options) {
      await core.releaseClaim(pool,claimedJob.jobId,owner);publish(sessionState.state,{startupStage:sessionState.state,reason:sessionState.reason,reasonCode:'SESSION_'+sessionState.state,nextEligibleAt:sessionState.resumeAt||null,action:'Complete session setup in Engine → LinkedIn profiles.'});return;
     }
     if(!researchQueue.fullCapture(reservation.job.resumeResult)){if(!await prepareProcessing(a)){await core.releaseClaim?.(pool,reservation.job.jobId,owner);return;}await setWindowVisibility(false);}
-    if(sessionState?.state==='WARMUP'&&!researchQueue.fullCapture(claimedJob.resumeResult)){
-     try{const progress=await guard.warmup(a,claimedJob,surface.page,assertActive,response=>inspect(false,response));if(progress.reservation?.limited)dailyStatus(progress.reservation);else if(progress.reservation?.paced)paceStatus(progress.reservation);else{if(progress.visited){await permit('profile_page');await flushStatistics(claimedJob.jobId);}publish('WARMUP',{reason:'Rendered warmup visit recorded. No Voyager read or qualification decision was made.',...(progress.nextProfileAt?{reasonCode:'PROFILE_INTERVAL',nextEligibleAt:new Date(progress.nextProfileAt).toISOString()}:{} )});}}
-     finally{await core.releaseClaim(pool,claimedJob.jobId,owner);}return;
-    }
     if(guard)await guard.activateRamp(a);
     await processJob(reservation.job);
    }

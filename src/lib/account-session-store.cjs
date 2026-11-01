@@ -25,7 +25,7 @@ function publicSite(s,admissionChecks=[]){
   timezone:typeof s.probe?.timezone==='string'?text(s.probe.timezone):null,timezoneOffsetMinutes:Number.isInteger(s.probe?.timezoneOffsetMinutes)?s.probe.timezoneOffsetMinutes:null,
   timezoneIntlOffsetMinutes:Number.isInteger(s.probe?.timezoneIntlOffsetMinutes)?s.probe.timezoneIntlOffsetMinutes:null};
 }
-function publicState(a){const e=a.session_evidence||{},g=e.gate,local=Array.isArray(g?.admission?.checks)?g.admission.checks.slice(0,100):[];const gate=g?{verdict:g.verdict,measurementVerdict:g.measurementVerdict,reason:g.reason,scope:typeof g.scope==='string'?g.scope.slice(0,500):undefined,checkedAt:g.checkedAt,reportId:g.reportId,approvedAt:g.approvedAt,compatibility:(Array.isArray(g.admission?.compatibility)?g.admission.compatibility:[]).slice(0,8).map(c=>({id:String(c.id||'').slice(0,100),url:String(c.url||'').slice(0,500),rawVerdict:String(c.rawVerdict||'').slice(0,20),reason:String(c.reason||'').slice(0,500)})),sites:(Array.isArray(g.sites)?g.sites:[]).slice(0,8).map(s=>publicSite(s,local))}:null;return {revision:Number(a.session_revision||0),engine:a.engine,launchMode:a.launch_mode,proxyId:a.proxy_id||'',proxyHost:a.proxy_host||'',proxyPort:a.proxy_port||null,proxyCountry:a.proxy_country||'',proxyTimezone:a.proxy_timezone||'',expectedExitIp:e.expectedExitIp||'',policy:policy.config(a.session_policy),lifecycle:policy.lifecycle(a,a.daily_day?{day:a.daily_day}:{}),network:e.network||null,gate,fingerprint:e.fingerprint?{hash:e.fingerprint.hash,fields:e.fingerprint.fields,checkedAt:e.fingerprint.checkedAt}:null,drift:e.drift||null,diagnosticRequested:e.command||null,commandError:typeof e.commandError==='string'?e.commandError:null};}
+function publicState(a){const e=a.session_evidence||{},g=e.gate,local=Array.isArray(g?.admission?.checks)?g.admission.checks.slice(0,100):[];const gate=g?{verdict:g.verdict,measurementVerdict:g.measurementVerdict,reason:g.reason,scope:typeof g.scope==='string'?g.scope.slice(0,500):undefined,checkedAt:g.checkedAt,reportId:g.reportId,approvedAt:g.approvedAt,compatibility:(Array.isArray(g.admission?.compatibility)?g.admission.compatibility:[]).slice(0,8).map(c=>({id:String(c.id||'').slice(0,100),url:String(c.url||'').slice(0,500),rawVerdict:String(c.rawVerdict||'').slice(0,20),reason:String(c.reason||'').slice(0,500)})),sites:(Array.isArray(g.sites)?g.sites:[]).slice(0,8).map(s=>publicSite(s,local))}:null;return {revision:Number(a.session_revision||0),engine:a.engine,launchMode:a.launch_mode,proxyId:a.proxy_id||'',proxyHost:a.proxy_host||'',proxyPort:a.proxy_port||null,proxyCountry:a.proxy_country||'',proxyTimezone:a.proxy_timezone||'',expectedExitIp:e.expectedExitIp||'',policy:policy.config(a.session_policy),lifecycle:policy.lifecycle(a,a.daily_day?{day:a.daily_day}:{}),network:e.network||null,gate,feedWarmup:publicWarmup(e.feedWarmup),fingerprint:e.fingerprint?{hash:e.fingerprint.hash,fields:e.fingerprint.fields,checkedAt:e.fingerprint.checkedAt}:null,drift:e.drift||null,diagnosticRequested:e.command||null,commandError:typeof e.commandError==='string'?e.commandError:null};}
 async function configure(pool,input){
  await ensure(pool);const allowed=['accountId','revision','engine','launchMode','proxyId','proxyHost','proxyPort','proxyCountry','proxyTimezone','expectedExitIp','policy'];
  if(!input||Object.keys(input).some(k=>!allowed.includes(k))||typeof input.accountId!=='string'||!Number.isInteger(input.revision))throw Error('Invalid session settings; proxy passwords belong in AliasMode.');
@@ -43,11 +43,41 @@ async function configure(pool,input){
   await c.query("SELECT pg_notify('compel_engine_wake','')");await c.query('COMMIT');
  }catch(e){await c.query('ROLLBACK');if(e.code==='23505')throw Error('This dedicated proxy is already bound to another account.');throw e;}finally{c.release();}
 }
+function publicWarmup(p){
+ if(p?.version!=='FEED_WARMUP_V1'||!['running','completed','stopped'].includes(p.state)||!Number.isFinite(p.targetMs)||p.targetMs<60000||p.targetMs>2400000||!Number.isFinite(p.elapsedMs)||p.elapsedMs<0)return null;
+ return {state:p.state,day:String(p.day||'').slice(0,10),targetMs:p.targetMs,elapsedMs:Math.min(p.elapsedMs,p.targetMs),scrollCount:Number.isInteger(p.scrollCount)?p.scrollCount:0,expandedPosts:Number.isInteger(p.expandedPosts)?p.expandedPosts:0,startedAt:String(p.startedAt||'').slice(0,32),finishedAt:typeof p.finishedAt==='string'?p.finishedAt.slice(0,32):undefined,nextActionAt:typeof p.nextActionAt==='string'?p.nextActionAt.slice(0,32):undefined};
+}
+async function saveWarmupSettings(pool,input){
+ await ensure(pool);
+ if(!input||Object.keys(input).some(k=>!['accountId','revision','minutes','days'].includes(k))||typeof input.accountId!=='string'||!Number.isInteger(input.revision))throw Error('Choose an account and its current warm-up settings.');
+ const c=await pool.connect();try{
+  await c.query('BEGIN');const a=(await c.query('SELECT * FROM compel_linkedin_accounts WHERE id=$1 AND NOT archived FOR UPDATE',[input.accountId])).rows[0];
+  if(!a||Number(a.session_revision)!==input.revision)throw Error('Session settings changed. Reload before saving.');
+  if(a.processing_enabled||a.login_requested_at||a.logout_requested_at||a.close_requested_at||a.session_evidence?.command)throw Error('Stop browsing and finish current session requests before changing warm-up.');
+  const p=policy.config({...a.session_policy,warmupDays:input.days,warmupMinutes:input.minutes});
+  // Timing does not change browser identity. Keep its revision, raw checks,
+  // approvals, proxy binding and all review holds exactly as saved.
+  await c.query('UPDATE compel_linkedin_accounts SET session_policy=$2::jsonb,changed_at=clock_timestamp() WHERE id=$1',[a.id,JSON.stringify(p)]);
+  await c.query("SELECT pg_notify('compel_engine_wake','')");await c.query('COMMIT');
+ }catch(error){await c.query('ROLLBACK');throw error;}finally{c.release();}
+}
 async function updateOwned(pool,a,owner,patch){
  if(typeof a.control_version!=='string')throw Error('The exact account control version is required for session evidence.');
  const result=await pool.query(`UPDATE compel_linkedin_accounts a SET session_evidence=session_evidence||$4::jsonb WHERE id=$1 AND session_revision=$3
   AND a.changed_at=$5::timestamptz AND EXISTS(SELECT 1 FROM compel_worker_sessions s WHERE s.account_id=a.id AND s.owner=$2 AND s.lease_until>NOW()) RETURNING a.*`,[a.id,owner,a.session_revision,JSON.stringify(patch),a.control_version]);
  if(!result.rowCount)throw Error('Session evidence ownership or configuration changed.');return result.rows[0];
+}
+async function updateFeedWarmupOwned(pool,a,owner,patch,finish=false){
+ if(typeof a.control_version!=='string')throw Error('The exact account control version is required for feed browsing.');
+ // Completion and pausing are one fenced write. A concurrent Pause, hold,
+ // settings change or lost lease cannot record a day or enable qualification.
+ const result=await pool.query(`UPDATE compel_linkedin_accounts a SET session_evidence=session_evidence||$4::jsonb,
+  processing_enabled=CASE WHEN $6 THEN FALSE ELSE processing_enabled END,processing_until=CASE WHEN $6 THEN NULL ELSE processing_until END
+  WHERE id=$1 AND session_revision=$3 AND a.changed_at=$5::timestamptz AND processing_enabled AND enabled AND NOT archived AND attention_reason=''
+   AND login_requested_at IS NULL AND logout_requested_at IS NULL AND close_requested_at IS NULL AND session_evidence->>'command' IS NULL
+   AND (SELECT active_count FROM compel_worker_config WHERE id=1)>0
+   AND EXISTS(SELECT 1 FROM compel_worker_sessions s WHERE s.account_id=a.id AND s.owner=$2 AND s.lease_until>NOW()) RETURNING a.*`,[a.id,owner,a.session_revision,JSON.stringify(patch),a.control_version,finish]);
+ if(!result.rowCount)throw Error('Feed browsing was paused or its session ownership changed.');return result.rows[0];
 }
 async function request(pool,id,command){
  await ensure(pool);if(!['preflight','diagnostics','approve-identity'].includes(command))throw Error('Unknown session operation.');
@@ -57,7 +87,7 @@ async function request(pool,id,command){
    AND NOT EXISTS(SELECT 1 FROM compel_worker_sessions s WHERE s.account_id=compel_linkedin_accounts.id AND s.lease_until>NOW() AND s.status->>'status'='awaiting_login') RETURNING id`,[id,command]);
  if(!r.rowCount)throw Error('Pause processing and resolve the account’s manual review hold before session diagnostics.');await pool.query("SELECT pg_notify('compel_engine_wake','')");
 }
-module.exports={SCHEMA,ensure,configure,publicState,updateOwned,request};
+module.exports={SCHEMA,ensure,configure,saveWarmupSettings,publicState,updateOwned,updateFeedWarmupOwned,request};
 module.exports.evidence=async(pool,id)=>{if(typeof id!=='string'||!id||id.length>200)throw Error('Choose an account.');return (await pool.query('SELECT session_evidence FROM compel_linkedin_accounts WHERE id=$1 AND NOT archived',[id])).rows[0]?.session_evidence||{};};
 module.exports.approveUnknown=async(pool,{accountId,revision,reportId})=>{
  await ensure(pool);if(typeof accountId!=='string'||!Number.isInteger(revision)||typeof reportId!=='string'||!reportId)throw Error('Choose the exact saved detector report.');

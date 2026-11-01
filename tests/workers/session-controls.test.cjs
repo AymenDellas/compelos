@@ -22,15 +22,15 @@ test('bounded pointer/scroll actions never click, submit or navigate, and a paus
  page.mouse.move=async()=>{active=false;};await assert.rejects(humanizer.interact(page,{assertActive,random:a=>a}),/Paused/);assert.equal(calls.length,2);
  await assert.rejects(humanizer.visit(page,'https://attacker.test/in/person/'),/canonical/);
 });
-test('warmup releases the claim without Voyager, research handoff or a qualification decision',async()=>{
- const {createAccountRuntime}=require('../../src/lib/account-runtime.cjs');let released=0,visited=0,open=false;
+test('feed warmup works with no CRM jobs and never claims a lead, discovers or qualifies',async()=>{
+ const {createAccountRuntime}=require('../../src/lib/account-runtime.cjs');let visited=0,open=false;
  const identity={name:'Owner',profileUrl:'https://www.linkedin.com/in/owner/'},a={id:'one',enabled:true,authorized:true,control_version:'one',confirmed_identity:identity,launch_mode:'headful',session_policy:{},session_evidence:{}};
  const runtime=createAccountRuntime({pool:{},accountId:'one',owner:'owner',browserOwner:{isOpen:()=>open,isHeadless:()=>false,open:async()=>{open=true;return{page:{goto:async()=>{}},browser:{}};},close:async()=>{open=false;},adopt:async()=>{}},
-  core:{readRuntimeAccount:async()=>a,processingAllowed:async()=>true,reserveLinkedInCheck:async()=>({}),claim:async()=>({job:{jobId:'job',linkedinUrl:'https://www.linkedin.com/in/target/'}}),releaseClaim:async()=>released++,pauseProcessing:async()=>{}},
-  sessionGuard:{state:()=>({state:'WARMUP'}),verify:async()=>true,warmup:async()=>{visited++;return{visited:true};}},
+  core:{readRuntimeAccount:async()=>a,processingAllowed:async()=>true,reserveLinkedInCheck:async()=>({}),claim:async()=>assert.fail('Feed browsing must not claim a CRM job'),pauseProcessing:async()=>{}},
+  sessionGuard:{state:()=>({state:visited>=2?'RAMP':'WARMUP'}),verify:async()=>true,warmup:async()=>{visited++;if(visited===2){a.authorized=false;return{done:true};}return{done:false};}},
   reader:{inspected:async()=>({url:'https://www.linkedin.com/feed/'}),readSignedInIdentity:async()=>identity,captureProfile:()=>assert.fail('Warmup cannot call Voyager')},
   discoveryStore:{claimSource:()=>assert.fail('No discovery during warmup')},researchQueue:{fullCapture:()=>false,handoff:()=>assert.fail('No qualification during warmup')},
- });try{await runtime.tick();assert.equal(visited,1);assert.equal(released,1);assert.equal(runtime.snapshot().status,'WARMUP');assert.equal(runtime.snapshot().jobsStarted,0);}finally{await runtime.close({preserveIntent:true});}
+ });try{await runtime.tick();assert.equal(visited,1);assert.equal(runtime.snapshot().status,'WARMUP');assert.equal(runtime.snapshot().jobsStarted,0);await runtime.tick();assert.equal(runtime.snapshot().reasonCode,'WARMUP_COMPLETE');await runtime.tick();assert.equal(visited,2);assert.equal(a.authorized,false);assert.equal(runtime.snapshot().jobsStarted,0);}finally{await runtime.close({preserveIntent:true});}
 });
 test('unverified session releases its lock without opening the browser or discarding its job',async()=>{
  const {createAccountRuntime}=require('../../src/lib/account-runtime.cjs');let released=0;
