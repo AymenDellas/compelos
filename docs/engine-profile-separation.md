@@ -1,5 +1,7 @@
 # Profile separation and Firefox trial — 30 October 2026
 
+The later [native integration report](engine-firefox-native.md) supersedes the testing-only decision below. Its unproxied public run retains a visitor-ID collision and does not establish complete account separation.
+
 **Decision: testing only.** After the anonymous Firefox trial, the user explicitly
 chose to keep it as testing only. CompelOS still uses the installed AliasMode
 Chromium adapter. No Firefox integration, new default, account migration,

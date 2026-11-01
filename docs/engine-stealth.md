@@ -1,5 +1,14 @@
 # Account session controls and diagnostic evidence
 
+## Native Firefox integration — 1 November 2026
+
+The user subsequently authorized [native Firefox integration](engine-firefox-native.md),
+superseding the test-only decision below for new profiles. AliasMode remains the
+provider; its installed native Firefox transport is used instead of CDP for
+Firefox only. Existing Chromium accounts are unchanged. Raw failures, incomplete
+evidence, mode-specific identity checks and all account holds remain authoritative.
+This implementation does not issue an account go-ahead.
+
 ## Profile separation and test-only Firefox trial — 30 October 2026
 
 The [latest separation study](engine-profile-separation.md) confirms the active

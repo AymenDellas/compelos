@@ -1,0 +1,260 @@
+{
+  "at": "2026-11-01T16:24:06.713Z",
+  "reportId": "firefox-native-public-5a7729b9-d76f-4758-9e90-2d702da93702",
+  "fixtureId": "firefox-native-fixture-a776253c-d32a-4c8d-9840-4c3cd22f039b",
+  "scope": "Installed native Firefox, two fresh profiles/two visible launches each, anonymous direct connection; no authenticated LinkedIn. Existing account remains paused.",
+  "accountClearance": false,
+  "proxyBound": false,
+  "provider": {
+    "version": "COMPELOS_FIREFOX_CONTROL_V1",
+    "upstreamCommit": "9577c815e30af8958d5a604fe5c9820b6e400886",
+    "upstreamTag": "v0.1.0-beta.69",
+    "compiler": "Bun 1.2.21 windows-x64-baseline",
+    "candidateSidecarSha256": "9581b06b93a54731903096a07366c5d5c78cb184ef07c82003f619d185b22b7c",
+    "nativeRuntimeClientSha256": "aa3878fd906b1efd6f8e117c2d6f8270089d7c3c64c6eeacf30fef99183cc3eb",
+    "patchSha256": "1158ae81f528d882710a76373442f18574b11a15e747ce20d946b10f27b12e24",
+    "unchangedFirefoxExeSha256": "cf60060ac7664bdf954353a18f358d7f251b68272119a5b3a6d3f11abd8bbb4f",
+    "existingNativeClientVersion": "1.58.2",
+    "providerTests": {
+      "passed": 726,
+      "failed": 0,
+      "skipped": 2
+    },
+    "noAutoLaunchTests": {
+      "passed": 2,
+      "failed": 0
+    },
+    "providerTypes": "PASS",
+    "installed": true,
+    "installedSidecarSha256": "9581b06b93a54731903096a07366c5d5c78cb184ef07c82003f619d185b22b7c",
+    "installedRuntimeClientSha256": "aa3878fd906b1efd6f8e117c2d6f8270089d7c3c64c6eeacf30fef99183cc3eb",
+    "installedAt": "2026-11-01T16:11:20.299Z"
+  },
+  "checks": {
+    "nativeConnection": "PASS",
+    "blankStartup": "PASS",
+    "reconnectAndCookies": "PASS",
+    "syntheticVoyagerReads": "PASS",
+    "renderingStableWithinProfiles": "PASS",
+    "canvasWebglFontsDifferentAcrossProfiles": "PASS",
+    "publishedVisitorIdsSeparate": "FAIL",
+    "automation": "PASS",
+    "modification": "PASS",
+    "newYorkClockMechanics": "PASS",
+    "proxyCountryAlignment": "NOT_MEASURED",
+    "incolumitas": "UNKNOWN",
+    "overallAccountReadiness": "NOT_CLEARED"
+  },
+  "runs": [
+    {
+      "profile": 1,
+      "restart": 1,
+      "clock": "PASS",
+      "offsetMinutes": 300,
+      "automationFlagsFalse": 23,
+      "bot": "Not detected",
+      "modification": "Not detected",
+      "endpointsHttp200": 7,
+      "rawCounts": {
+        "PASS": 1,
+        "FAIL": 6,
+        "UNKNOWN": 0
+      },
+      "finalAdmission": "UNKNOWN",
+      "incolumitasPublishedResult": "UNKNOWN",
+      "sannysoft": {
+        "pass": 30,
+        "fail": 1,
+        "failedCell": "chrome-result"
+      },
+      "tls": "PASS",
+      "warnings": [
+        {
+          "name": "Website VPN warning",
+          "value": "You are using a VPN 🌐 (timezone mismatch)"
+        },
+        {
+          "name": "Suspect score",
+          "value": "10"
+        }
+      ],
+      "visitorIdHash": "9f286cda429563f50cc8fffb9c8ca1daff4631151be90e1db86b4dc7926695fc",
+      "rendering": {
+        "version": "RENDERED_READBACK_V2",
+        "canvas": "6f5f227a121cc54ee0956839dc142dbb618c3fae85ab88656e704251d0cac701",
+        "webgl": "3ab64647e6d11f9e2a9b77f810ac543a447474fd2057a54581d4831b8007283e",
+        "audio": "4b17e04896d4f891de670dc558954033511708eeb8d0611203790de4a0c9a52b",
+        "fonts": "d368988bce0f1ec0b32020b781582c969f4bebcd0dfc238ae850a6aae6340eb3"
+      }
+    },
+    {
+      "profile": 1,
+      "restart": 2,
+      "clock": "PASS",
+      "offsetMinutes": 300,
+      "automationFlagsFalse": 23,
+      "bot": "Not detected",
+      "modification": "Not detected",
+      "endpointsHttp200": 7,
+      "rawCounts": {
+        "PASS": 1,
+        "FAIL": 6,
+        "UNKNOWN": 0
+      },
+      "finalAdmission": "UNKNOWN",
+      "incolumitasPublishedResult": "UNKNOWN",
+      "sannysoft": {
+        "pass": 30,
+        "fail": 1,
+        "failedCell": "chrome-result"
+      },
+      "tls": "PASS",
+      "warnings": [
+        {
+          "name": "Website VPN warning",
+          "value": "You are using a VPN 🌐 (timezone mismatch)"
+        },
+        {
+          "name": "Suspect score",
+          "value": "10"
+        }
+      ],
+      "visitorIdHash": "9f286cda429563f50cc8fffb9c8ca1daff4631151be90e1db86b4dc7926695fc",
+      "rendering": {
+        "version": "RENDERED_READBACK_V2",
+        "canvas": "6f5f227a121cc54ee0956839dc142dbb618c3fae85ab88656e704251d0cac701",
+        "webgl": "3ab64647e6d11f9e2a9b77f810ac543a447474fd2057a54581d4831b8007283e",
+        "audio": "4b17e04896d4f891de670dc558954033511708eeb8d0611203790de4a0c9a52b",
+        "fonts": "d368988bce0f1ec0b32020b781582c969f4bebcd0dfc238ae850a6aae6340eb3"
+      }
+    },
+    {
+      "profile": 2,
+      "restart": 1,
+      "clock": "PASS",
+      "offsetMinutes": 300,
+      "automationFlagsFalse": 23,
+      "bot": "Not detected",
+      "modification": "Not detected",
+      "endpointsHttp200": 7,
+      "rawCounts": {
+        "PASS": 1,
+        "FAIL": 6,
+        "UNKNOWN": 0
+      },
+      "finalAdmission": "UNKNOWN",
+      "incolumitasPublishedResult": "UNKNOWN",
+      "sannysoft": {
+        "pass": 30,
+        "fail": 1,
+        "failedCell": "chrome-result"
+      },
+      "tls": "PASS",
+      "warnings": [
+        {
+          "name": "Website VPN warning",
+          "value": "You are using a VPN 🌐 (timezone mismatch)"
+        },
+        {
+          "name": "Suspect score",
+          "value": "10"
+        }
+      ],
+      "visitorIdHash": "9f286cda429563f50cc8fffb9c8ca1daff4631151be90e1db86b4dc7926695fc",
+      "rendering": {
+        "version": "RENDERED_READBACK_V2",
+        "canvas": "9485aad676486f9006743a1b16b8be4451f2deb9e4869530a8a94010b9f6c6ba",
+        "webgl": "cae2781995bc3a50b9ec0dc3fe60f118bb69622cdc7eedcde7008f6fb0f713f5",
+        "audio": "4b17e04896d4f891de670dc558954033511708eeb8d0611203790de4a0c9a52b",
+        "fonts": "d7312a683de9ebd9d19e57c878062fb1fc35caf8252f6101397685dcec0762cf"
+      }
+    },
+    {
+      "profile": 2,
+      "restart": 2,
+      "clock": "PASS",
+      "offsetMinutes": 300,
+      "automationFlagsFalse": 23,
+      "bot": "Not detected",
+      "modification": "Not detected",
+      "endpointsHttp200": 7,
+      "rawCounts": {
+        "PASS": 1,
+        "FAIL": 6,
+        "UNKNOWN": 0
+      },
+      "finalAdmission": "UNKNOWN",
+      "incolumitasPublishedResult": "UNKNOWN",
+      "sannysoft": {
+        "pass": 30,
+        "fail": 1,
+        "failedCell": "chrome-result"
+      },
+      "tls": "PASS",
+      "warnings": [
+        {
+          "name": "Website VPN warning",
+          "value": "You are using a VPN 🌐 (timezone mismatch)"
+        },
+        {
+          "name": "Suspect score",
+          "value": "10"
+        }
+      ],
+      "visitorIdHash": "9f286cda429563f50cc8fffb9c8ca1daff4631151be90e1db86b4dc7926695fc",
+      "rendering": {
+        "version": "RENDERED_READBACK_V2",
+        "canvas": "9485aad676486f9006743a1b16b8be4451f2deb9e4869530a8a94010b9f6c6ba",
+        "webgl": "cae2781995bc3a50b9ec0dc3fe60f118bb69622cdc7eedcde7008f6fb0f713f5",
+        "audio": "4b17e04896d4f891de670dc558954033511708eeb8d0611203790de4a0c9a52b",
+        "fonts": "d7312a683de9ebd9d19e57c878062fb1fc35caf8252f6101397685dcec0762cf"
+      }
+    }
+  ],
+  "qualificationReplay": {
+    "records": 50,
+    "decisionDeltas": 0,
+    "evidenceDeltas": 0,
+    "errors": 0,
+    "accountsUnchanged": true,
+    "crmUnchanged": true
+  },
+  "verification": {
+    "engine": {
+      "passed": 516,
+      "failed": 0
+    },
+    "laterAffectedNativeAndDiagnostics": {
+      "passed": 20,
+      "failed": 0
+    },
+    "laterSupervisor": {
+      "passed": 11,
+      "failed": 0
+    },
+    "crm": {
+      "passed": 14,
+      "failed": 0
+    },
+    "provider": {
+      "passed": 726,
+      "failed": 0,
+      "skipped": 2
+    },
+    "types": "PASS",
+    "build": "PASS",
+    "changedFileLint": "PASS",
+    "wholeRepositoryLint": {
+      "errors": 6,
+      "warnings": 4,
+      "scope": "Existing unchanged copy-studio components"
+    }
+  },
+  "limitations": [
+    "The two profiles have distinct sampled rendering but the public identification service merges their visitor IDs in this unproxied run. No cause or repair of LinkedIn restriction is established.",
+    "Changing headful/headless mode changed canvas readback in a retained earlier fixture. Mode-specific identity evidence is required.",
+    "New York Date and Intl clock mechanics pass; no proxy binding/country alignment was tested. The earlier Casablanca Firefox clock failure is not repaired or relabeled.",
+    "The raw public counts remain one PASS/six FAIL because the original direct collector expects a Chrome object. Only the narrowly scoped local Firefox interpretation differs.",
+    "The initial saved admission also incorrectly treated TLS collection without a CDP console challenge as incomplete. Raw report preserved; the corrected local interpretation is explicitly recomputed here and tested. Incolumitas remains UNKNOWN."
+  ]
+}
