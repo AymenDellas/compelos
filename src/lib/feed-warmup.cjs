@@ -49,6 +49,7 @@ async function step(a,page,{owner,now=Date.now,random=randomInt,assertActive,ins
  let progress=valid?{...previous}:{version:VERSION,id:randomUUID(),state:'running',day,revision:Number(a.session_revision||0),targetMs,elapsedMs:0,startedAt:new Date(at).toISOString(),expiresAt:new Date(at+targetMs+300000).toISOString(),scrollCount:0,expandedPosts:0,actions:[]};
  if(valid&&!continuous){progress.startedAt=new Date(at).toISOString();progress.expiresAt=new Date(at+targetMs-progress.elapsedMs+300000).toISOString();}
  if(continuous&&at>=Date.parse(progress.expiresAt)){
+  await inspect();await assertActive();assertFeed(page);
   progress={...progress,state:'stopped',finishedAt:new Date(at).toISOString(),reason:'The session expired while browsing was interrupted. Start a new warm-up when ready.'};
   await save({feedWarmup:progress},true);return {done:true,stopped:true,progress};
  }

@@ -22,7 +22,7 @@ test('pause/restart and long gaps never count inactive time; expired sessions do
 test('pause, security inspection, unrecognized navigation and partial saves cannot complete a day',async()=>{
  const f=fixture();await f.step();const writes=f.saves;f.active=false;await assert.rejects(f.step(),/Paused/);assert.equal(f.saves,writes);
  f.active=true;f.advance(10000);f.url='https://www.linkedin.com/in/unexpected/';await assert.rejects(f.step(),/left the feed/);assert.equal(f.saves,writes);
- f.url='https://www.linkedin.com/feed/';f.options.inspect=async()=>{throw Error('Exact security warning');};await assert.rejects(f.step(),/Exact security warning/);assert.equal(f.saves,writes);
+ f.url='https://www.linkedin.com/feed/';f.advance(400000);f.options.inspect=async()=>{throw Error('Exact security warning');};await assert.rejects(f.step(),/Exact security warning/);assert.equal(f.saves,writes);
  f.options.inspect=async()=>{};f.options.save=async()=>{throw Error('Lost lease');};await assert.rejects(f.step(),/Lost lease/);assert.equal(f.account.session_evidence.warmupDays,undefined);
 });
 test('waiting checks the feed for warnings and keeps the action history bounded',async()=>{

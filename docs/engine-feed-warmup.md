@@ -58,6 +58,15 @@ under ignored `data/engine-v2/feed-warmup-20261101/`; benchmark manifests and th
 50-record stored-CRM replay are retained in PostgreSQL. No authenticated LinkedIn
 measurement or account start is performed as part of implementation.
 
+The [verification receipt](engine-feed-warmup-receipt.json) records 525 passing
+engine tests, 14 passing CRM tests and 24 final affected checks. Types, the
+production build and changed-file lint passed. Whole-repository lint retains
+six existing errors/four warnings in unchanged copy-studio components. All 92
+deployment traces exclude private runtime assets. The 50-record replays have
+zero decision/evidence changes or errors; account controls and CRM contents
+remain unchanged. A security warning at the session deadline retains its exact
+reason rather than becoming a generic timer-expiry message.
+
 A pre-existing navigation timeout regression was also restored to the user's
 explicit 60-second requirement; the original timeout-propagation tests remain
 strict. Browser provider configuration, detector verdicts and the earlier
