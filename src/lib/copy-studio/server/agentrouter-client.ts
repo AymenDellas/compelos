@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { z } from 'zod/v4';
 import type { Completion, ProviderConfig } from './provider';
-import { AppError } from './errors';
+import { AgentRouterModelUnavailable, AppError, isAgentRouterModelUnavailable } from './errors';
 import { startAgentRouterRelay } from './agentrouter-relay';
 
 const resultSchema = z.object({
@@ -64,6 +64,7 @@ export function clientResult(output: string): string {
     );
   if (result.is_error) {
     const message = result.error?.message || '';
+    if (isAgentRouterModelUnavailable(message)) throw new AgentRouterModelUnavailable();
     if (/aliyun_waf|cf-chl-|challenge-platform|security challenge/i.test(message))
       throw new AppError(
         502,
@@ -129,7 +130,8 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
     const workspace = await mkdtemp(join(tmpdir(), 'copy-studio-ai-'));
     let closeRelay: (() => Promise<void>) | undefined;
     try {
-      const relay = await startAgentRouterRelay(config, combinedSignal, maxTokens);
+      const unavailable = new AbortController();
+      const relay = await startAgentRouterRelay(config, combinedSignal, maxTokens, () => unavailable.abort());
       closeRelay = relay.close;
       const args = [
         '--expose-gc',
@@ -157,9 +159,13 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
           cwd: workspace,
           windowsHide: true,
           stdio: ['pipe', 'pipe', 'pipe'],
-          signal: combinedSignal,
+          signal: AbortSignal.any([combinedSignal, unavailable.signal]),
           env: {
             ...process.env,
+            // Next may propagate its own --require/loader flags through
+            // NODE_OPTIONS. They belong to the dashboard and can reference
+            // files absent from this isolated client's temporary directory.
+            NODE_OPTIONS: '',
             OPENAI_API_KEY: relay.localToken,
             OPENAI_BASE_URL: relay.baseUrl,
             OPENAI_MODEL: config.model,
@@ -192,6 +198,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
         });
         child.on('close', (exitCode, exitSignal) => {
           if (combinedSignal.aborted) return reject(combinedSignal.reason);
+          if (unavailable.signal.aborted) return reject(new AgentRouterModelUnavailable());
           if (launchFailed)
             return reject(
               new AppError(

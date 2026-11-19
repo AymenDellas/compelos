@@ -4,6 +4,7 @@ import { Readable } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import { normalizeStream } from './agentrouter-stream.mjs';
 import type { ProviderConfig } from './provider';
+import { isAgentRouterModelUnavailable } from './errors';
 
 /** A private, short-lived transport adapter for the actual supported client.
  * Authentication headers originate in that client; only its local bearer token is replaced.
@@ -12,6 +13,7 @@ export async function startAgentRouterRelay(
   config: ProviderConfig,
   signal: AbortSignal,
   maxTokens: number,
+  onModelUnavailable?: () => void,
 ) {
   const localToken = randomBytes(32).toString('hex');
   const server = createServer(async (req, res) => {
@@ -70,6 +72,16 @@ export async function startAgentRouterRelay(
         body: JSON.stringify(body),
         signal: requestSignal,
       });
+      if (upstream.status === 503 && onModelUnavailable) {
+        const failure = await upstream.clone().json().catch(() => null);
+        const message = failure?.error?.message ?? failure?.message;
+        if (typeof message === 'string' && isAgentRouterModelUnavailable(message)) {
+          await upstream.body?.cancel();
+          res.end();
+          onModelUnavailable();
+          return;
+        }
+      }
       if (process.env.COPY_STUDIO_DIAGNOSTIC === '1')
         console.error(
           'AgentRouter response:',

@@ -1,7 +1,7 @@
 import { z, ZodError } from 'zod/v4';
 import { generationSchema, revisionSchema, MAX_SOURCE_CHARACTERS } from '../shared/contracts';
 import { generate, extract, revise } from './engine';
-import { createCompletion, type Completion } from './provider';
+import { createCompletion, createPrefillCompletion, type Completion } from './provider';
 import { providerConfig, providerStatus } from './config';
 import { readSource } from './source';
 import { AppError, publicError } from './errors';
@@ -137,7 +137,8 @@ export async function handleCopyStudio(
         ? { title: 'Pasted page copy', url: '', text: input.text, headings: [] }
         : readSource(input.url!, signal);
     }
-    const complete = completeOverride || createCompletion(providerConfig());
+    const factory = operation === 'import' ? createPrefillCompletion : createCompletion;
+    const complete = completeOverride || factory(providerConfig());
     if (operation === 'generate')
       return generate(complete, generationSchema.parse(body), signal, progress);
     if (operation === 'revise') return revise(complete, revisionSchema.parse(body), signal);

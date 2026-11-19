@@ -1,7 +1,8 @@
 import type { z } from 'zod/v4';
-import { AppError } from './errors';
+import { AgentRouterContentFiltered, AgentRouterModelUnavailable, AppError, isAgentRouterModelUnavailable } from './errors';
 import { createAgentRouterCompletion } from './agentrouter-client';
 import { setTimeout as delay } from 'node:timers/promises';
+import { agentRouterHeaders, readResponsesPayload } from '../../content-create/responses-stream.js';
 
 export type Completion = ((
   system: string,
@@ -43,6 +44,116 @@ export class ProviderSizeError extends AppError {
   }
 }
 
+function isAgentRouter(config: ProviderConfig) {
+  const hostname = new URL(config.baseUrl).hostname;
+  return hostname === 'agentrouter.org' || hostname.endsWith('.agentrouter.org');
+}
+
+function createResponsesCompletion(config: ProviderConfig, json = false): Completion {
+  const complete: Completion = async (system, prompt, signal, maxTokens = 7000) => {
+    if (!config.apiKey || /your.*key|placeholder/i.test(config.apiKey)) {
+      throw new AppError(503, 'Configure COPY_STUDIO_API_KEY in .env.local, then restart the dashboard.');
+    }
+    const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]);
+    let response: Response;
+    try {
+      response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/responses`, {
+        method: 'POST',
+        headers: agentRouterHeaders(config.apiKey),
+        signal: requestSignal,
+        body: JSON.stringify({
+          model: config.model,
+          instructions: `${system}\nDo not call tools.`,
+          input: json ? `Return a JSON object.\n${prompt}` : prompt,
+          ...(json ? { text: { format: { type: 'json_object' } } } : {}),
+          reasoning: { effort: 'low' },
+          // AgentRouter may use maximum reasoning despite the requested effort.
+          max_output_tokens: Math.max(32768, maxTokens),
+          stream: true,
+          store: false,
+        }),
+      });
+    } catch {
+      requestSignal.throwIfAborted();
+      throw new AppError(502, 'AgentRouter could not be reached. Check the dashboard’s connection and retry.');
+    }
+
+    if (response.status === 413) {
+      await response.body?.cancel();
+      complete.inputByteLimit = Math.min(complete.inputByteLimit!, Math.floor(Buffer.byteLength(system + prompt, 'utf8') * 0.6));
+      throw new ProviderSizeError();
+    }
+    if (response.headers.get('content-type')?.includes('text/html')) {
+      await response.body?.cancel();
+      throw new AppError(502, 'AgentRouter returned a web page instead of AI data. Check its server-access policy for this dashboard.');
+    }
+    // AgentRouter can send a JSON error body with an event-stream header.
+    const payload = await (response.ok ? readResponsesPayload(response) : response.json()).catch(() => {
+      requestSignal.throwIfAborted();
+      if (!response.ok)
+        throw new AppError(502, `AgentRouter rejected the request (HTTP ${response.status}). Please retry.`);
+      throw new AppError(502, 'AgentRouter ended its response before returning readable AI data. Please retry.');
+    });
+    requestSignal.throwIfAborted();
+    const message = String(payload?.error?.message || payload?.message || '');
+    if (!response.ok || payload?.error || payload?.status === 'failed') {
+      if (isAgentRouterModelUnavailable(message)) throw new AgentRouterModelUnavailable();
+      if (/unauthorized.client/i.test(message))
+        throw new AppError(502, 'AgentRouter rejected the client integration. Check which clients the endpoint supports.');
+      if (response.status === 401 || response.status === 403)
+        throw new AppError(502, 'AgentRouter refused access. Check the Copy Studio endpoint, credentials, and model permissions.');
+      if (response.status === 429)
+        throw new AppError(429, 'AgentRouter’s usage limit was reached. Check your account and retry after the limit resets.');
+      throw new AppError(502, 'AgentRouter could not complete the request. Check the provider’s account and service status.');
+    }
+    if (payload?.status !== 'completed') {
+      const detail = payload?.incomplete_details?.reason;
+      if (detail === 'max_output_tokens')
+        throw new AppError(502, 'AgentRouter reached its response limit before finishing. Try a more specific page or a shorter excerpt.');
+      if (detail === 'content_filter')
+        throw new AgentRouterContentFiltered();
+      throw new AppError(502, 'AgentRouter ended its response before completing the request. Please retry.');
+    }
+    type OutputItem = { type: string; role?: string; content?: { type: string; text?: string }[] };
+    const output: OutputItem[] = Array.isArray(payload.output) ? payload.output : [];
+    if (output.some(item => item?.type !== 'message' && item?.type !== 'reasoning'))
+      throw new AppError(502, 'AgentRouter returned an unsupported tool response. Please retry.');
+    const text = output.filter(item => item.type === 'message' && item.role === 'assistant')
+      .flatMap(item => Array.isArray(item.content) ? item.content : [])
+      .filter(item => item?.type === 'output_text' && typeof item.text === 'string')
+      .map(item => item.text).join('\n');
+    if (!text.trim()) throw new AppError(502, 'AgentRouter returned no usable answer. Please retry.');
+    return text;
+  };
+  complete.inputByteLimit = config.inputByteLimit || 80_000;
+  return complete;
+}
+
+/** Keep the fallback scoped to source extraction and reuse it for schema repair. */
+export function createPrefillCompletion(config: ProviderConfig): Completion {
+  const fallbackModel = 'gpt-6.1-sol';
+  let active = createCompletion(config);
+  let canFallback = isAgentRouter(config) && config.model !== fallbackModel;
+  const complete: Completion = async (system, prompt, signal, maxTokens) => {
+    try {
+      return await active(system, prompt, signal, maxTokens);
+    } catch (error) {
+      if (!(error instanceof AgentRouterModelUnavailable) || !canFallback) throw error;
+      signal.throwIfAborted();
+      canFallback = false;
+      const inputByteLimit = Math.min(active.inputByteLimit ?? 80_000, 20_000);
+      active = createResponsesCompletion({ ...config, model: fallbackModel, timeoutMs: 270_000, inputByteLimit }, true);
+      // Let extraction rebuild its citation index against the smaller prompt.
+      if (Buffer.byteLength(system + prompt, 'utf8') > inputByteLimit) throw new ProviderSizeError();
+      return active(system, prompt, signal, maxTokens);
+    }
+  };
+  Object.defineProperty(complete, 'inputByteLimit', {
+    get: () => active.inputByteLimit, set: value => { active.inputByteLimit = value; },
+  });
+  return complete;
+}
+
 export function parseJson(text: string): unknown {
   const clean = text
     .trim()
@@ -60,7 +171,8 @@ export function parseJson(text: string): unknown {
 
 export function createCompletion(config: ProviderConfig): Completion {
   const hostname = new URL(config.baseUrl).hostname;
-  if (hostname === 'agentrouter.org' || hostname.endsWith('.agentrouter.org')) {
+  if (isAgentRouter(config)) {
+    if (/^(?:openai\/)?gpt-/i.test(config.model)) return createResponsesCompletion(config);
     return Object.assign(createAgentRouterCompletion(config), { inputByteLimit: config.inputByteLimit || 80_000 });
   }
   const complete: Completion = async (system, prompt, signal, maxTokens = 7000) => {

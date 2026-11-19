@@ -113,3 +113,14 @@ export type ScanResult = {
     note: string;
   }>;
 };
+
+export type FunnelScreenshot = {
+  id: string;
+  url: string;
+  device: "desktop" | "mobile";
+  width: number;
+  height: number;
+  dataUrl: string;
+  analyzed: boolean;
+  section?: "Page section" | "Call to action" | "Form";
+};

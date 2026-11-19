@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCompletion } from '../../src/lib/copy-studio/server/provider';
+import { z } from 'zod/v4';
+import { createCompletion, createPrefillCompletion, structured } from '../../src/lib/copy-studio/server/provider';
 
 const config = {
   apiKey: 'test-token-not-a-real-key',
@@ -8,6 +9,59 @@ const config = {
   model: 'test-model',
   timeoutMs: 1000,
 };
+
+const agentRouter = { ...config, baseUrl: 'https://agentrouter.org/v1', timeoutMs: 20_000 };
+
+test('prefill stops the legacy client after a confirmed missing route and reuses the Responses fallback', async (t) => {
+  const requests: Array<{ path: string; model: string }> = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    const body = JSON.parse(init!.body as string);
+    requests.push({ path, model: body.model });
+    if (path.endsWith('/chat/completions')) {
+      return Response.json({ error: { message: '当前分组 default 下对于模型 deepseek-v4-flash 无可用渠道' } }, { status: 503 });
+    }
+    assert.equal(body.max_output_tokens, 32768);
+    assert.equal(body.stream, true);
+    assert.equal(body.tools, undefined);
+    assert.equal(body.text.format.type, 'json_object');
+    assert.match(body.input, /Return a JSON object/);
+    assert.ok(Buffer.byteLength(body.input) < 20_000);
+    const event = {
+      type: 'response.completed',
+      response: { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '{"ok":true}' }] }] },
+    };
+    return new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
+  });
+  const complete = createPrefillCompletion({ ...agentRouter, model: 'deepseek-v4-flash', inputByteLimit: 24_000 });
+  const signal = new AbortController().signal;
+  assert.deepEqual(await structured(complete, z.object({ ok: z.boolean() }), 'Return JSON.',
+    () => 'x'.repeat(complete.inputByteLimit! - 100), signal), { ok: true });
+  assert.equal(complete.inputByteLimit, 20_000);
+  assert.equal(await complete('Return JSON.', 'Repair the answer.', signal), '{"ok":true}');
+  assert.deepEqual(requests, [
+    { path: '/v1/chat/completions', model: 'deepseek-v4-flash' },
+    { path: '/v1/responses', model: 'gpt-6.1-sol' },
+    { path: '/v1/responses', model: 'gpt-6.1-sol' },
+  ]);
+});
+
+test('prefill returns access and incomplete-response errors without changing models', async (t) => {
+  const results = [
+    () => Response.json({ error: { message: 'unauthorized client' } }, { status: 401 }),
+    () => Response.json({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '{"partial":true}' }] }] }),
+  ];
+  const models: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    models.push(JSON.parse(init!.body as string).model);
+    return results.shift()!();
+  });
+  const complete = createPrefillCompletion({ ...agentRouter, model: 'gpt-5.6-sol' });
+  const signal = new AbortController().signal;
+  await assert.rejects(complete('Return JSON.', 'Read this source.', signal), /rejected the client integration/);
+  await assert.rejects(complete('Return JSON.', 'Read this source.', signal), /reached its response limit/);
+  assert.deepEqual(models, ['gpt-5.6-sol', 'gpt-5.6-sol']);
+});
 
 test('Groq GPT-OSS requests leave room for JSON output with low reasoning effort while other models retain their provider defaults', async () => {
   const original = globalThis.fetch;

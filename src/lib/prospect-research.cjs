@@ -44,6 +44,7 @@ async function fetchPublicPage(value, options = {}, redirects = 0) {
     telemetry.countRequest('website');
     if (redirects > 4) throw new Error('Too many website redirects.');
     const url = publicUrl(value);
+    if (options.allowUrl && !options.allowUrl(url)) throw new Error('The website redirected outside permitted public sources.');
     const timeout = Math.min(options.timeoutMs || 10000, 12000);
     const signal = options.signal || AbortSignal.timeout(timeout);
     signal.throwIfAborted();
