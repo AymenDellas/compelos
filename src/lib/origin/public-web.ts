@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import { funnelUrl } from '../funnel-browser';
 import { fetchPublicPage } from '../prospect-research.cjs';
-import { domain } from './store';
+import { domain } from './policy';
 
 export const userAgent = 'Compel-Origin/0.1 (public business research; https://github.com/AymenDellas/compelos)';
 const excluded = /(?:^|\.)(?:linkedin\.com|licdn\.com|facebook\.com|instagram\.com|youtube\.com|youtu\.be|x\.com|twitter\.com|tiktok\.com|linktr\.ee|bit\.ly|wixsite\.com|wordpress\.com|blogspot\.com)$/i;

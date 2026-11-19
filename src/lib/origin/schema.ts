@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS origin_runs (
   error text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS origin_one_active_run ON origin_runs ((1)) WHERE state IN ('QUEUED','RUNNING','PAUSED');
+ALTER TABLE origin_settings ADD COLUMN IF NOT EXISTS publisher_feeds jsonb;
+ALTER TABLE origin_settings ADD COLUMN IF NOT EXISTS worker_policy_version text;
+ALTER TABLE origin_runs ADD COLUMN IF NOT EXISTS publisher_feeds jsonb;
 CREATE TABLE IF NOT EXISTS origin_businesses (
   id uuid PRIMARY KEY,
   domain text NOT NULL UNIQUE,

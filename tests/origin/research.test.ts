@@ -116,3 +116,11 @@ test('a permitted feed preserves dated discovery and explicit same-record contri
   assert.equal(result.seeds[0].adapter, 'Fixture publisher');
   assert.equal(result.results[0].discovered, 2);
 });
+
+test('new publisher observations pair with retained records and take priority over uncorroborated leads', async () => {
+  const second = source('publisher-two.test', 'board coaching');
+  const unrelated = { ...second, website: 'https://uncorroborated.test/', sourceKey: 'publisher-two.test:unrelated', name: 'Other Business' };
+  const { seeds } = await discover([{ name: 'Current publisher', run: async () => [unrelated, second] }], 1, [seed]);
+  assert.deepEqual(seeds.map(item => item.sourceKey), [second.sourceKey, seed.sourceKey]);
+  assert.ok(seeds.every(item => item.website === official));
+});

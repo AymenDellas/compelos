@@ -1,19 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import { decide, defaults, emptyCheckpoint, finding, observe, settingsSchema } from './policy';
+import { decide, defaults, domain, emptyCheckpoint, finding, observe, POLICY_VERSION, settingsSchema } from './policy';
 import type { Checkpoint, Decision, Seed, Settings, SourceResult } from './policy';
 import { schema } from './schema';
+import { approvedFeeds, independentFeedCount, parseFeeds } from './sources';
+import type { PublisherFeed } from './sources';
 
 type DB = Pool | PoolClient;
 const json = JSON.stringify;
-export type Run = { id: string; state: string; config: Settings; sources: SourceResult[] | null; lease: string; deadline_at: Date; started_at: Date; control_revision: number };
+export { domain };
+export type Run = { id: string; state: string; config: Settings; sources: SourceResult[] | null; publisher_feeds: PublisherFeed[] | null; lease: string; deadline_at: Date; started_at: Date; control_revision: number };
 export type Job = {
   id: string; business_id: string; name: string; website: string; domain: string; seeds: Seed[];
   stage: 'RESOLVING' | 'INVESTIGATING' | 'VERIFYING'; checkpoint: Checkpoint;
   signature: Checkpoint['signature']; attempts: number;
 };
 export type Artifact = { id: string; digest: string; url: string; device: string; image: Buffer };
-export function domain(url: string) { return new URL(url).hostname.toLowerCase().replace(/^www\./, '').replace(/\.$/, ''); }
 
 async function transaction<T>(pool: Pool, run: (db: PoolClient) => Promise<T>) {
   const db = await pool.connect();
@@ -36,21 +38,47 @@ export function migrate(pool: Pool) {
   });
 }
 
-const readConfig = (value: Settings) => settingsSchema.parse({ ...defaults, ...value });
-function createRun(db: DB, settings: Settings) {
-  return db.query<{ id: string }>(`INSERT INTO origin_runs(id,state,config) VALUES($1,'QUEUED',$2) ON CONFLICT DO NOTHING RETURNING id`,
-    [randomUUID(), json(settings)]);
+export const readConfig = (value?: Settings) => settingsSchema.parse({ ...defaults, ...value });
+type Configuration = { config: Settings; publisher_feeds: PublisherFeed[] | null; next_run_at: Date | null; worker_seen_at: Date | null; worker_policy_version: string | null };
+
+export async function configuration(db: DB) {
+  return (await db.query<Configuration>('SELECT config,publisher_feeds,next_run_at,worker_seen_at,worker_policy_version FROM origin_settings WHERE id=1')).rows[0];
 }
-export async function start(pool: Pool) {
+
+export function editPublishers(pool: Pool, change: (feeds: PublisherFeed[]) => PublisherFeed[]) {
   return transaction(pool, async db => {
-    const { rows: [row] } = await db.query<{ config: Settings }>('SELECT config FROM origin_settings WHERE id=1 FOR UPDATE');
-    return (await createRun(db, readConfig(row.config))).rows[0]?.id ?? null;
+    const { rows: [row] } = await db.query<Configuration>('SELECT publisher_feeds FROM origin_settings WHERE id=1 FOR UPDATE');
+    const feeds = parseFeeds(change(approvedFeeds(row.publisher_feeds)));
+    await db.query('UPDATE origin_settings SET publisher_feeds=$1 WHERE id=1', [json(feeds)]);
+    return feeds;
+  });
+}
+
+function createRun(db: DB, settings: Settings, feeds: unknown) {
+  return db.query<{ id: string }>(`INSERT INTO origin_runs(id,state,config,publisher_feeds) VALUES($1,'QUEUED',$2,$3) ON CONFLICT DO NOTHING RETURNING id`,
+    [randomUUID(), json(settings), json(approvedFeeds(feeds))]);
+}
+export async function start(pool: Pool, override: Partial<Settings> = {}, requireAcquisitionSources = false) {
+  return transaction(pool, async db => {
+    const { rows: [row] } = await db.query<Configuration>('SELECT config,publisher_feeds FROM origin_settings WHERE id=1 FOR UPDATE');
+    const feeds = approvedFeeds(row.publisher_feeds);
+    if (requireAcquisitionSources && independentFeedCount(feeds) < 2) return null;
+    return (await createRun(db, readConfig({ ...row.config, ...override }), feeds)).rows[0]?.id ?? null;
   });
 }
 export async function saveSettings(db: DB, config: Settings) {
   await db.query(`UPDATE origin_settings SET config=$1,next_run_at=CASE WHEN $2::int IS NULL THEN NULL
     WHEN config->>'intervalMinutes'=$2::text AND next_run_at IS NOT NULL THEN next_run_at
     ELSE now()+make_interval(mins => $2::int) END WHERE id=1`, [json(settingsSchema.parse(config)), config.intervalMinutes]);
+}
+
+export function patchSettings(pool: Pool, patch: Partial<Settings>) {
+  return transaction(pool, async db => {
+    const { rows: [row] } = await db.query<Configuration>('SELECT config FROM origin_settings WHERE id=1 FOR UPDATE');
+    const config = readConfig({ ...row.config, ...patch });
+    await saveSettings(db, config);
+    return config;
+  });
 }
 
 export async function control(db: DB, id: string, action: 'pause' | 'resume' | 'cancel') {
@@ -63,20 +91,22 @@ export async function control(db: DB, id: string, action: 'pause' | 'resume' | '
   return Boolean((await db.query(`UPDATE origin_runs SET ${change[action]},control_revision=control_revision+1 WHERE id=$1 AND state=ANY($2)`, [id, states[action]])).rowCount);
 }
 
-export async function claimRun(pool: Pool) {
+export async function claimRun(pool: Pool, target?: string) {
   return transaction(pool, async db => {
-    const { rows: [settings] } = await db.query<{ config: Settings; due: boolean }>(`UPDATE origin_settings SET worker_seen_at=now()
-      WHERE id=1 RETURNING config,next_run_at<=now() AS due`);
-    const config = readConfig(settings.config);
-    if (settings.due && config.intervalMinutes && (await createRun(db, config)).rowCount) {
-      await db.query('UPDATE origin_settings SET next_run_at=now()+make_interval(mins => $1) WHERE id=1', [config.intervalMinutes]);
+    if (!target) {
+      const { rows: [settings] } = await db.query<Configuration & { due: boolean }>(`UPDATE origin_settings SET worker_seen_at=now(),worker_policy_version=$1
+        WHERE id=1 RETURNING config,publisher_feeds,next_run_at<=now() AS due`, [POLICY_VERSION]);
+      const config = readConfig(settings.config);
+      if (settings.due && config.intervalMinutes && (await createRun(db, config, settings.publisher_feeds)).rowCount) {
+        await db.query('UPDATE origin_settings SET next_run_at=now()+make_interval(mins => $1) WHERE id=1', [config.intervalMinutes]);
+      }
     }
     await db.query(`UPDATE origin_runs SET state='FAILED',finished_at=now(),error='Run time budget elapsed.',lease=NULL,lease_until=NULL
-      WHERE state='RUNNING' AND deadline_at<=now() AND (lease_until IS NULL OR lease_until<=now())`);
+      WHERE state='RUNNING' AND deadline_at<=now() AND (lease_until IS NULL OR lease_until<=now()) AND ($1::uuid IS NULL OR id=$1)`, [target ?? null]);
     const { rows: [run] } = await db.query<Run>(`UPDATE origin_runs SET state='RUNNING',lease=$1,lease_until=now()+interval '95 seconds',
       started_at=COALESCE(started_at,now()),deadline_at=COALESCE(deadline_at,now()+make_interval(mins => (config->>'runMinutes')::int))
       WHERE id=(SELECT id FROM origin_runs WHERE state IN ('QUEUED','RUNNING') AND (lease_until IS NULL OR lease_until<=now())
-      ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`, [randomUUID()]);
+      AND ($2::uuid IS NULL OR id=$2) ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`, [randomUUID(), target ?? null]);
     return run ? { ...run, config: readConfig(run.config) } : null;
   });
 }
@@ -165,6 +195,21 @@ export async function sourceHistory(db: DB) {
   return (await db.query<{ source: SourceResult }>(`SELECT item AS source FROM
     (SELECT sources,created_at FROM origin_runs WHERE sources IS NOT NULL ORDER BY created_at DESC LIMIT 50) r
     CROSS JOIN LATERAL jsonb_array_elements(r.sources) WITH ORDINALITY a(item,position) ORDER BY r.created_at DESC,a.position`)).rows.map(row => row.source);
+}
+
+export async function recentPublisherEvidence(db: DB, activityDays: number) {
+  return (await db.query<{ seed: Seed }>(`SELECT DISTINCT ON (seed->>'website',seed->>'sourceKey') seed FROM
+    (SELECT seeds FROM origin_investigations WHERE created_at>=now()-make_interval(days => $1)
+      ORDER BY created_at DESC LIMIT 400) j CROSS JOIN LATERAL jsonb_array_elements(j.seeds) seed
+    WHERE seed->>'permission' IS NOT NULL AND seed->>'occurredAt' IS NOT NULL
+    ORDER BY seed->>'website',seed->>'sourceKey',seed->>'occurredAt' DESC LIMIT 1200`, [activityDays])).rows.map(row => row.seed);
+}
+
+export async function recentWikiPointers(db: DB) {
+  return (await db.query<{ source: string }>(`SELECT DISTINCT seed->>'source' AS source FROM
+    (SELECT seeds FROM origin_investigations WHERE stage='COMPLETED' AND updated_at>=now()-interval '72 hours'
+      ORDER BY updated_at DESC LIMIT 300) j CROSS JOIN LATERAL jsonb_array_elements(j.seeds) seed
+    WHERE seed->>'method'='Wikidata'`)).rows.map(row => row.source);
 }
 
 export type SourceQuality = { adapter: string; investigated: number; identities: number };

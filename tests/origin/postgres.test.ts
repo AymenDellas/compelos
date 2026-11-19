@@ -5,7 +5,7 @@ import { Pool } from 'pg';
 import { modelAdvisory, readOrReserve } from '../../src/lib/origin/model';
 import { decide, defaults, emptyCheckpoint, finding, gateNames, observe } from '../../src/lib/origin/policy';
 import { artifact, dossier, overview, readyOpportunities } from '../../src/lib/origin/read-model';
-import { claimRun, control, finish, migrate, nextJob, release, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
+import { claimRun, control, finish, migrate, nextJob, recentPublisherEvidence, release, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
 import { official, seed, source } from './fixtures';
 
 test('PostgreSQL fences interrupted stages, deduplicates identities, enforces budgets and serves only current qualified opportunities', {
@@ -29,10 +29,12 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     assert.ok(run);
     assert.equal(await claimRun(pool), null);
     const wikidata = { ...seed, method: 'Wikidata' as const, sourceKey: 'wikidata:Q12345' };
-    await saveDiscovery(pool, run, [wikidata, source('publisher-two.test', 'board development'),
+    const publisher = { ...source('publisher-two.test', 'board development'), permission: 'https://publisher-two.test/terms' };
+    await saveDiscovery(pool, run, [wikidata, publisher,
       { ...wikidata, website: 'https://new-cedar.test/' }], [{ adapter: 'fixture', status: 'OK', elapsedMs: 1, discovered: 3 }]);
     const job = await nextJob(pool, run);
     assert.equal(job.seeds.length, 3);
+    assert.deepEqual(await recentPublisherEvidence(pool, 90), [publisher]);
     assert.equal((await pool.query('SELECT 1 FROM origin_businesses')).rowCount, 1);
     assert.equal(await control(pool, run.id, 'pause'), true);
     assert.equal(await control(pool, run.id, 'resume'), true);

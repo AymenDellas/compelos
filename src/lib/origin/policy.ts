@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
-export const POLICY_VERSION = 'origin-v1';
+export const POLICY_VERSION = 'origin-v2';
 export const gateNames = ['identity', 'niche', 'geography', 'substance', 'acquisition', 'opportunity', 'contact'] as const;
 export type GateName = typeof gateNames[number];
 export type Outcome = 'QUALIFIED' | 'UNRESOLVED' | 'REJECTED';
@@ -35,7 +35,10 @@ export type Seed = {
   parent?: string;
   permission?: string;
   adapter?: string;
+  publisher?: string;
 };
+
+export function domain(url: string) { return new URL(url).hostname.toLowerCase().replace(/^www\./, '').replace(/\.$/, ''); }
 
 export const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export type Evidence = {
@@ -93,6 +96,8 @@ export type Checkpoint = {
   evidence: Evidence[];
   gates: Gate[];
   journey: JourneyStep[];
+  identityPage?: string;
+  identityName?: string;
   offer?: string;
   country?: 'US' | 'UK' | 'CA';
   contact?: string;

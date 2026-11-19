@@ -1,9 +1,10 @@
 import { load } from 'cheerio';
 import { z } from 'zod';
-import { domain } from './store';
+import { domain } from './policy';
 import { documentUrl, PublicFailure } from './public-web';
 import type { PublicWeb } from './public-web';
 import type { Seed, SourceResult } from './policy';
+import type { PublisherFeed } from './sources';
 
 export const niches = ['executive coach', 'leadership coach', 'business coach', 'career coach'];
 export const relevantCoach = /\b(?:executive|leadership|business|career|professional development)\s+coach(?:es|ing)?\b/i;
@@ -50,13 +51,7 @@ export async function wikidata(web: PublicWeb, limit: number, strategy: string, 
   }).slice(0, limit);
 }
 
-const feedConfig = z.array(z.object({ title: z.string().min(1).max(90), url: z.string().url(), permission: z.string().url() }).strict()).max(6);
-export function approvedFeeds() {
-  try { return feedConfig.parse(JSON.parse(process.env.ORIGIN_APPROVED_FEEDS || '[]')).map(feed => ({ ...feed, url: documentUrl(feed.url).href, permission: documentUrl(feed.permission).href })); }
-  catch { throw new PublicFailure('INVALID_FEED_CONFIGURATION'); }
-}
-
-export async function feed(web: PublicWeb, publisher: ReturnType<typeof approvedFeeds>[number], limit: number, signal: AbortSignal): Promise<Seed[]> {
+export async function feed(web: PublicWeb, publisher: PublisherFeed, limit: number, signal: AbortSignal): Promise<Seed[]> {
   const host = domain(publisher.url);
   const response = await web.document(publisher.url, signal, url => domain(url.href) === host);
   if (response.status !== 200 || /text\/html/i.test(response.headers['content-type'] ?? '')) throw new PublicFailure(`FEED_HTTP_${response.status}`);
@@ -66,9 +61,11 @@ export async function feed(web: PublicWeb, publisher: ReturnType<typeof approved
     const entry = $(item);
     const title = entry.children('title').first().text().trim().replace(/\s+/g, ' ').slice(0, 180);
     const date = Date.parse(entry.children('pubDate,published,updated').first().text());
-    const record = normalizedSite(entry.children('link').first().attr('href') || entry.children('link').first().text());
+    const link = entry.children('link').filter((_index, node) => !$(node).attr('rel') || $(node).attr('rel') === 'alternate').first();
+    const record = normalizedSite(link.attr('href') || link.text());
     if (!title || !record || domain(record) !== host || !Number.isFinite(date) || date > Date.now() + 86_400_000) return [];
-    const markup = entry.children('description,summary,content,content\\:encoded').first().text().slice(0, 20_000);
+    const content = entry.children('content\\:encoded,content,description,summary').toArray();
+    const markup = content.map(node => $(node).children().length ? $(node).html() : $(node).text()).join(' ').slice(0, 20_000);
     const article = load(markup);
     if (!relevantCoach.test(`${title} ${article.text()}`)) return [];
     const speakers = article('a[rel~="author"], [itemprop="performer"] a[href], a[itemprop="performer"]').slice(0, 5).toArray().flatMap(node => {
@@ -78,19 +75,19 @@ export async function feed(web: PublicWeb, publisher: ReturnType<typeof approved
     });
     return speakers.map((speaker, index): Seed => ({ ...speaker, method: index === 0 ? 'ECHO' : 'CONSTELLATION',
       source: record, sourceKey: `${host}:${title.toLowerCase().replace(/[^a-z\d ]/g, '')}`, occurredAt: new Date(date).toISOString(), permission: publisher.permission,
-      excerpt: `${speaker.name} is explicitly linked to ${title} by ${publisher.title}.`, ...(index ? { parent: speakers[0].website } : {}) }));
+      publisher: publisher.publisher ?? host, excerpt: `${speaker.name} is explicitly linked to ${title} by ${publisher.title}.`, ...(index ? { parent: speakers[0].website } : {}) }));
   }).slice(0, limit);
 }
 
-export type Adapter = { name: string; run: () => Promise<Seed[]>; retryAt?: string };
+export type Adapter = { name: string; run: () => Promise<Seed[]>; retryAt?: string; deferred?: string };
 
-export async function discover(adapters: Adapter[], limit: number) {
+export async function discover(adapters: Adapter[], limit: number, historical: Seed[] = []) {
   const results: SourceResult[] = [];
   const seeds: Seed[] = [];
   for (const adapter of adapters) {
     const before = Date.now();
-    if (adapter.retryAt && Date.parse(adapter.retryAt) > before) {
-      results.push({ adapter: adapter.name, status: 'DEFERRED', discovered: 0, elapsedMs: 0, retryAt: adapter.retryAt });
+    if (adapter.deferred || adapter.retryAt && Date.parse(adapter.retryAt) > before) {
+      results.push({ adapter: adapter.name, status: 'DEFERRED', discovered: 0, elapsedMs: 0, retryAt: adapter.retryAt, code: adapter.deferred });
       continue;
     }
     try {
@@ -103,15 +100,16 @@ export async function discover(adapters: Adapter[], limit: number) {
         code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined });
     }
   }
-  const hosts = new Set<string>();
-  const records = new Set<string>();
-  return { results, seeds: seeds.filter(seed => {
+  const groups = new Map<string, Map<string, Seed>>();
+  const discoveredHosts = new Set(seeds.map(seed => domain(seed.website)));
+  for (const seed of [...seeds, ...historical]) {
     const host = domain(seed.website);
-    if (!hosts.has(host) && hosts.size >= limit) return false;
-    hosts.add(host);
-    const key = `${seed.sourceKey}:${host}`;
-    if (records.has(key)) return false;
-    records.add(key);
-    return true;
-  }) };
+    if (!discoveredHosts.has(host)) continue;
+    const group = groups.get(host) ?? new Map<string, Seed>();
+    if (!group.has(seed.sourceKey)) group.set(seed.sourceKey, seed);
+    groups.set(host, group);
+  }
+  const priority = (records: Map<string, Seed>) => new Set([...records.values()].filter(seed => seed.occurredAt).map(seed => seed.publisher ?? domain(seed.source))).size;
+  const selected = [...groups.values()].sort((a, b) => priority(b) - priority(a)).slice(0, limit);
+  return { results, seeds: selected.flatMap(group => [...group.values()].slice(0, 30)) };
 }

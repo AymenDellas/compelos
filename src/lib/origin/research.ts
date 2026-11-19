@@ -11,6 +11,8 @@ import type { Artifact, Job } from './store';
 const booking = /^(?:book|schedule|request|apply for)\b.{0,55}\b(?:call|session|consultation|assessment|coaching)\b|^(?:book now|book a time|apply now)$/i;
 const offerLink = /\b(?:coaching|program(?:me)?s?|services|work with (?:me|us))\b/i;
 const contactLink = /^(?:contact(?: us| me)?|get in touch|work with us)$/i;
+const aboutLink = /^(?:about(?: us| me)?|our story|company|meet (?:the )?(?:team|founder|coach))$/i;
+const caseLink = /^(?:case stud(?:y|ies)|client stories|client case studies|client results)\b/i;
 const challenge = /verify (?:that )?you are human|checking your (?:browser|connection)|enable javascript and cookies to continue|(?:just a moment|access denied|attention required)\b/i;
 const squash = (text: string) => text.trim().replace(/\s+/g, ' ');
 const normalized = (value: string) => squash(value.normalize('NFKD').replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}]+/gu, ' ')).toLowerCase();
@@ -45,7 +47,12 @@ export function parseBusinessPage(html: string, url: string) {
   });
   const bookingControl = $('button,input[type="submit"],iframe,a[href^="#"],a[href^="javascript:"]').toArray().some(node =>
     booking.test(squash($(node).text() || $(node).attr('value') || $(node).attr('title') || $(node).attr('aria-label') || ''))
-    || /calendly|acuityscheduling|cal\.com/i.test($(node).attr('src') ?? '')) || $('form').length > 0;
+    || /calendly|acuityscheduling|cal\.com/i.test($(node).attr('src') ?? '')) || $('form').toArray().some(node => {
+    const form = $(node);
+    const context = squash([form.attr('aria-label'), form.attr('action'), form.text()].join(' '));
+    // Only an explicitly identified newsletter is irrelevant. An unknown form may offer another inquiry path.
+    return !/newsletter|mailing list|email updates/i.test(context) || /consultation|strategy call|book|coaching inquiry/i.test(context);
+  });
   let contact: Page['contact'] = null;
   const invitation = /\b(?:vendor|supplier|partnership|service provider|business development)\s+(?:enquir(?:ies|y)|inquir(?:ies|y)|proposals?)\b/i;
   const forbidden = /no\s+(?:unsolicited|solicitations?)|do not (?:contact|send|submit).{0,55}(?:sales|marketing|solicitations?)|not accept.{0,25}(?:unsolicited|solicitations?)/i;
@@ -107,35 +114,44 @@ export async function resolveBusiness(web: PublicWeb, job: Job, signal: AbortSig
   for (const url of new Set(job.seeds.flatMap(seed => seed.permission ? [seed.permission] : []))) {
     checkpoint.evidence.push(observe('source', url, 'Publisher use policy supplied in the configured discovery source.', 'Source access policy'));
   }
-  const candidates = seeds.filter(seed => containsName(page.identity, seed.name));
+  let identity = page;
+  let candidates = seeds.filter(seed => containsName(identity.identity, seed.name));
+  const about = page.links.find(link => domain(link.url) === job.domain && aboutLink.test(link.label));
+  if (!candidates.length && about) {
+    identity = await inspect(web, about.url, signal, 'Official About page', url => domain(url.href) === job.domain);
+    checkpoint.evidence.push(identity.evidence);
+    candidates = seeds.filter(seed => containsName(identity.identity, seed.name));
+  }
   const multipleDomains = job.seeds.some(seed => domain(seed.website) !== job.domain && seed.method !== 'IGNITION');
-  const canonicalConflict = page.canonical && domain(page.canonical) !== job.domain;
+  const canonicalConflict = [page, identity].some(item => item.canonical && domain(item.canonical) !== job.domain);
   if (!candidates.length || multipleDomains || canonicalConflict) {
     add(checkpoint, 'identity', 'UNVERIFIED', multipleDomains || canonicalConflict ? 'Sources point to different official domains.'
-      : 'The source listing could not be corroborated on the official site.', [page.evidence, ...provenance.values()]);
+      : 'The source listing could not be corroborated on the official site.', [identity.evidence, ...provenance.values()]);
     return { checkpoint, done: true };
   }
   const source = candidates.find(seed => seed.method !== 'IGNITION' && provenance.has(seed));
   if (!source) return { checkpoint, done: true };
   const record = provenance.get(source)!;
-  add(checkpoint, 'identity', 'VERIFIED', 'The source-linked website independently identifies the same business or coaching brand.', [record, page.evidence]);
+  checkpoint.identityPage = identity.url;
+  checkpoint.identityName = source.name;
+  add(checkpoint, 'identity', 'VERIFIED', 'The source-linked website independently identifies the same business or coaching brand.', [record, identity.evidence]);
   const irrelevant = page.headings.find(line => /\b(?:executive search firm|recruitment agency|psychotherapy practice|software platform)\b/i.test(line));
   if (irrelevant && !page.statements.some(line => relevantCoach.test(line))) {
     add(checkpoint, 'niche', 'CONTRADICTED', 'The official site describes a different primary service.', [quote(page, irrelevant, 'Primary service heading')]);
     return { checkpoint, done: true };
   }
   recordMarket(checkpoint, [page]);
-  return { checkpoint, done: checkpoint.gates.some(gate => gate.state === 'CONTRADICTED') };
+  return { checkpoint, done: false };
 }
 
 function recordMarket(checkpoint: Checkpoint, pages: Page[]) {
-  const region = /\b(?:serve|serves|serving|work with|coaching for)\b[^.;!?]{0,65}\b(United States\b|United Kingdom\b|Canada\b|U\.S\.|U\.K\.)/i;
+  const region = /\b(?:serve|serves|serving|work with|work across|coaching for|our clients (?:are|include))\b[^.;!?]{0,65}\b(United States\b|United Kingdom\b|Canada\b|U\.S\.|U\.K\.|USA\b|UK\b|US\b)/i;
   const outside = /\b(?:only|exclusively)\s+(?:serve|work with|coach)\b[^.;!?]{0,60}\b(France|Germany|Spain|Italy|Netherlands|Belgium|Switzerland|Australia|New Zealand|India|Singapore|Ireland)\b/i;
   const positive = pages.flatMap(page => page.statements.flatMap(line => {
     if (/\b(?:not|never|except|excludes?)\b/i.test(line)) return [];
     const match = line.match(region);
-    if (!match) return [];
-    const country = /Canada/i.test(match[1]) ? 'CA' as const : /Kingdom|U\.K/i.test(match[1]) ? 'UK' as const : 'US' as const;
+    if (!match || /^(?:us|uk)$/i.test(match[1]) && match[1] !== match[1].toUpperCase()) return [];
+    const country = /Canada/i.test(match[1]) ? 'CA' as const : /Kingdom|U\.?K/i.test(match[1]) ? 'UK' as const : 'US' as const;
     return [{ country, evidence: quote(page, line, 'Explicit market or business base') }];
   }));
   const negative = pages.flatMap(page => page.statements.filter(line => outside.test(line)).map(line => quote(page, line, 'Exclusive market statement')));
@@ -150,17 +166,20 @@ function recordMarket(checkpoint: Checkpoint, pages: Page[]) {
 function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: number) {
   const now = Date.now();
   const organizations = new Set<string>();
+  const hosts = new Set<string>();
   const records = new Set<string>();
   const evidence: Evidence[] = [];
   const validUntil: number[] = [];
   for (const seed of job.seeds) {
-    if (!seed.occurredAt || seed.method === 'IGNITION' || !containsName(seed.name, job.name)) continue;
+    if (!seed.occurredAt || seed.method === 'IGNITION' || normalized(seed.name) !== normalized(checkpoint.identityName ?? job.name)) continue;
     const occurred = Date.parse(seed.occurredAt);
     if (occurred > now || occurred < now - activityDays * 86_400_000) continue;
-    const organization = domain(seed.source);
+    const host = domain(seed.source);
+    const organization = seed.publisher ?? host;
     const record = seed.sourceKey.split(':').slice(1).join(':');
-    if (!record || organizations.has(organization) || organization === job.domain || records.has(record)) continue;
+    if (!record || organizations.has(organization) || hosts.has(host) || host === job.domain || records.has(record)) continue;
     organizations.add(organization);
+    hosts.add(host);
     records.add(record);
     validUntil.push(occurred + activityDays * 86_400_000);
     evidence.push(observe('external', seed.source, `${seed.occurredAt.slice(0, 10)} · ${seed.excerpt}`, 'Publisher-linked exposure'));
@@ -168,7 +187,7 @@ function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: numbe
   checkpoint.acquisitionSources = evidence.length;
   add(checkpoint, 'acquisition', evidence.length >= 2 ? 'VERIFIED' : 'UNVERIFIED', evidence.length >= 2
     ? 'Two distinct publishers document recent exposure related to the coaching specialty.'
-    : 'Two independent, recent publisher records could not be corroborated.', evidence);
+    : `Found ${evidence.length} of 2 required independent, recent publisher records.`, evidence);
   const gate = checkpoint.gates.at(-1)!;
   if (gate.expiresAt && validUntil.length) gate.expiresAt = new Date(Math.min(Date.parse(gate.expiresAt), ...validUntil)).toISOString();
 }
@@ -188,14 +207,21 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   const own = (url: URL) => domain(url.href) === job.domain;
   const page = await inspect(web, job.website, signal, 'Offer investigation entry', own);
   addJourney(checkpoint, job.website, page, 'Official site');
-  if (page.state !== 'READABLE' || !job.seeds.some(seed => domain(seed.website) === job.domain && containsName(page.identity, seed.name))) {
+  const pages = [page];
+  if (checkpoint.identityPage && checkpoint.identityPage !== page.url) {
+    const identity = await inspect(web, checkpoint.identityPage, signal, 'Official identity recheck', own);
+    addJourney(checkpoint, page.url, identity, 'Identity recheck');
+    if (identity.state === 'READABLE') pages.push(identity);
+  }
+  if (page.state !== 'READABLE' || !pages.some(item => job.seeds.some(seed => domain(seed.website) === job.domain && containsName(item.identity, seed.name)))) {
     add(checkpoint, 'identity', 'UNVERIFIED', 'The official entry point could not be corroborated during investigation.', [page.evidence]);
     return { checkpoint, artifacts: [] };
   }
-  const targets = page.links.filter(link => own(new URL(link.url)) && (offerLink.test(link.label) || contactLink.test(link.label)));
-  const planned = [...new Set([targets.find(link => offerLink.test(link.label)), targets.find(link => contactLink.test(link.label))]
-    .flatMap(link => link ? [link.url] : []))];
-  const pages = [page];
+  const targets = page.links.filter(link => own(new URL(link.url)) && !pages.some(item => item.url === link.url));
+  const planned = [...new Set([offerLink, contactLink, caseLink].flatMap(pattern => {
+    const target = targets.find(link => pattern.test(link.label));
+    return target ? [target.url] : [];
+  }))];
   for (const url of planned) {
     const detail = await inspect(web, url, signal, 'Official detail page', own);
     addJourney(checkpoint, page.url, detail, targets.find(link => link.url === url)!.label);
@@ -213,10 +239,18 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     const substance = pages.flatMap(item => item.statements.map(statement => ({ page: item, statement })))
       .find(item => /\b(?:founded|established|in business)\s+(?:in|since)?\s*(?:19\d\d|20[012]\d)\b/i.test(item.statement)
         && Number(item.statement.match(/\b(?:19\d\d|20[012]\d)\b/)?.[0]) <= new Date().getUTCFullYear() - 3);
-    add(checkpoint, 'substance', price && substance ? 'VERIFIED' : 'UNVERIFIED', price && substance
-      ? 'The business publishes substantial engagement pricing and reports at least three years of operation.'
-      : 'Published premium engagement pricing and an established operating history were not both found.',
-    [...(price ? [quote(offer, price, 'Published offer price')] : []), ...(substance ? [quote(substance.page, substance.statement, 'First-party operating history')] : [])]);
+    const clientCase = pages.flatMap(item => {
+      const client = item.headings.map(text => text.match(/^case study\s*[:–-]\s*([\p{L}\d][\p{L}\d& .'-]{3,80})$/iu)).find(Boolean);
+      if (!client) return [];
+      const engagement = item.statements.find(text => containsName(text, client[1]) && /\b(?:hired|retained|commissioned|engaged|contracted)\b.{0,90}\b(?:executive|leadership|business) coaching\b/i.test(text));
+      return engagement ? [quote(item, `${client[0]} · ${engagement}`, 'Named business engagement case study')] : [];
+    })[0];
+    const proof = price ? quote(offer, price, 'Published offer price') : clientCase;
+    add(checkpoint, 'substance', proof && substance ? 'VERIFIED' : 'UNVERIFIED', proof && substance
+      ? price ? 'The business publishes substantial engagement pricing and reports at least three years of operation.'
+        : 'The business describes a named commercial coaching engagement and reports at least three years of operation.'
+      : 'An established operating history and evidence of a substantial coaching engagement were not both found.',
+    [...(proof ? [proof] : []), ...(substance ? [quote(substance.page, substance.statement, 'First-party operating history')] : [])]);
   } else add(checkpoint, 'niche', 'UNVERIFIED', 'A specialized offer and its coaching scope could not be established.');
 
   const contact = pages.find(item => item.contact);
