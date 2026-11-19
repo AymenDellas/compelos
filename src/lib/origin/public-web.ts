@@ -68,7 +68,7 @@ function fetchResource(url: string, signal: AbortSignal) {
 }
 
 export function createPublicWeb(limit: <T>(run: () => Promise<T>) => Promise<T>, transport = fetchResource) {
-  const robots = new Map<string, Promise<string>>();
+  const robots = new Map<string, { expires: number; rules: Promise<string> }>();
   const cooldowns = new Map<string, number>();
   const lastDocument = new Map<string, number>();
   async function get(url: URL, signal: AbortSignal) {
@@ -99,12 +99,15 @@ export function createPublicWeb(limit: <T>(run: () => Promise<T>) => Promise<T>,
     throw new PublicFailure('ROBOTS_UNAVAILABLE');
   }
   async function admit(url: URL, signal: AbortSignal) {
-    let rules = robots.get(url.origin);
-    if (!rules) {
-      rules = getRobots(url.origin, signal).catch(error => { robots.delete(url.origin); throw error; });
-      robots.set(url.origin, rules);
+    let entry = robots.get(url.origin);
+    if (!entry || entry.expires <= Date.now()) {
+      entry = { expires: Date.now() + 3_600_000, rules: getRobots(url.origin, signal).catch(error => { robots.delete(url.origin); throw error; }) };
+      robots.set(url.origin, entry);
+      for (const [host, saved] of robots) if (saved.expires <= Date.now()) robots.delete(host);
+      for (const [host, at] of lastDocument) if (at < Date.now() - 3_600_000) lastDocument.delete(host);
+      for (const [host, at] of cooldowns) if (at < Date.now()) cooldowns.delete(host);
     }
-    if (!robotsAllows(await rules, url.pathname + url.search)) throw new PublicFailure('ROBOTS_DISALLOWED');
+    if (!robotsAllows(await entry.rules, url.pathname + url.search)) throw new PublicFailure('ROBOTS_DISALLOWED');
   }
   async function readDocument(value: string, signal: AbortSignal, permit: (url: URL) => boolean) {
     let url = documentUrl(value);
@@ -125,9 +128,13 @@ export function createPublicWeb(limit: <T>(run: () => Promise<T>) => Promise<T>,
   }
   return {
     document: readDocument,
-    async asset(value: string, signal: AbortSignal, host: string): Promise<Resource> {
+    async asset(value: string, signal: AbortSignal, document: string): Promise<Resource> {
       const url = websiteUrl(value);
-      if (domain(url.href) !== host) throw new PublicFailure('UNVERIFIED_REDIRECT');
+      if (domain(url.href) !== domain(document)) throw new PublicFailure('UNVERIFIED_REDIRECT');
+      if (url.href !== document && (!/\.(?:css|js|mjs|png|jpe?g|webp|avif|gif|svg|ico|woff2?)$/i.test(url.pathname) ||
+        [...url.searchParams].some(([key, value]) => !/^(?:v|ver|version)$/.test(key) || !/^[a-z\d._-]{1,30}$/i.test(value)))) {
+        throw new PublicFailure('UNSUPPORTED_ASSET');
+      }
       await admit(url, signal);
       return get(url, signal);
     },

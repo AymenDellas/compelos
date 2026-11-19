@@ -7,6 +7,7 @@ import { z } from 'zod/v4';
 import type { Completion, ProviderConfig } from './provider';
 import { AgentRouterModelUnavailable, AppError, isAgentRouterModelUnavailable } from './errors';
 import { startAgentRouterRelay } from './agentrouter-relay';
+import type { AgentRouterRequestPolicy } from './agentrouter-relay';
 
 const resultSchema = z.object({
   type: z.literal('result'),
@@ -118,7 +119,7 @@ export function clientResult(output: string): string {
 /** Use AgentRouter's documented client, preserving its real authentication headers.
  * The child is restricted to one text response, with tools and customizations disabled.
  */
-export function createAgentRouterCompletion(config: ProviderConfig): Completion {
+export function createAgentRouterCompletion(config: ProviderConfig, requestPolicy?: AgentRouterRequestPolicy): Completion {
   return async (system, prompt, signal, maxTokens = 7000) => {
     if (!config.apiKey || /your.*key|placeholder/i.test(config.apiKey))
       throw new AppError(
@@ -131,7 +132,7 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
     let closeRelay: (() => Promise<void>) | undefined;
     try {
       const unavailable = new AbortController();
-      const relay = await startAgentRouterRelay(config, combinedSignal, maxTokens, () => unavailable.abort());
+      const relay = await startAgentRouterRelay(config, combinedSignal, maxTokens, () => unavailable.abort(), requestPolicy);
       closeRelay = relay.close;
       const args = [
         '--expose-gc',
@@ -161,7 +162,9 @@ export function createAgentRouterCompletion(config: ProviderConfig): Completion 
           stdio: ['pipe', 'pipe', 'pipe'],
           signal: AbortSignal.any([combinedSignal, unavailable.signal]),
           env: {
-            ...process.env,
+            ...(requestPolicy ? Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+              /^(?:PATH|SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|TEMP|TMP|HOME|USERPROFILE|APPDATA|LOCALAPPDATA)$/i.test(key))) : process.env),
+            NODE_ENV: process.env.NODE_ENV,
             // Next may propagate its own --require/loader flags through
             // NODE_OPTIONS. They belong to the dashboard and can reference
             // files absent from this isolated client's temporary directory.

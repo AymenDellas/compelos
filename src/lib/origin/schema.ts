@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS origin_model_usage (
   model text NOT NULL,
   reserved_cents integer NOT NULL CHECK (reserved_cents > 0),
   provider_cents numeric,
+  provider_tokens integer,
   input_bytes integer NOT NULL,
   output_limit integer NOT NULL,
   attempt integer NOT NULL DEFAULT 1,

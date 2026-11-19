@@ -6,6 +6,12 @@ import { normalizeStream } from './agentrouter-stream.mjs';
 import type { ProviderConfig } from './provider';
 import { isAgentRouterModelUnavailable } from './errors';
 
+export type AgentRouterRequestPolicy = {
+  maxInputBytes: number;
+  onResponse: (status: number, retryAfter: string | null) => void;
+  onFrame: (payload: unknown) => void;
+};
+
 /** A private, short-lived transport adapter for the actual supported client.
  * Authentication headers originate in that client; only its local bearer token is replaced.
  */
@@ -14,8 +20,10 @@ export async function startAgentRouterRelay(
   signal: AbortSignal,
   maxTokens: number,
   onModelUnavailable?: () => void,
+  requestPolicy?: AgentRouterRequestPolicy,
 ) {
   const localToken = randomBytes(32).toString('hex');
+  let dispatched = false;
   const server = createServer(async (req, res) => {
     if (
       req.method !== 'POST' ||
@@ -47,6 +55,12 @@ export async function startAgentRouterRelay(
       body.model = config.model;
       body.max_tokens = Math.max(maxTokens, 512);
       body.temperature = 0.55;
+      if (requestPolicy) {
+        if (!Array.isArray(body.messages) || Buffer.byteLength(JSON.stringify(body.messages)) > requestPolicy.maxInputBytes)
+          throw new Error('The input limit for this request was exceeded.');
+        if (dispatched) throw new Error('This request allowance was already used.');
+        dispatched = true;
+      }
       const headers = new Headers();
       const hopHeaders = new Set([
         'host',
@@ -71,7 +85,9 @@ export async function startAgentRouterRelay(
         headers,
         body: JSON.stringify(body),
         signal: requestSignal,
+        ...(requestPolicy && { redirect: 'error' as const }),
       });
+      requestPolicy?.onResponse(upstream.status, upstream.headers.get('retry-after'));
       if (upstream.status === 503 && onModelUnavailable) {
         const failure = await upstream.clone().json().catch(() => null);
         const message = failure?.error?.message ?? failure?.message;
@@ -100,7 +116,7 @@ export async function startAgentRouterRelay(
       }
       const stream =
         upstream.ok && upstream.headers.get('content-type')?.includes('text/event-stream')
-          ? normalizeStream(upstream.body)
+          ? normalizeStream(upstream.body, requestPolicy?.onFrame)
           : upstream.body;
       const readable = Readable.fromWeb(stream as never);
       readable.on('error', () => res.destroy());

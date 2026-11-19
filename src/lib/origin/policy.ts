@@ -33,6 +33,8 @@ export type Seed = {
   excerpt: string;
   occurredAt?: string;
   parent?: string;
+  permission?: string;
+  adapter?: string;
 };
 
 export const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');

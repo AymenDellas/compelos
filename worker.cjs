@@ -14,7 +14,7 @@ async function main(){
  if(process.argv.includes('--stop')){try{await pool.query('UPDATE compel_worker_config SET agent_stop_requested=TRUE WHERE id=1');await pool.query("SELECT pg_notify('compel_engine_wake','')");console.log('[Agent] Stop requested. Intent and checkpoints retained.');}finally{await pool.end();}return;}
  if(process.argv.length>2){await pool.end();throw Error('Use npm run worker; accounts are controlled through PostgreSQL and the dashboard.');}
  const data=path.join(root,'data'),lock=path.join(data,'worker-supervisor.pid'),launch=path.join(data,'worker-supervisor-start.json');
- fs.mkdirSync(data,{recursive:true});const owner=randomUUID();let unlock=null,agent=null,stopMetrics=null,listener=null,leased=false,stopping=false,failed=null;
+ fs.mkdirSync(data,{recursive:true});const owner=randomUUID();let unlock=null,agent=null,origin=null,stopMetrics=null,listener=null,leased=false,stopping=false,failed=null;
  const log=message=>console.log('[Agent] '+new Date().toISOString()+' '+message);
  function stage(value,reason='',action=''){
   log(value+(reason?': '+reason:''));let marker={};try{marker=JSON.parse(fs.readFileSync(launch,'utf8'));}catch{}
@@ -22,7 +22,7 @@ async function main(){
   if(other?.pid&&other.pid!==process.pid){try{process.kill(other.pid,0);return;}catch{}}
   fs.writeFileSync(launch,JSON.stringify({...marker,pid:process.pid,stage:value,reason,action,updatedAt:Date.now(),startedAt:marker.startedAt||Date.now()}));
  }
- const stop=()=>{stopping=true;agent?.stop();};process.once('SIGINT',stop);process.once('SIGTERM',stop);
+ const stop=()=>{stopping=true;origin?.stop();agent?.stop();};process.once('SIGINT',stop);process.once('SIGTERM',stop);
  const queryStats=telemetry.observePool(pool);
  pool.on('error',error=>{failed=error;stage('FAILED',safeMessage(error),'Check PostgreSQL, then restart the agent.');stop();});
  try{
@@ -41,17 +41,34 @@ async function main(){
   await require('./src/lib/aliasmode-store.cjs').ensure(pool);
   for(;;){const result=await registry.claim(pool,owner);if(!result.waitMs){leased=true;break;}stage('AGENT_ACK',result.reason,'Waiting for the dead database owner heartbeat.');await new Promise(resolve=>setTimeout(resolve,Math.min(result.waitMs,2000)));if(stopping)return;}
   await registry.recover(pool,owner);await require('./src/lib/worker-research-queue.cjs').ensure(pool);
-  agent=require('./src/lib/compel-agent.cjs').createAgent({root,pool,owner,log});
+  let runner;
+  try {
+   const { createOriginLane } = require('tsx/cjs/api').require('./src/lib/origin/worker.ts', __filename);
+   const limit = require('./src/lib/bounded-work.cjs').createLimiter(3, 96);
+   const existing = require('./src/lib/worker-research-runner.cjs').createResearchRunner({pool,owner:owner+'/research',log,httpLane:limit});
+   origin = createOriginLane(pool, limit);
+   let researching = false;
+   runner = { ...existing, async runOnce() {
+    if (!researching) {
+     researching = true;
+     try { if (await origin.runOnce()) return { origin: true }; }
+     catch (error) { log('ORIGIN lane: '+(error.code || error.name || 'checkpoint unavailable')); }
+     finally { researching = false; }
+    }
+    return existing.runOnce();
+   } };
+  } catch { log('ORIGIN lane unavailable. Check the local installation before starting ORIGIN.'); }
+  agent=require('./src/lib/compel-agent.cjs').createAgent({root,pool,owner,log,runner});
   await agent.heartbeat();agent.start();
   stopMetrics=require('./src/lib/engine-process-metrics.cjs').startResourceMonitor({pool,owner,queryStats,log,externalRoots:async()=> (await pool.query('SELECT pid FROM compel_aliasmode_sessions WHERE closed_at IS NULL AND pid IS NOT NULL')).rows.map(r=>r.pid),onSample:sample=>agent.setResources(sample)});
-  try{listener=await pool.connect();listener.on('notification',()=>agent.wake());listener.on('error',error=>log('Notifications unavailable; idle backoff active: '+safeMessage(error)));await listener.query('LISTEN compel_engine_wake');}
+  try{listener=await pool.connect();listener.on('notification',()=>{origin?.wake();agent.wake();});listener.on('error',error=>log('Notifications unavailable; idle backoff active: '+safeMessage(error)));await listener.query('LISTEN compel_engine_wake');}
   catch(error){listener?.release(true);listener=null;log('Using 2–30 second idle backoff: '+safeMessage(error));}
   stage('AGENT_ACK','Ready. Saved intent resumes; explicit pauses and account review holds remain in force.');
   while(!stopping&&!agent.stopped){await agent.step();await agent.wait();}
   if(agent.failure)throw agent.failure;
  }catch(error){failed=error;stage('FAILED',safeMessage(error),'Check PostgreSQL and Chrome/profile ownership, then Start again.');throw error;}
  finally{
-  stopping=true;await agent?.close().catch(error=>log('Shutdown: '+safeMessage(error)));
+  stopping=true;origin?.stop();await agent?.close().catch(error=>log('Shutdown: '+safeMessage(error)));
   await stopMetrics?.();listener?.release(true);
   if(leased)await registry.release(pool,owner,{stage:failed?'FAILED':'OFFLINE',reason:failed?safeMessage(failed):'Agent stopped. Intent and checkpoints retained.'}).catch(()=>{});
   if(!failed)stage('OFFLINE','Stopped. Intent and checkpoints retained.');

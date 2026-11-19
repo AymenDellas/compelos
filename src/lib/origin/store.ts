@@ -86,7 +86,7 @@ export async function release(db: DB, run: Run) {
 }
 
 // Lock the exact lease while committing a stage. Pause invalidates an in-flight stage even if immediately resumed.
-async function fenced<T>(pool: Pool, run: Run, action: (db: PoolClient) => Promise<T>) {
+export async function fenced<T>(pool: Pool, run: Run, action: (db: PoolClient) => Promise<T>) {
   return transaction(pool, async db => {
     const result = await db.query(`SELECT 1 FROM origin_runs WHERE id=$1 AND lease=$2 AND state='RUNNING' AND lease_until>now() AND deadline_at>now()
       AND control_revision=$3 FOR UPDATE`, [run.id, run.lease, run.control_revision]);
@@ -159,4 +159,32 @@ export async function saveStage(pool: Pool, run: Run, job: Job, checkpoint: Chec
 export async function failStage(pool: Pool, run: Run, job: Job) {
   return fenced(pool, run, db => db.query(`UPDATE origin_investigations SET attempts=attempts+1,
     stage=CASE WHEN attempts>=1 THEN 'FAILED' ELSE stage END,updated_at=now(),error='Investigation checkpoint failed.' WHERE id=$1`, [job.id]));
+}
+
+export async function sourceHistory(db: DB) {
+  return (await db.query<{ source: SourceResult }>(`SELECT item AS source FROM
+    (SELECT sources,created_at FROM origin_runs WHERE sources IS NOT NULL ORDER BY created_at DESC LIMIT 50) r
+    CROSS JOIN LATERAL jsonb_array_elements(r.sources) WITH ORDINALITY a(item,position) ORDER BY r.created_at DESC,a.position`)).rows.map(row => row.source);
+}
+
+export type SourceQuality = { adapter: string; investigated: number; identities: number };
+export async function sourceQuality(db: DB) {
+  return (await db.query<SourceQuality>(`SELECT seed->>'adapter' AS adapter, count(DISTINCT j.id)::int AS investigated,
+    count(DISTINCT j.id) FILTER (WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(j.decision->'gates') g
+      WHERE g->>'name'='identity' AND g->>'state'='VERIFIED'))::int AS identities
+    FROM origin_investigations j CROSS JOIN LATERAL jsonb_array_elements(j.seeds) seed
+    WHERE j.run_id IN (SELECT id FROM origin_runs ORDER BY created_at DESC LIMIT 50)
+      AND j.decision IS NOT NULL AND seed->>'adapter' IS NOT NULL AND seed->>'method'<>'IGNITION' GROUP BY 1`)).rows;
+}
+
+export async function revisit(db: DB, limit: number) {
+  return (await db.query<{ seed: Seed; seeds: Seed[] }>(`SELECT b.seed,j.seeds FROM origin_businesses b
+    JOIN LATERAL (SELECT seeds,outcome,expires_at FROM origin_investigations WHERE business_id=b.id
+    ORDER BY created_at DESC LIMIT 1) j ON true
+    WHERE (j.outcome='QUALIFIED' AND j.expires_at<=now()+interval '4 hours')
+       OR (j.outcome='UNRESOLVED' AND b.investigated_at<now()-interval '7 days')
+    ORDER BY j.expires_at ASC NULLS LAST,b.investigated_at LIMIT $1`, [limit])).rows.flatMap(({ seed, seeds }) => {
+    const visit: Seed = { ...seed, method: 'IGNITION', sourceKey: `revisit:${seed.sourceKey}`, occurredAt: undefined };
+    return [...seeds.filter(item => item.method !== 'IGNITION'), visit];
+  });
 }

@@ -77,7 +77,7 @@ export async function feed(web: PublicWeb, publisher: ReturnType<typeof approved
       return name.length > 3 && site && domain(site) !== host ? [{ name, website: site }] : [];
     });
     return speakers.map((speaker, index): Seed => ({ ...speaker, method: index === 0 ? 'ECHO' : 'CONSTELLATION',
-      source: record, sourceKey: `${host}:${title.toLowerCase().replace(/[^a-z\d ]/g, '')}`, occurredAt: new Date(date).toISOString(),
+      source: record, sourceKey: `${host}:${title.toLowerCase().replace(/[^a-z\d ]/g, '')}`, occurredAt: new Date(date).toISOString(), permission: publisher.permission,
       excerpt: `${speaker.name} is explicitly linked to ${title} by ${publisher.title}.`, ...(index ? { parent: speakers[0].website } : {}) }));
   }).slice(0, limit);
 }
@@ -95,7 +95,7 @@ export async function discover(adapters: Adapter[], limit: number) {
     }
     try {
       const found = await adapter.run();
-      seeds.push(...found);
+      seeds.push(...found.map(seed => ({ ...seed, adapter: seed.adapter ?? adapter.name })));
       results.push({ adapter: adapter.name, status: 'OK', discovered: found.length, elapsedMs: Date.now() - before });
     } catch (error) {
       const code = error instanceof PublicFailure ? error.code : error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name) ? 'TIMEOUT' : 'SOURCE_UNAVAILABLE';
