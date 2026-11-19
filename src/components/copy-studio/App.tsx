@@ -31,6 +31,7 @@ import { matchOnboardings, type OnboardingBrief } from '@/lib/copy-studio/shared
 import { changeOfferContext } from '@/lib/copy-studio/shared/workspace';
 import { applyRecoveredEvidence, needsEvidenceReview, recordEvidenceReview } from '@/lib/copy-studio/shared/evidence-recovery';
 import { mergeDraftIssues, isLegacyDirectCallDraft, validateStructure } from '@/lib/copy-studio/shared/quality';
+import { COPY_STUDIO_CLIENT_GRACE_MS, COPY_STUDIO_LOCAL_GENERATION_TIMEOUT_MS, COPY_STUDIO_REQUEST_TIMEOUT_MS } from '@/lib/copy-studio/shared/request-limits';
 import { generateCopy, reviseCopy, testConnection, loadOnboardings } from './api';
 import {
   loadProjects,
@@ -168,7 +169,7 @@ export default function CopyStudio() {
     setProjects((old) => [next, ...old]);
     select(next.id);
   };
-  const execute = async (task: (signal: AbortSignal) => Promise<void>) => {
+  const execute = async (task: (signal: AbortSignal) => Promise<void>, timeoutMs = COPY_STUDIO_REQUEST_TIMEOUT_MS) => {
     if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
@@ -177,13 +178,14 @@ export default function CopyStudio() {
     request.current = controller;
     const timer = setTimeout(
       () => controller.abort(new DOMException('Timed out', 'TimeoutError')),
-      310000,
+      timeoutMs + COPY_STUDIO_CLIENT_GRACE_MS,
     );
     try {
       await task(controller.signal);
     } catch (err) {
       if (controller.signal.aborted && controller.signal.reason?.name !== 'TimeoutError')
         setToast('Request cancelled. Your previous draft is unchanged.');
+      else if (controller.signal.reason?.name === 'TimeoutError') setError('Copy Studio stopped waiting for the server. Your saved draft is safe.');
       else setError(err instanceof Error ? err.message : 'The request failed. Please try again.');
     } finally {
       clearTimeout(timer);
@@ -214,7 +216,7 @@ export default function CopyStudio() {
         captured.id,
       );
       setToast('Your draft is ready. Open Design prompt to take the page into ChatGPT.');
-    });
+    }, COPY_STUDIO_LOCAL_GENERATION_TIMEOUT_MS);
   };
   const revise = (sectionId: string, direction: RevisionInput['direction']) => {
     const captured = project;

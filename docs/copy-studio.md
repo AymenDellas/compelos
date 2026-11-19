@@ -75,6 +75,8 @@ AgentRouter's primary model is tried first. If the provider confirms it has no r
 
 The November 19, 2026 live regression reproduced the configured `deepseek-v4-flash` route failure. AgentRouter completed a synthetic six-section lead magnet through `gpt-6.1-sol` in 5 minutes and 53 seconds, including the review stage. Earlier direct-to-call attempts ended during drafting, and a separate lead-magnet attempt recorded the provider's `no_capacity` error. The fixture suite covers the missing-route and capacity-retry sequence and the provider's `Retry-After` instruction.
 
+The browser previously stopped generation after 5 minutes and 10 seconds. Generation now uses the shared ten-minute local server limit plus ten seconds for the response to reach the browser. Revision and connection checks keep their shorter limits. A dashboard test advanced the browser clock past six minutes, then delivered a complete generation event and verified that the draft rendered.
+
 ## Saved projects
 
 Projects use this browser's local storage at the dashboard address, under `compel:copy-studio:library:v2`. They are separate from lead and content databases. Saved project data from `localhost:3874` is not automatically accessible at `localhost:3000` because browser storage is scoped by origin. To bring an existing project over, export **Project backup** from the standalone tool, then choose **Tools → Import a project** in the dashboard. The file format is unchanged.

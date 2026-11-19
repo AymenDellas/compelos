@@ -5,6 +5,7 @@ import { createRoutedCompletion, type Completion } from './provider';
 import { providerConfig, providerStatus } from './config';
 import { readSource } from './source';
 import { AppError, publicError } from './errors';
+import { COPY_STUDIO_LOCAL_GENERATION_TIMEOUT_MS, COPY_STUDIO_REQUEST_TIMEOUT_MS } from '../shared/request-limits';
 
 const operations = new Set(['generate', 'revise', 'import', 'reference', 'connection']);
 const importSchema = z
@@ -120,7 +121,8 @@ export async function handleCopyStudio(
 
   const controller = new AbortController();
   const signal = AbortSignal.any([request.signal, controller.signal]);
-  const timeoutMs = operation === 'generate' && !process.env.VERCEL ? 600_000 : 300_000;
+  const timeoutMs = operation === 'generate' && !process.env.VERCEL
+    ? COPY_STUDIO_LOCAL_GENERATION_TIMEOUT_MS : COPY_STUDIO_REQUEST_TIMEOUT_MS;
   const deadlineAt = Date.now() + timeoutMs;
   const deadline = setTimeout(
     () => controller.abort(new DOMException('Timed out', 'TimeoutError')),

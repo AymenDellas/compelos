@@ -94,6 +94,32 @@ test('provider errors preserve existing content and can be retried', async ({ pa
   ).toBeVisible();
 });
 
+test('generation survives the previous five-minute browser timeout', async ({ page }) => {
+  await page.clock.install();
+  let release!: () => void;
+  const delayed = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/copy-studio/generate', async route => {
+    await delayed;
+    await route.fulfill({
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({ type: 'result', result: { draft, issues: [] } })}\n\n`,
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Copy Studio', exact: true }).click();
+  await page.getByRole('button', { name: 'Try a sample brief' }).click();
+  const requested = page.waitForRequest('**/api/copy-studio/generate');
+  await page.getByRole('button', { name: 'Generate my copy' }).click();
+  await requested;
+  try {
+    await page.clock.fastForward(360_000);
+    await expect(page.getByRole('region', { name: 'Shape the brief' }).getByRole('status')).toHaveText('Preparing your brief');
+  } finally {
+    release();
+  }
+  await expect(page.getByRole('heading', { name: 'Make your offer easier to understand', exact: true })).toBeVisible();
+});
+
 test('source facts need explicit selection before replacing user input', async ({ page }) => {
   await page.route('**/api/copy-studio/import', (route) =>
     route.fulfill({
