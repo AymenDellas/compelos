@@ -52,6 +52,16 @@ export function endToEndFixture() {
     const business = cases.find(item => site(item.slug) === host);
     if (!business) throw new Error('Fixture attempted a request outside its closed transport.');
     const { slug, name } = business;
+    if (url.pathname === '/sitemap.xml') return slug === 'maple'
+      ? reply(200, `<sitemapindex><sitemap><loc>https://${host}/page-sitemap.xml</loc></sitemap></sitemapindex>`, 'application/xml')
+      : reply(404, '');
+    if (slug === 'maple' && url.pathname === '/page-sitemap.xml') return reply(200,
+      `<urlset><url><loc>https://ignored.example/appearances</loc></url><url><loc>https://${host}/archive/appearances</loc></url></urlset>`, 'application/xml');
+    if (slug === 'maple' && url.pathname === '/archive/appearances') return reply(200, page('Appearances',
+      `<article><h2>Executive coaching podcast</h2><a href="${article(publisherHosts[1], slug)}">Listen</a></article>
+      <nav><a href="https://ignored.example/plugin-podcast/">Podcast plugin</a></nav>
+      <p><a href="https://ignored.example/helpline/">Helpline</a></p>
+      <p><a href="https://media.${host}/podcast/">Our podcast</a></p>`));
     if (url.pathname === '/booking') {
       const count = (bookingReads.get(slug) ?? 0) + 1;
       bookingReads.set(slug, count);
@@ -66,7 +76,7 @@ export function endToEndFixture() {
       ${slug === 'maple' ? `<script type="application/ld+json">${JSON.stringify({ '@type': 'Service', serviceType: 'Executive coaching', url: value,
         areaServed: { '@type': 'Country', name: 'Canada' } })}</script>` : `<p>${slug === 'oak' ? 'We exclusively serve clients in France.' : 'We serve leadership teams in the UK.'}</p>`}
       ${slug === 'maple' ? '<a href="/about">About us</a><a href="/case-study">Case study</a>' : '<p>Our business was founded in 2012.</p><p>Coaching engagement pricing is $5,000.</p>'}
-      ${publisherHosts.filter((_host, i) => slug !== 'maple' || i !== 0).map(host => `<p><a href="${article(host, slug)}">Executive coaching interview</a></p>`).join('')}
+      ${slug === 'maple' ? '' : publisherHosts.map(host => `<p><a href="${article(host, slug)}">Executive coaching interview</a></p>`).join('')}
       <a href="/booking">Book a call</a><form aria-label="Newsletter"><p>Subscribe to our newsletter</p></form>
       <p>Vendor inquiries are welcome at <a href="mailto:vendors@${host}">vendors@${host}</a>.</p>`));
   });

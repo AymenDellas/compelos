@@ -1,5 +1,5 @@
 import { load } from 'cheerio';
-import { publisherPointer, verifyPublications } from './auto-publishers';
+import { publisherPointer, relatedPublisherHosts, verifyPublications } from './auto-publishers';
 import { createFunnelBrowser } from '../funnel-browser';
 import { relevantCoach } from './discovery';
 import { emptyCheckpoint, finding, hash, observe } from './policy';
@@ -14,14 +14,15 @@ const offerLink = /\b(?:coaching|program(?:me)?s?|services|work with (?:me|us))\
 const contactLink = /^(?:contact(?: us| me)?|get in touch|work with us)$/i;
 const aboutLink = /^(?:about(?: us| me)?|our story|company|meet (?:the )?(?:team|founder|coach))$/i;
 const caseLink = /^(?:case stud(?:y|ies)|client stories|client case studies|client results)\b/i;
-const mediaPage = /^(?:in the (?:press|media)|as (?:seen|featured) in|press(?: & media)?|media(?: appearances)?|speaking(?: & media)?|interviews|podcasts)$/i;
+const mediaPage = /^(?:in the (?:press|media)|as (?:seen|featured) in|press(?: (?:&|and) media)?|media(?: (?:coverage|appearances))?|speaking(?: (?:&|and) media)?|interviews|podcasts)$/i;
+const mediaPath = /^(?:press|media|media-appearances|media-coverage|appearances|interviews|podcast-appearances|press-and-media)$/i;
 const appearanceLink = /\b(?:interview|podcast|episode|guest appearance|conference|keynote|webinar|summit|speaker)\b/i;
 const challenge = /verify (?:that )?you are human|checking your (?:browser|connection)|enable javascript and cookies to continue|(?:just a moment|access denied|attention required)\b/i;
 const squash = (text: string) => text.trim().replace(/\s+/g, ' ');
 const normalized = (value: string) => squash(value.normalize('NFKD').replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}]+/gu, ' ')).toLowerCase();
 const containsName = (label: string, name: string) => ` ${normalized(label)} `.includes(` ${normalized(name)} `);
 
-type Link = { url: string; label: string; main: boolean };
+type Link = { url: string; label: string; main: boolean; appearanceContext: boolean };
 type MarketStatement = { country: NonNullable<Checkpoint['country']>; evidence: string };
 export type Page = { url: string; state: string; evidence: Evidence; identity: string; canonical: string | null;
   statements: string[]; headings: string[]; links: Link[]; contact: { address: string; context: string } | null;
@@ -82,7 +83,10 @@ export function parseBusinessPage(html: string, url: string) {
     const raw = $(node).attr('href') ?? '';
     const label = squash($(node).text() || $(node).attr('aria-label') || $(node).find('img[alt]').first().attr('alt') || '').slice(0, 100);
     const target = linkedUrl(raw, url);
-    return label && target && target !== url ? [{ label, url: target, main: !$(node).closest('header,footer,nav,aside').length }] : [];
+    if (!label || !target || target === url) return [];
+    const main = !$(node).closest('header,footer,nav,aside').length;
+    const context = squash($(node).closest('article,li,p,figure').text()).slice(0, 350);
+    return [{ label, url: target, main, appearanceContext: main && appearanceLink.test(context) }];
   });
   const bookingControl = $('button,input[type="submit"],iframe,a[href^="#"],a[href^="javascript:"]').toArray().some(node =>
     booking.test(squash($(node).text() || $(node).attr('value') || $(node).attr('title') || $(node).attr('aria-label') || ''))
@@ -219,7 +223,8 @@ function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: numbe
     const host = domain(seed.source);
     const organization = seed.publisher ?? host;
     const record = seed.sourceKey.split(':').slice(1).join(':');
-    if (!record || organizations.has(organization) || hosts.has(host) || host === job.domain || records.has(record)) continue;
+    if (!record || organizations.has(organization) || relatedPublisherHosts(host, job.domain) ||
+      [...hosts].some(known => relatedPublisherHosts(known, host)) || records.has(record)) continue;
     organizations.add(organization);
     hosts.add(host);
     records.add(record);
@@ -235,30 +240,60 @@ function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: numbe
   if (gate.expiresAt && validUntil.length) gate.expiresAt = new Date(Math.min(Date.parse(gate.expiresAt), ...validUntil)).toISOString();
 }
 
-function publicationLinks(pages: Page[], job: Job, checkpoint: Checkpoint, media = false) {
+function publicationLinks(pages: Page[], job: Job, checkpoint: Checkpoint) {
   const name = checkpoint.identityName ?? job.name;
   for (const page of pages) for (const link of page.links) {
     if (domain(link.url) === job.domain) {
-      if (!checkpoint.mediaPage && mediaPage.test(link.label)) checkpoint.mediaPage = link.url;
+      if (!checkpoint.mediaPage && (mediaPage.test(link.label) || mediaPath.test(new URL(link.url).pathname.split('/').filter(Boolean).at(-1) ?? ''))) {
+        checkpoint.mediaPage = link.url;
+      }
       continue;
     }
     const url = publisherPointer(link.url);
-    if (!url || (!media && !appearanceLink.test(`${link.label} ${new URL(url).pathname.replace(/[-_/]/g, ' ')}`))) continue;
+    if (!url || !link.main || relatedPublisherHosts(domain(url), job.domain)) continue;
+    const path = new URL(url).pathname;
+    if (path === '/' || (!link.appearanceContext && !appearanceLink.test(`${link.label} ${path.replace(/[-_/]/g, ' ')}`))) continue;
     const pointers = checkpoint.publisherPointers ??= [];
     if (pointers.length < 10 && !pointers.some(item => item.url === url)) pointers.push({ url, name, website: job.website });
   }
+}
+
+async function sitemapMediaPage(web: PublicWeb, job: Job, signal: AbortSignal) {
+  const own = (url: URL) => url.protocol === 'https:' && domain(url.href) === job.domain;
+  const budget = AbortSignal.any([signal, AbortSignal.timeout(5_500)]);
+  const entries = async (url: string, selector: string) => {
+    try {
+      const response = await web.document(url, budget, own);
+      if (response.status !== 200 || response.body.length > 512_000 || !/\bxml\b/i.test(response.headers['content-type'] ?? '') ||
+        /\b(?:noarchive|nofollow|none)\b/i.test(response.headers['x-robots-tag'] ?? '')) return [];
+      const xml = load(response.body.toString('utf8'), { xml: true });
+      return xml(selector).slice(0, 600).toArray().flatMap(node => {
+        const url = linkedUrl(xml(node).text().trim(), response.url);
+        return url && own(new URL(url)) ? [url] : [];
+      });
+    } catch { signal.throwIfAborted(); return []; }
+  };
+  const root = new URL('/sitemap.xml', job.website);
+  if (!own(root)) return undefined;
+  const locations = await entries(root.href, 'urlset > url > loc, sitemapindex > sitemap > loc');
+  const match = (url: string) => mediaPath.test(new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '');
+  const page = locations.find(match);
+  if (page) return page;
+  const nested = locations.find(url => /\/(?:pages?-sitemap|sitemap-pages?)(?:-?\d+)?\.xml$/i.test(new URL(url).pathname));
+  return nested ? (await entries(nested, 'urlset > url > loc')).find(match) : undefined;
 }
 
 export async function enrichAcquisition(web: PublicWeb, job: Job, settings: Settings, signal: AbortSignal) {
   const checkpoint = job.checkpoint;
   if (checkpoint.gates.find(gate => gate.name === 'acquisition')?.state === 'VERIFIED' ||
       checkpoint.gates.find(gate => gate.name === 'identity')?.state !== 'VERIFIED') return [];
+  checkpoint.mediaPage ??= await sitemapMediaPage(web, job, signal);
   if (checkpoint.mediaPage) {
     const page = await inspect(web, checkpoint.mediaPage, signal,
       'Official media links', url => domain(url.href) === job.domain);
     // A timed out source should leave the job resumable under its owner fence.
     addJourney(checkpoint, job.website, page, 'Media appearances');
-    if (page.state === 'READABLE') publicationLinks([page], job, checkpoint, true);
+    if (page.state === 'READABLE') publicationLinks([page], job, checkpoint);
   }
   const name = checkpoint.identityName ?? job.name;
   const references = job.seeds.filter(seed => normalized(seed.name) === normalized(name) && domain(seed.website) === job.domain)

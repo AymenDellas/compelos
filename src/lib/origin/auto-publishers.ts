@@ -23,6 +23,10 @@ const clean = (value: string) => value.replace(/\s+/g, ' ').trim();
 export const normalizedName = (value: string) => clean(value.normalize('NFKD').replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}]/gu, ' ')).toLowerCase();
 const namesMatch = (a: string, b: string) => Boolean(b) && ` ${normalizedName(a)} `.includes(` ${normalizedName(b)} `);
 
+export function relatedPublisherHosts(first: string, second: string) {
+  return first === second || first.endsWith(`.${second}`) || second.endsWith(`.${first}`);
+}
+
 function objects(value: unknown): RecordNode[] {
   return (Array.isArray(value) ? value : [value]).filter((entry): entry is RecordNode => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)));
 }
@@ -157,7 +161,7 @@ async function readPublisher(web: PublicWeb, pointer: PublisherPointer, activity
     }
     const seeds: Seed[] = [...new Map(people.flatMap(person => {
       const website = person.site;
-      if (!website || domain(website) === host || person.name.length < 3 || person.name.length > 120) return [];
+      if (!website || relatedPublisherHosts(domain(website), host) || person.name.length < 3 || person.name.length > 120) return [];
       const title = meta.title;
       const seed: Seed = { method: 'PUBLICATION', adapter: publicationAdapter, name: person.name, website,
         source: inspected, sourceKey: `${host}:${normalizedName(title)}`, publisher: `organization:${normalizedName(meta.publisher!)}`,
