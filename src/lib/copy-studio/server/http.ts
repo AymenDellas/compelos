@@ -1,7 +1,7 @@
 import { z, ZodError } from 'zod/v4';
 import { generationSchema, revisionSchema, MAX_SOURCE_CHARACTERS } from '../shared/contracts';
 import { generate, extract, revise } from './engine';
-import { createCompletion, createPrefillCompletion, type Completion } from './provider';
+import { createRoutedCompletion, type Completion } from './provider';
 import { providerConfig, providerStatus } from './config';
 import { readSource } from './source';
 import { AppError, publicError } from './errors';
@@ -120,9 +120,11 @@ export async function handleCopyStudio(
 
   const controller = new AbortController();
   const signal = AbortSignal.any([request.signal, controller.signal]);
+  const timeoutMs = operation === 'generate' && !process.env.VERCEL ? 600_000 : 300_000;
+  const deadlineAt = Date.now() + timeoutMs;
   const deadline = setTimeout(
     () => controller.abort(new DOMException('Timed out', 'TimeoutError')),
-    300000,
+    timeoutMs,
   );
   limits.active++;
   const finish = () => {
@@ -137,10 +139,9 @@ export async function handleCopyStudio(
         ? { title: 'Pasted page copy', url: '', text: input.text, headings: [] }
         : readSource(input.url!, signal);
     }
-    const factory = operation === 'import' ? createPrefillCompletion : createCompletion;
-    const complete = completeOverride || factory(providerConfig());
+    const complete = completeOverride || createRoutedCompletion(providerConfig(), operation === 'import');
     if (operation === 'generate')
-      return generate(complete, generationSchema.parse(body), signal, progress);
+      return generate(complete, generationSchema.parse(body), signal, progress, deadlineAt);
     if (operation === 'revise') return revise(complete, revisionSchema.parse(body), signal);
     if (operation === 'import') {
       const input = importSchema.parse(body);
@@ -155,7 +156,7 @@ export async function handleCopyStudio(
       signal,
       32,
     );
-    return { connected: true, model: providerConfig().model };
+    return { connected: true, model: complete.model ?? providerConfig().model };
   };
   if (operation !== 'generate') {
     try {

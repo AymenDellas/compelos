@@ -25,6 +25,39 @@ test('dashboard API validates before calling AI and preserves the streaming cont
   assert.equal(calls, 3);
 });
 
+test('Generate copy switches from a missing AgentRouter route once and completes the whole draft', async (t) => {
+  for (const [key, value] of Object.entries({
+    COPY_STUDIO_BASE_URL: 'https://agentrouter.org/v1',
+    COPY_STUDIO_API_KEY: 'test-fixture-key',
+    COPY_STUDIO_MODEL: 'deepseek-v4-flash',
+    COPY_STUDIO_TIMEOUT_MS: '20000',
+  })) {
+    const prior = process.env[key];
+    process.env[key] = value;
+    t.after(() => { if (prior === undefined) delete process.env[key]; else process.env[key] = prior; });
+  }
+  const seen: string[] = [];
+  const replies = [strategy, draft, { findings: [] }];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const body = JSON.parse(init!.body as string);
+    seen.push(body.model);
+    if (new URL(String(url)).pathname === '/v1/chat/completions') {
+      return Response.json({ error: { message: 'No available route for deepseek-v4-flash' } }, { status: 503 });
+    }
+    assert.equal(new URL(String(url)).pathname, '/v1/responses');
+    const event = { type: 'response.completed', response: { status: 'completed', output: [
+      { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(replies.shift()) }] },
+    ] } };
+    return new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
+  });
+  const response = await handleCopyStudio(request('generate', input), 'generate');
+  const events = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(events, /"type":"result"/);
+  assert.doesNotMatch(events, /"type":"error"/);
+  assert.deepEqual(seen, ['deepseek-v4-flash', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol']);
+});
+
 test('dashboard API rejects foreign origins, oversized bodies, private URLs, and removed features', async () => {
   const complete = async () => {
     throw new Error('Must not reach AI');

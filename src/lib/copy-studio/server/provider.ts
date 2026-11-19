@@ -9,7 +9,7 @@ export type Completion = ((
   prompt: string,
   signal: AbortSignal,
   maxTokens?: number,
-) => Promise<string>) & { inputByteLimit?: number };
+) => Promise<string>) & { inputByteLimit?: number; readonly model?: string };
 export type ProviderConfig = { apiKey: string; baseUrl: string; model: string; timeoutMs: number; inputByteLimit?: number };
 
 /** Bound an optional multi-call stage without aborting the enclosing generation. */
@@ -129,11 +129,12 @@ function createResponsesCompletion(config: ProviderConfig, json = false): Comple
   return complete;
 }
 
-/** Keep the fallback scoped to source extraction and reuse it for schema repair. */
-export function createPrefillCompletion(config: ProviderConfig): Completion {
+/** Switch once on a confirmed missing route and keep using the replacement for the current request. */
+export function createRoutedCompletion(config: ProviderConfig, prefill = false): Completion {
   const fallbackModel = 'gpt-6.1-sol';
   let active = createCompletion(config);
-  let canFallback = isAgentRouter(config) && config.model !== fallbackModel;
+  let model = config.model;
+  let canFallback = isAgentRouter(config) && config.model.replace(/^openai\//i, '').toLowerCase() !== fallbackModel;
   const complete: Completion = async (system, prompt, signal, maxTokens) => {
     try {
       return await active(system, prompt, signal, maxTokens);
@@ -141,17 +142,23 @@ export function createPrefillCompletion(config: ProviderConfig): Completion {
       if (!(error instanceof AgentRouterModelUnavailable) || !canFallback) throw error;
       signal.throwIfAborted();
       canFallback = false;
-      const inputByteLimit = Math.min(active.inputByteLimit ?? 80_000, 20_000);
-      active = createResponsesCompletion({ ...config, model: fallbackModel, timeoutMs: 270_000, inputByteLimit }, true);
+      model = fallbackModel;
+      const inputByteLimit = Math.min(active.inputByteLimit ?? 80_000, prefill ? 20_000 : 80_000);
+      active = createResponsesCompletion({ ...config, model, timeoutMs: 270_000, inputByteLimit }, prefill);
       // Let extraction rebuild its citation index against the smaller prompt.
       if (Buffer.byteLength(system + prompt, 'utf8') > inputByteLimit) throw new ProviderSizeError();
       return active(system, prompt, signal, maxTokens);
     }
   };
-  Object.defineProperty(complete, 'inputByteLimit', {
-    get: () => active.inputByteLimit, set: value => { active.inputByteLimit = value; },
+  Object.defineProperties(complete, {
+    inputByteLimit: { get: () => active.inputByteLimit, set: value => { active.inputByteLimit = value; } },
+    model: { get: () => model },
   });
   return complete;
+}
+
+export function createPrefillCompletion(config: ProviderConfig) {
+  return createRoutedCompletion(config, true);
 }
 
 export function parseJson(text: string): unknown {

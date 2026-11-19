@@ -184,8 +184,8 @@ export async function generate(
   input: GenerationInput,
   signal: AbortSignal,
   progress: (stage: string) => void,
+  deadlineAt = Date.now() + 300_000,
 ): Promise<GenerationResult> {
-  const startedAt = Date.now();
   const framework = resolveFramework(input);
   progress(input.reference ? 'Reading your original copy and approved brief' : 'Building a strategy from your offer');
   const strategy = await structured(
@@ -265,9 +265,9 @@ export async function generate(
     draft = await refineProofFraming(complete, draft, input, signal);
   }
   progress('Checking the actual copy against the persuasion framework');
-  // Leave time to return and save completed copy before the API's five-minute deadline.
+  // Return completed copy with review points if the optional review reaches its deadline.
   // A slow optional review remains visible as review points, never as a lost draft.
-  return editPersuasion(completionDeadline(complete, Math.min(Date.now() + 150_000, startedAt + 270_000)), input, draft, signal);
+  return editPersuasion(completionDeadline(complete, Math.min(Date.now() + 150_000, deadlineAt - 30_000)), input, draft, signal);
 }
 
 export async function revise(complete: Completion, input: RevisionInput, signal: AbortSignal) {
