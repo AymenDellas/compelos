@@ -1,5 +1,5 @@
 import type { z } from 'zod/v4';
-import { AgentRouterContentFiltered, AgentRouterModelUnavailable, AppError, isAgentRouterModelUnavailable } from './errors';
+import { AgentRouterCapacityUnavailable, AgentRouterContentFiltered, AgentRouterModelUnavailable, AppError, isAgentRouterModelUnavailable } from './errors';
 import { createAgentRouterCompletion } from './agentrouter-client';
 import { setTimeout as delay } from 'node:timers/promises';
 import { agentRouterHeaders, readResponsesPayload } from '../../content-create/responses-stream.js';
@@ -104,6 +104,8 @@ function createResponsesCompletion(config: ProviderConfig, json = false): Comple
         throw new AppError(502, 'AgentRouter refused access. Check the Copy Studio endpoint, credentials, and model permissions.');
       if (response.status === 429)
         throw new AppError(429, 'AgentRouter’s usage limit was reached. Check your account and retry after the limit resets.');
+      if ((response.ok || response.status === 503) && payload?.error?.code === 'no_capacity')
+        throw new AgentRouterCapacityUnavailable(response.headers.get('retry-after'));
       throw new AppError(502, 'AgentRouter could not complete the request. Check the provider’s account and service status.');
     }
     if (payload?.status !== 'completed') {
@@ -129,25 +131,32 @@ function createResponsesCompletion(config: ProviderConfig, json = false): Comple
   return complete;
 }
 
-/** Switch once on a confirmed missing route and keep using the replacement for the current request. */
+/** Keep the selected route for the current request and bound recovery across its stages. */
 export function createRoutedCompletion(config: ProviderConfig, prefill = false): Completion {
   const fallbackModel = 'gpt-6.1-sol';
   let active = createCompletion(config);
   let model = config.model;
   let canFallback = isAgentRouter(config) && config.model.replace(/^openai\//i, '').toLowerCase() !== fallbackModel;
+  let retriedCapacity = false;
   const complete: Completion = async (system, prompt, signal, maxTokens) => {
-    try {
-      return await active(system, prompt, signal, maxTokens);
-    } catch (error) {
-      if (!(error instanceof AgentRouterModelUnavailable) || !canFallback) throw error;
+    for (;;) {
       signal.throwIfAborted();
-      canFallback = false;
-      model = fallbackModel;
-      const inputByteLimit = Math.min(active.inputByteLimit ?? 80_000, prefill ? 20_000 : 80_000);
-      active = createResponsesCompletion({ ...config, model, timeoutMs: 270_000, inputByteLimit }, prefill);
-      // Let extraction rebuild its citation index against the smaller prompt.
-      if (Buffer.byteLength(system + prompt, 'utf8') > inputByteLimit) throw new ProviderSizeError();
-      return active(system, prompt, signal, maxTokens);
+      try {
+        return await active(system, prompt, signal, maxTokens);
+      } catch (error) {
+        if (error instanceof AgentRouterCapacityUnavailable && !retriedCapacity && error.retryAfter === null) {
+          retriedCapacity = true;
+          await delay(2_000, undefined, { signal });
+          continue;
+        }
+        if (!(error instanceof AgentRouterModelUnavailable) || !canFallback) throw error;
+        canFallback = false;
+        model = fallbackModel;
+        const inputByteLimit = Math.min(active.inputByteLimit ?? 80_000, prefill ? 20_000 : 80_000);
+        active = createResponsesCompletion({ ...config, model, timeoutMs: 270_000, inputByteLimit }, prefill);
+        // Let extraction rebuild its citation index against the smaller prompt.
+        if (Buffer.byteLength(system + prompt, 'utf8') > inputByteLimit) throw new ProviderSizeError();
+      }
     }
   };
   Object.defineProperties(complete, {

@@ -25,7 +25,7 @@ test('dashboard API validates before calling AI and preserves the streaming cont
   assert.equal(calls, 3);
 });
 
-test('Generate copy switches from a missing AgentRouter route once and completes the whole draft', async (t) => {
+test('Generate copy switches from a missing route, retries explicit capacity failure once, and completes the draft', async (t) => {
   for (const [key, value] of Object.entries({
     COPY_STUDIO_BASE_URL: 'https://agentrouter.org/v1',
     COPY_STUDIO_API_KEY: 'test-fixture-key',
@@ -45,6 +45,8 @@ test('Generate copy switches from a missing AgentRouter route once and completes
       return Response.json({ error: { message: 'No available route for deepseek-v4-flash' } }, { status: 503 });
     }
     assert.equal(new URL(String(url)).pathname, '/v1/responses');
+    if (seen.length === 2) return new Response(`data: ${JSON.stringify({ type: 'error', error: { code: 'no_capacity' } })}\n\n`,
+      { headers: { 'Content-Type': 'text/event-stream' } });
     const event = { type: 'response.completed', response: { status: 'completed', output: [
       { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(replies.shift()) }] },
     ] } };
@@ -55,7 +57,7 @@ test('Generate copy switches from a missing AgentRouter route once and completes
   assert.equal(response.status, 200);
   assert.match(events, /"type":"result"/);
   assert.doesNotMatch(events, /"type":"error"/);
-  assert.deepEqual(seen, ['deepseek-v4-flash', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol']);
+  assert.deepEqual(seen, ['deepseek-v4-flash', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol', 'gpt-6.1-sol']);
 });
 
 test('dashboard API rejects foreign origins, oversized bodies, private URLs, and removed features', async () => {

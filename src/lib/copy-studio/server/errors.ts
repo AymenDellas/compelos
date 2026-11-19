@@ -13,6 +13,12 @@ export class AgentRouterModelUnavailable extends AppError {
   }
 }
 
+export class AgentRouterCapacityUnavailable extends AppError {
+  constructor(public retryAfter: string | null) {
+    super(503, 'AgentRouter is out of capacity for Copy Studio. Try again when the provider has capacity.');
+  }
+}
+
 export class AgentRouterContentFiltered extends AppError {
   constructor() {
     super(502, 'AgentRouter stopped this request because of its content filter.');

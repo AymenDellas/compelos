@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod/v4';
-import { createCompletion, createPrefillCompletion, structured } from '../../src/lib/copy-studio/server/provider';
+import { createCompletion, createPrefillCompletion, createRoutedCompletion, structured } from '../../src/lib/copy-studio/server/provider';
 
 const config = {
   apiKey: 'test-token-not-a-real-key',
@@ -61,6 +61,17 @@ test('prefill returns access and incomplete-response errors without changing mod
   await assert.rejects(complete('Return JSON.', 'Read this source.', signal), /rejected the client integration/);
   await assert.rejects(complete('Return JSON.', 'Read this source.', signal), /reached its response limit/);
   assert.deepEqual(models, ['gpt-5.6-sol', 'gpt-5.6-sol']);
+});
+
+test('Copy Studio leaves AgentRouter capacity recovery to the provider when Retry-After is set', async (t) => {
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    requests++;
+    return Response.json({ error: { code: 'no_capacity' } }, { status: 503, headers: { 'retry-after': '30' } });
+  });
+  const complete = createRoutedCompletion({ ...agentRouter, model: 'gpt-6.1-sol' });
+  await assert.rejects(complete('Write copy.', 'Summarize the brief.', new AbortController().signal), /out of capacity/);
+  assert.equal(requests, 1);
 });
 
 test('Groq GPT-OSS requests leave room for JSON output with low reasoning effort while other models retain their provider defaults', async () => {

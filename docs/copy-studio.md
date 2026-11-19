@@ -71,7 +71,7 @@ Without a dedicated key, endpoint, or model, the corresponding `AGENTROUTER_*` s
 
 AgentRouter uses the same pinned, genuine Qwen Code client as the working standalone tool. Tools, customizations, telemetry, and chat recording are disabled. The private temporary relay handles AgentRouter's null and billing stream frames while preserving real completion and error events. The CLI is resolved from the dashboard's own installation and included in Next.js standalone output; Docker also copies the full dependency tree.
 
-AgentRouter's primary model is tried first. If the provider confirms it has no route, Copy Studio switches once to `gpt-6.1-sol` over Responses and uses it for the rest of that operation. The connection test reports the model that actually answered. Local generation allows up to ten minutes for the strategy, draft and review. The Vercel request limit remains five minutes.
+AgentRouter's primary model is tried first. If the provider confirms it has no route, Copy Studio switches once to `gpt-6.1-sol` over Responses and uses it for the rest of that operation. Copy Studio retries one explicit capacity failure if the provider supplies no wait instruction. The connection test reports the model that actually answered. Local generation allows up to ten minutes for the strategy, draft and review. The Vercel request limit remains five minutes.
 
 ## Saved projects
 
