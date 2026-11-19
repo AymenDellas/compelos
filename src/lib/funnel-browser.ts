@@ -66,10 +66,12 @@ export type RenderedPage = {
   elementCaptures: Record<string, string>;
   bookingDialogs?: BookingDialog[];
   missingBookingSections?: MissingBookingSection[];
+  bookingLayouts?: BookingLayout[];
 };
 
 type BookingDialog = { device: FunnelScreenshot['device']; label: string; heading: string; hasForm: boolean };
 type MissingBookingSection = { device: FunnelScreenshot['device']; label: string; fragment: string };
+type BookingLayout = { device: FunnelScreenshot['device']; viewport: number; top: number; url: string; label: string };
 
 type CaptureTarget = { index: number; top: number; section: NonNullable<FunnelScreenshot["section"]>; priority: number };
 
@@ -206,6 +208,17 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
       const finalUrl = funnelUrl(documentUrl).href;
       const screenshots: FunnelScreenshot[] = [];
       const elementCaptures: Record<string, string> = {};
+      const layout = options.inspectBookingDialogs ? await page.evaluate(() => {
+        const byPosition = [...document.querySelectorAll<HTMLAnchorElement>('a[href]')].slice(0, 300).flatMap(link => {
+          const label = (link.getAttribute('aria-label') || link.innerText).trim().slice(0, 100);
+          if (!/^(?:book|schedule)\b.{0,50}\b(?:call|session|consultation|meeting)\b/i.test(label) ||
+              !/^https?:/i.test(link.href) || !link.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return [];
+          const rect = link.getBoundingClientRect();
+          if (!rect.height || rect.right <= 0 || rect.left >= innerWidth) return [];
+          return [{ top: Math.max(0, Math.round(rect.top + window.scrollY)), viewport: innerHeight, url: link.href, label }];
+        }).sort((a, b) => a.top - b.top);
+        return byPosition[0] ?? null;
+      }).catch(() => null) : null;
       async function save(captureId: string, visible: number[], section?: FunnelScreenshot["section"]) {
         const data = await page.screenshot({ type: "jpeg", quality: 70, encoding: "base64", captureBeyondViewport: false });
         if (data.length > 400_000 || page.url() !== documentUrl || (section && data.length > sectionBytesRemaining)) return;
@@ -275,7 +288,8 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
           if (missing && page.url().split('#')[0] === documentUrl) missingBookingSection = { ...missing, device };
         }
       }
-      return { url: finalUrl, html, screenshots, elementCaptures, incompleteAssets, bookingDialog, missingBookingSection };
+      return { url: finalUrl, html, screenshots, elementCaptures, incompleteAssets, bookingDialog, missingBookingSection,
+        bookingLayout: layout ? { ...layout, device } : undefined };
     } finally {
       signal.removeEventListener("abort", close);
       await context.close().catch(() => {});
@@ -297,6 +311,7 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
         elementCaptures: page.elementCaptures,
         bookingDialogs: views.flatMap(view => view.url === page.url && view.bookingDialog ? [view.bookingDialog] : []),
         missingBookingSections: views.flatMap(view => view.url === page.url && view.missingBookingSection ? [view.missingBookingSection] : []),
+        bookingLayouts: views.flatMap(view => view.url === page.url && view.bookingLayout ? [view.bookingLayout] : []),
         unavailable: (["desktop", "mobile"] as const).filter((device) => !screenshots.some((shot) => shot.device === device && !shot.section)),
         incompleteAssets: views.some((view) => view.incompleteAssets),
       };

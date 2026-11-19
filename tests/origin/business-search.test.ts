@@ -37,3 +37,9 @@ test('publisher search keeps only public URLs for subsequent first-party source 
     { link: 'https://127.0.0.1/private' },
   ]), [{ url: 'https://journal.example/interview' }]);
 });
+
+test('syndicated podcast directories enter neither business-first nor campaign-first discovery', () => {
+  const indexed = { title: 'Executive coaching podcast | Podscan', link: 'https://podscan.fm/podcasts/coaching-real-leaders' };
+  assert.deepEqual(businessSearchSeeds([indexed], 8), []);
+  assert.deepEqual(businessSearchSeeds([indexed], 8, true), []);
+});

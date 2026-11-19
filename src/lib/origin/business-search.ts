@@ -18,7 +18,8 @@ const specialties = [
   '"career coaching" ("senior professionals" OR "executive career")',
 ];
 const excludedDomains = ['linkedin.com', 'facebook.com', 'instagram.com', 'youtube.com', 'reddit.com',
-  'wikipedia.org', 'google.com', 'indeed.com', 'glassdoor.com', 'forbes.com', 'clutch.co', 'coachfederation.org', 'coachingfederation.org'];
+  'wikipedia.org', 'google.com', 'indeed.com', 'glassdoor.com', 'forbes.com', 'clutch.co', 'coachfederation.org', 'coachingfederation.org',
+  'podscan.fm', 'listennotes.com', 'feedspot.com', 'player.fm', 'goodpods.com', 'podchaser.com', 'podcasts.apple.com', 'spotify.com'];
 const service = /\b(?:coach(?:es|ing)?|leadership development|leadership advis(?:er|or|ory)|executive advis(?:er|or|ory)|CEO mentor)\b/i;
 const directory = /\b(?:top \d+|best \d+|find a coach|coach(?:es|ing) directory|certification|training for coaches|job openings)\b/i;
 const genericName = /^(?:(?:home|services|programs?|offerings|work with us|about us)$|(?:executive|leadership|career|business|CEO|founder|corporate|team) (?:coaches?|coaching)(?:\s+(?:in|services|programs?)\b.*)?$)/i;

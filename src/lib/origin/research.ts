@@ -1,6 +1,6 @@
 import { load } from 'cheerio';
 import { normalizedName, publisherPointer, relatedPublisherHosts, verifyPublications } from './auto-publishers';
-import { createFunnelBrowser } from '../funnel-browser';
+import { createFunnelBrowser, type RenderedPage } from '../funnel-browser';
 import { relevantCoach } from './discovery';
 import { emptyCheckpoint, finding, hash, observe } from './policy';
 import type { Checkpoint, Evidence, Settings } from './policy';
@@ -350,7 +350,7 @@ export async function resolveBusiness(web: PublicWeb, job: Job, signal: AbortSig
     ? 'The indexed domain identifies its business through first-party site branding.'
     : 'The source-linked website independently identifies the same business or coaching brand.',
     [record, quote(identity, `The first-party page identifies ${checkpoint.identityName}.`, 'Official name corroboration')]);
-  const irrelevant = page.headings.find(line => /\b(?:executive search firm|recruitment agency|psychotherapy practice|software platform)\b/i.test(line));
+  const irrelevant = page.headings.find(line => /\b(?:executive search firm|recruitment agency|psychotherapy practice|software platform|podcast (?:directory|monitoring|database)|media monitoring)\b/i.test(line));
   if (irrelevant && !page.statements.some(line => relevantCoach.test(line))) {
     add(checkpoint, 'niche', 'CONTRADICTED', 'The official site describes a different primary service.', [quote(page, irrelevant, 'Primary service heading')]);
     return { checkpoint, done: true };
@@ -382,6 +382,10 @@ function recordMarket(checkpoint: Checkpoint, pages: Page[]) {
 }
 
 function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: number) {
+  if (!checkpoint.gates.some(item => item.name === 'niche' && item.state === 'VERIFIED')) {
+    add(checkpoint, 'acquisition', 'UNVERIFIED', 'Acquisition activity needs to belong to a verified coaching offer.');
+    return;
+  }
   const now = Date.now();
   const organizations = new Set<string>();
   const hosts = new Set<string>();
@@ -430,7 +434,8 @@ function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: numbe
 function ownedActivity(page: Page) {
   const heading = page.headings[0] || page.title;
   const context = [heading, ...page.statements.slice(0, 16)].join(' ');
-  if ((!activityLink.test(`${heading} ${new URL(page.url).pathname.replace(/[-_/]/g, ' ')}`) && !activityLink.test(page.title)) || !page.activityAction ||
+  if ((page.canonical && domain(page.canonical) !== domain(page.url)) ||
+      (!activityLink.test(`${heading} ${new URL(page.url).pathname.replace(/[-_/]/g, ' ')}`) && !activityLink.test(page.title)) || !page.activityAction ||
       (!relevantCoach.test(context) && !activityAudience.test(context))) return [];
   const days = [...new Set(page.activityDates.filter(value => /^\d{4}-\d\d-\d\d(?:T|$)/.test(value) && Number.isFinite(Date.parse(value)))
     .map(value => value.slice(0, 10)))];
@@ -509,7 +514,8 @@ async function sitemapMediaPage(web: PublicWeb, job: Job, signal: AbortSignal) {
 export async function enrichAcquisition(web: PublicWeb, job: Job, settings: Settings, signal: AbortSignal, campaignUrls: string[] = []) {
   const checkpoint = job.checkpoint;
   if (checkpoint.gates.find(gate => gate.name === 'acquisition')?.state === 'VERIFIED' ||
-      checkpoint.gates.find(gate => gate.name === 'identity')?.state !== 'VERIFIED') return [];
+      checkpoint.gates.find(gate => gate.name === 'identity')?.state !== 'VERIFIED' ||
+      checkpoint.gates.find(gate => gate.name === 'niche')?.state !== 'VERIFIED') return [];
   if (campaignUrls.length) {
     const pending = [...new Set(campaignUrls)].filter(url => domain(url) === job.domain && !checkpoint.journey.some(step => step.url === url));
     const pages = await Promise.all(pending.slice(0, 3).map(url => inspect(web, url, signal, 'Targeted campaign recheck', address => domain(address.href) === job.domain)));
@@ -552,6 +558,15 @@ function routeHost(value: string, official: string) {
 function addJourney(checkpoint: Checkpoint, from: string, page: Page, label: string) {
   checkpoint.evidence.push(page.evidence);
   checkpoint.journey.push({ from, url: page.url, label, result: page.state, evidence: page.evidence.id });
+}
+
+function mobileBookingDisparity(rendered: RenderedPage, destination: string) {
+  if (rendered.incompleteAssets || rendered.unavailable.length || rendered.bookingDialogs?.length) return;
+  const desktop = rendered.bookingLayouts?.find(item => item.device === 'desktop');
+  const mobile = rendered.bookingLayouts?.find(item => item.device === 'mobile');
+  if (!desktop || !mobile || linkedUrl(desktop.url, rendered.url) !== destination || linkedUrl(mobile.url, rendered.url) !== destination ||
+      desktop.top >= desktop.viewport || mobile.top < mobile.viewport * 3) return;
+  return `The first visible booking link began at ${desktop.top}px in an ${desktop.viewport}px desktop viewport and at ${mobile.top}px in an ${mobile.viewport}px mobile viewport.`;
 }
 
 function bookingDuration(text: string) {
@@ -662,7 +677,6 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   recordMarket(checkpoint, pages);
   checkpoint.ownedActivities = pages.flatMap(ownedActivity);
   checkpoint.ownedFeeds = [...new Set(pages.flatMap(item => item.feedUrl && own(new URL(item.feedUrl)) ? [item.feedUrl] : []))].slice(0, 2);
-  recordAcquisition(job, checkpoint, settings.activityDays);
   publicationLinks(pages, job, checkpoint);
   const observed = pages.flatMap(item => { const candidate = offerOn(item); return candidate ? [candidate] : []; });
   const selected = observed.find(item => item.detail && item.page.url === page.url && new URL(page.url).pathname !== '/') ??
@@ -698,6 +712,7 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     add(checkpoint, 'niche', 'UNVERIFIED', line ? 'A specialized offer was visible, but the provider did not establish its coaching scope.' : 'A specialized coaching offer was not established.');
     add(checkpoint, 'substance', 'UNVERIFIED', 'A matching scoped coaching engagement is needed before commercial proof can qualify.');
   }
+  recordAcquisition(job, checkpoint, settings.activityDays);
 
   const contact = pages.find(item => item.contact);
   const termsLink = contact && !pages.some(item => item.contactProhibited) ? pages.flatMap(item => item.links)
@@ -765,6 +780,12 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
       const rendered = await browser.render(renderPage.url, job.id);
       const renderedPage = parseBusinessPage(rendered.html, rendered.url);
       const confirmed = Boolean(cta && !renderedPage.challenged && renderedPage.links.some(link => link.url === cta.url && booking.test(link.label)));
+      const depth = cta && confirmed && cta.main && offer === renderPage && mobileBookingDisparity(rendered, cta.url);
+      if (depth && cta) {
+        const observation = observe('browser', rendered.url, depth, 'Desktop and mobile booking-link position', Buffer.from(rendered.html));
+        checkpoint.evidence.push(observation);
+        checkpoint.mobileBookingDepth = { from: rendered.url, destination: cta.url, evidence: observation.id };
+      }
       const missing = rendered.missingBookingSections?.[0];
       if (!renderedPage.challenged && missing && rendered.missingBookingSections?.length === 2 &&
           rendered.missingBookingSections.every(item => item.fragment === missing.fragment && item.label === missing.label) &&
@@ -809,6 +830,24 @@ export async function verifyOpportunity(web: PublicWeb, job: Job, signal: AbortS
   const mismatch = checkpoint.bookingMismatch;
   const inquiry = checkpoint.inquiryMismatch;
   const section = checkpoint.missingBookingSection;
+  const mobile = checkpoint.mobileBookingDepth;
+  if (!issue && !mismatch && !inquiry && !section && mobile && browserEnabled) {
+    const first = checkpoint.evidence.find(item => item.id === mobile.evidence);
+    const budget = AbortSignal.any([signal, AbortSignal.timeout(16_000)]);
+    const browser = createFunnelBrowser((url, requestSignal) => web.asset(url, requestSignal, mobile.from), budget, { inspectBookingDialogs: true });
+    try {
+      const rendered = await browser.render(mobile.from, job.id);
+      const depth = rendered.url === mobile.from && !parseBusinessPage(rendered.html, rendered.url).challenged && mobileBookingDisparity(rendered, mobile.destination);
+      if (first && depth) {
+        const confirmation = observe('browser', rendered.url, depth, 'Independent mobile placement recheck', Buffer.from(rendered.html));
+        add(checkpoint, 'opportunity', 'VERIFIED', 'The booking link appears in the first desktop viewport. The first visible mobile booking link begins at least three screens down. The difference reproduced. Surface the booking action earlier in the mobile journey.', [first, confirmation]);
+        return checkpoint;
+      }
+    } catch { /* Keep the observation as a hypothesis without an independent render. */ }
+    finally { await browser.close(); }
+    add(checkpoint, 'opportunity', 'UNVERIFIED', 'The mobile booking placement could not be independently reproduced.', first ? [first] : []);
+    return checkpoint;
+  }
   if (!issue && !mismatch && !inquiry && section && browserEnabled) {
     const first = checkpoint.evidence.find(item => item.id === section.evidence);
     const budget = AbortSignal.any([signal, AbortSignal.timeout(16_000)]);

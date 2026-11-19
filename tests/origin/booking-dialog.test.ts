@@ -40,3 +40,22 @@ test('the browser distinguishes a missing booking anchor from an existing sectio
     await browser.close();
   }
 });
+
+test('the renderer measures real booking-link placement across independent viewports', { timeout: 30_000 }, async () => {
+  const url = 'https://coach.test/';
+  const html = `<meta name="viewport" content="width=device-width, initial-scale=1"><style>
+    .intro { height: 100px; } @media (max-width: 600px) { .intro { height: 2800px; } }
+    </style><main><div class="intro">Executive coaching</div><a href="/schedule">Book a call</a></main>`;
+  const browser = createFunnelBrowser(async requested => ({ url: requested, status: 200,
+    headers: { 'content-type': 'text/html' }, body: Buffer.from(html) }), AbortSignal.timeout(25_000), { inspectBookingDialogs: true });
+  try {
+    const result = await browser.render(url, 'layout');
+    const desktop = result.bookingLayouts?.find(item => item.device === 'desktop');
+    const mobile = result.bookingLayouts?.find(item => item.device === 'mobile');
+    assert.ok(desktop && desktop.top < desktop.viewport);
+    assert.ok(mobile && mobile.top > mobile.viewport * 3);
+    assert.equal(desktop.url, mobile.url);
+  } finally {
+    await browser.close();
+  }
+});
