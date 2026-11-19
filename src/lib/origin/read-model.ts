@@ -17,6 +17,7 @@ export type Opportunity = {
   opportunity: string; contact: string; updated_at: string; expires_at: string; acquisition_sources: number;
 };
 export type Finding = { id: string; name: string; stage: string; outcome: Outcome | null; reason: string | null; updated_at: string };
+type GateProgress = { name: string; reached: number; verified: number; held: number; contradicted: number };
 export type Dossier = {
   id: string; business_id: string; name: string; website: string; stage: string; updated_at: string;
   checkpoint: Checkpoint; decision: Decision | null; error: string | null; suppressed: boolean;
@@ -38,7 +39,7 @@ export async function readyOpportunities(pool: DB, limit = 100, run: string | nu
   const suppressed = await suppressionFilter(pool);
   return (await pool.query<Opportunity>(`SELECT j.id,b.id AS business_id,COALESCE(j.checkpoint->>'identityName',b.name) AS name,b.website,j.updated_at,j.expires_at,
     j.checkpoint->>'offer' AS offer,j.checkpoint->>'country' AS country,j.checkpoint->>'contact' AS contact,
-    (j.checkpoint->>'acquisitionSources')::int AS acquisition_sources,
+    (SELECT jsonb_array_length(g->'evidence') FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='acquisition') AS acquisition_sources,
     (SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='opportunity') AS opportunity
     FROM origin_businesses b JOIN LATERAL (SELECT * FROM origin_investigations WHERE business_id=b.id
       ORDER BY created_at DESC,id DESC LIMIT 1) j ON true
@@ -94,13 +95,19 @@ export async function overview(pool: Pool) {
   const configured = Boolean(readModelConfig());
   if (!await hasSchema(pool)) return { ...empty, configured, ready: false, runs: [] as RunSummary[], opportunities: [] as Opportunity[],
     findings: [] as Finding[], sources: [] as SourceResult[], quality: [] as SourceQuality[], usage: noUsage,
-    independentPublishers: 0 };
+    independentPublishers: 0, gateProgress: [] as GateProgress[] };
   // A dashboard refresh should use one checked-out connection on the shared pooler.
   const db = await pool.connect();
   try {
     const config = await configuration(db);
     const sourceConfig = await sourceReadiness(db);
     const runs = await listRuns(db);
+    const gateProgress = runs[0] ? (await db.query<GateProgress>(`SELECT g->>'name' AS name,count(*)::int AS reached,
+      count(*) FILTER (WHERE g->>'state'='VERIFIED')::int AS verified,
+      count(*) FILTER (WHERE g->>'state' IN ('UNVERIFIED','STALE'))::int AS held,
+      count(*) FILTER (WHERE g->>'state'='CONTRADICTED')::int AS contradicted
+      FROM origin_investigations j CROSS JOIN LATERAL jsonb_array_elements(j.checkpoint->'gates') g
+      WHERE j.run_id=$1 GROUP BY 1 ORDER BY 1`, [runs[0].id])).rows : [];
     const opportunities = await readyOpportunities(db);
     const findings = (await db.query<Finding>(`SELECT j.id,COALESCE(j.checkpoint->>'identityName',b.name) AS name,j.stage,j.outcome,j.updated_at,
       COALESCE(j.error,(SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'state'<>'VERIFIED'
@@ -112,7 +119,7 @@ export async function overview(pool: Pool) {
     const usage = await modelUsage(db);
     return { config: config.config, next_run_at: config.next_run_at?.toISOString() ?? null, worker_seen_at: config.worker_seen_at?.toISOString() ?? null,
       online: Boolean(config.worker_seen_at && Date.now() - config.worker_seen_at.getTime() < 115_000), configured, ready: true, runs,
-      opportunities, findings, sources, quality, usage, independentPublishers: sourceConfig.independent };
+      opportunities, findings, sources, quality, usage, gateProgress, independentPublishers: sourceConfig.independent };
   } finally { db.release(); }
 }
 export type Overview = Awaited<ReturnType<typeof overview>>;

@@ -132,7 +132,7 @@ export async function finish(pool: Pool, run: Run, error?: string) {
 
 export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources: SourceResult[]) {
   return fenced(pool, run, async db => {
-    for (const seed of seeds) {
+    for (const [position, seed] of seeds.entries()) {
       const host = domain(seed.website);
       const { rows: [known] } = await db.query<{ business_id: string }>('SELECT business_id FROM origin_identity_keys WHERE key=$1', [seed.sourceKey]);
       // An external record changing its official domain is evidence for re-investigation, never an automatic rename or merge.
@@ -143,18 +143,47 @@ export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources
         await db.query(`INSERT INTO origin_identity_keys(key,business_id,provenance) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`,
           [seed.sourceKey, businessId, json(seed)]);
       }
-      await db.query(`INSERT INTO origin_investigations(id,run_id,business_id,seeds,stage,checkpoint)
-        VALUES($1,$2,$3,$4,'RESOLVING',$5) ON CONFLICT(run_id,business_id)
+      await db.query(`INSERT INTO origin_investigations(id,run_id,business_id,seeds,stage,checkpoint,discovery_order)
+        VALUES($1,$2,$3,$4,'RESOLVING',$5,$6) ON CONFLICT(run_id,business_id)
         DO UPDATE SET seeds=origin_investigations.seeds || EXCLUDED.seeds`,
-      [randomUUID(), run.id, businessId, json([seed]), json(emptyCheckpoint())]);
+      [randomUUID(), run.id, businessId, json([seed]), json(emptyCheckpoint()), position]);
     }
     await db.query('UPDATE origin_runs SET sources=$2,error=NULL WHERE id=$1', [run.id, json(sources)]);
   });
 }
 
 export async function nextJob(db: DB, run: Run) {
-  return (await db.query<Job>(`SELECT j.*, b.domain,b.name,b.website,b.signature FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
-    WHERE j.run_id=$1 AND j.stage NOT IN ('COMPLETED','FAILED') ORDER BY j.created_at,j.id LIMIT 1`, [run.id])).rows[0];
+  const job = (await db.query<Job>(`SELECT j.*, b.domain,b.name,b.website,b.signature FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
+    WHERE j.run_id=$1 AND j.stage NOT IN ('COMPLETED','FAILED') ORDER BY
+    CASE j.stage WHEN 'VERIFYING' THEN 0 WHEN 'RESOLVING' THEN 1 ELSE 2 END,j.discovery_order,j.created_at,j.id LIMIT 1`, [run.id])).rows[0];
+  if (job) {
+    const target = job.seeds.find(seed => seed.method === 'BUSINESS_SEARCH' && domain(seed.website) === job.domain && new URL(seed.website).pathname !== '/');
+    if (target) job.website = target.website;
+  }
+  return job;
+}
+
+/** Reserve before contacting the prepaid search service. A lost reply never incurs a second charge. */
+export async function runSearch<T>(pool: Pool, run: Run, key: string, request: () => Promise<T>): Promise<T | undefined> {
+  const receipt = await fenced(pool, run, async db => {
+    const prior = (await db.query<{ status: string; result: T }>('SELECT status,result FROM origin_search_receipts WHERE run_id=$1 AND query_key=$2', [run.id, key])).rows[0];
+    if (prior) return { fresh: false, result: prior.status === 'COMPLETE' ? prior.result : undefined };
+    if (key.startsWith('follow-up:')) {
+      const count = await db.query<{ count: number }>("SELECT count(*)::int FROM origin_search_receipts WHERE run_id=$1 AND query_key LIKE 'follow-up:%'", [run.id]);
+      if (count.rows[0].count >= 6) return { fresh: false, result: undefined };
+    }
+    await db.query(`INSERT INTO origin_search_receipts(run_id,query_key,status) VALUES($1,$2,'RESERVED')`, [run.id, key]);
+    return { fresh: true, result: undefined };
+  });
+  if (!receipt?.fresh) return receipt?.result;
+  try {
+    const result = await request();
+    await pool.query(`UPDATE origin_search_receipts SET status='COMPLETE',result=$3 WHERE run_id=$1 AND query_key=$2 AND status='RESERVED'`, [run.id, key, json(result)]);
+    return result;
+  } catch (error) {
+    await pool.query(`UPDATE origin_search_receipts SET status='FAILED' WHERE run_id=$1 AND query_key=$2 AND status='RESERVED'`, [run.id, key]);
+    throw error;
+  }
 }
 
 export async function saveStage(pool: Pool, run: Run, job: Job, checkpoint: Checkpoint,

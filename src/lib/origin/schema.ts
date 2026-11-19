@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS origin_investigations (
 );
 CREATE INDEX IF NOT EXISTS origin_investigations_business ON origin_investigations (business_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS origin_investigations_run_stage ON origin_investigations (run_id,stage,created_at);
+ALTER TABLE origin_investigations ADD COLUMN IF NOT EXISTS discovery_order integer NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS origin_artifacts (
   investigation_id uuid NOT NULL REFERENCES origin_investigations(id),
   id text NOT NULL,
@@ -85,6 +86,15 @@ CREATE TABLE IF NOT EXISTS origin_model_usage (
   UNIQUE(investigation_id,cache_key,attempt)
 );
 CREATE INDEX IF NOT EXISTS origin_model_usage_recent ON origin_model_usage(created_at DESC);
+ALTER TABLE origin_model_usage ADD COLUMN IF NOT EXISTS provider_status integer;
+CREATE TABLE IF NOT EXISTS origin_search_receipts (
+  run_id uuid NOT NULL REFERENCES origin_runs(id),
+  query_key text NOT NULL,
+  status text NOT NULL CHECK (status IN ('RESERVED','COMPLETE','FAILED')),
+  result jsonb,
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(run_id,query_key)
+);
 CREATE TABLE IF NOT EXISTS origin_evaluations (
   run_id uuid PRIMARY KEY,
   policy_version text NOT NULL,

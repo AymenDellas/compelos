@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { discover, feed } from '../../src/lib/origin/discovery';
-import { classifyModelError } from '../../src/lib/origin/model';
+import { classifyModelError, reserveCents } from '../../src/lib/origin/model';
 import { decide, defaults, finding, gateNames, observe } from '../../src/lib/origin/policy';
 import { createPublicWeb, documentUrl, robotsAllows } from '../../src/lib/origin/public-web';
-import { investigate, resolveBusiness, verifyOpportunity } from '../../src/lib/origin/research';
+import { enrichAcquisition, investigate, resolveBusiness, verifyOpportunity } from '../../src/lib/origin/research';
 import { book, candidate, fixture, official, page, seed, source } from './fixtures';
 
 const signal = () => AbortSignal.timeout(30_000);
@@ -56,6 +56,16 @@ test('a search title alone cannot verify identity and official branding supplies
   assert.equal(branded.checkpoint.identityName, 'Cedar Leadership');
 });
 
+test('training coaches or selling lead generation to coaches does not prove a client coaching offer', async () => {
+  const job = candidate();
+  for (const title of ['Executive coach certification for business leaders', 'Lead generation for executive coaches']) {
+    const { web } = fixture(page.replace('Cedar Leadership executive coaching', title));
+    const initial = await resolveBusiness(web, job, signal());
+    const result = await investigate(web, { ...job, checkpoint: initial.checkpoint }, settings, signal());
+    assert.equal(result.checkpoint.gates.find(gate => gate.name === 'niche')?.state, 'UNVERIFIED');
+  }
+});
+
 test('a published postal address and an explicit same-brand booking subdomain are verified separately', async () => {
   const bookingUrl = 'https://book.cedar-leadership.test/booking';
   const home = page.replace('We serve executive teams in the United Kingdom.', 'We coach executive teams.')
@@ -75,9 +85,9 @@ test('a published postal address and an explicit same-brand booking subdomain ar
 });
 
 test('a dated first-party coaching campaign can corroborate independent acquisition evidence', async () => {
-  const date = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10);
+  const date = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric' }).format(Date.now() - 2 * 86_400_000);
   const home = page.replace('</main>', '<a href="/leadership-workshop">Executive coaching workshop</a></main>');
-  const campaign = `<main><h1>Executive coaching workshop</h1><time datetime="${date}">${date}</time><a href="/register">Reserve your seat</a></main>`;
+  const campaign = `<main><h1>Executive coaching workshop</h1><div>${date}</div><a href="/register">Reserve your seat</a></main>`;
   const base = fixture(home);
   const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
     if (args[0] === `${official}leadership-workshop`) return { url: args[0], status: 200,
@@ -93,6 +103,25 @@ test('a dated first-party coaching campaign can corroborate independent acquisit
   assert.ok(checkpoint.evidence.some(item => item.method === 'Dated first-party coaching campaign'));
 });
 
+test('the researcher finds a first-party subscriber feed and verifies two distinct recent coaching publications', async () => {
+  const feedUrl = `${official}feed`;
+  const home = page.replace('</head>', `<link rel="alternate" type="application/rss+xml" href="${feedUrl}"></head>`);
+  const base = fixture(home);
+  const feed = `<rss><channel><title>Cedar Leadership</title>${['Executive coaching on succession', 'Executive coaching on team transitions'].map((title, index) =>
+    `<item><title>${title}</title><pubDate>${new Date(Date.now() - (index + 1) * 86_400_000).toUTCString()}</pubDate><link>${official}briefing-${index}</link></item>`).join('')}</channel></rss>`;
+  const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
+    if (args[0] === feedUrl) return { url: feedUrl, status: 200, headers: { 'content-type': 'application/rss+xml' }, body: Buffer.from(feed) };
+    return base.web.document(...args);
+  } };
+  const job = candidate([{ ...seed, occurredAt: undefined }]);
+  const initial = await resolveBusiness(web, job, signal());
+  const { checkpoint } = await investigate(web, { ...job, checkpoint: initial.checkpoint }, settings, signal());
+  await enrichAcquisition(web, { ...job, checkpoint }, settings, signal());
+  const acquisition = checkpoint.gates.find(item => item.name === 'acquisition');
+  assert.equal(acquisition?.state, 'VERIFIED');
+  assert.equal(acquisition?.evidence.length, 2);
+});
+
 test('a material discrepancy on a working booking route must reproduce before it qualifies', async () => {
   const home = page.replace('Book a call', 'Book a 20-minute call');
   for (const secondMinutes of [50, 20]) {
@@ -106,6 +135,32 @@ test('a material discrepancy on a working booking route must reproduce before it
     assert.equal(opportunity?.state, secondMinutes === 50 ? 'VERIFIED' : 'UNVERIFIED');
     assert.equal(decide(verified.gates, verified.evidence).outcome, secondMinutes === 50 ? 'QUALIFIED' : 'UNRESOLVED');
   }
+});
+
+test('a real booking-to-message mismatch qualifies only when the published route lacks a scheduler', async () => {
+  const home = page.replace('href="/booking"', 'href="/contact"').replace('Book a call', 'Schedule a consultation');
+  for (const embedded of [false, true]) {
+    const base = fixture(home);
+    const html = `<main><h1>Contact us</h1><form><input type="email"><textarea></textarea><button>Send a message</button></form>${embedded ? '<div class="calendly-inline-widget"></div>' : ''}</main>`;
+    const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
+      if (args[0] === `${official}contact`) return { url: args[0], status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(html) };
+      return base.web.document(...args);
+    } };
+    const job = candidate();
+    const initial = await resolveBusiness(web, job, signal());
+    const { checkpoint } = await investigate(web, { ...job, checkpoint: initial.checkpoint }, settings, signal());
+    await verifyOpportunity(web, { ...job, checkpoint }, signal());
+    const opportunity = checkpoint.gates.find(item => item.name === 'opportunity');
+    assert.equal(opportunity?.state, embedded ? 'UNVERIFIED' : 'VERIFIED');
+    if (!embedded) assert.match(opportunity!.assertion, /general message/);
+  }
+});
+
+test('a model request reserves against both the input and output bounds at the published price', () => {
+  const quote = { success: true as const, data: [{ model_name: 'gpt-fixture', model_ratio: 4, completion_ratio: 5, quota_type: 0 }], group_ratio: { default: 1 } };
+  assert.equal(reserveCents(quote, 'gpt-fixture'), 48);
+  assert.equal(reserveCents(quote, 'gpt-other'), null);
+  assert.equal(reserveCents({ ...quote, group_ratio: {} }, 'gpt-fixture'), null);
 });
 
 test('syndicated mentions and model-like instructions establish no traffic or acquisition gate', async () => {

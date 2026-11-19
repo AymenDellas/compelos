@@ -5,7 +5,7 @@ import { Pool } from 'pg';
 import { modelAdvisory, readOrReserve } from '../../src/lib/origin/model';
 import { decide, defaults, emptyCheckpoint, finding, gateNames, observe } from '../../src/lib/origin/policy';
 import { artifact, dossier, overview, readyOpportunities } from '../../src/lib/origin/read-model';
-import { claimRun, control, finish, migrate, nextJob, recentPublisherEvidence, release, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
+import { claimRun, control, finish, migrate, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
 import { official, seed, source } from './fixtures';
 
 test('PostgreSQL fences interrupted stages, deduplicates identities, enforces budgets and serves only current qualified opportunities', {
@@ -28,6 +28,13 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     const run = (await claimRun(pool))!;
     assert.ok(run);
     assert.equal(await claimRun(pool), null);
+    let searches = 0;
+    const search = async () => { searches++; return ['https://coach.test/']; };
+    assert.deepEqual(await runSearch(pool, run, 'fixture:1', search), ['https://coach.test/']);
+    assert.deepEqual(await runSearch(pool, run, 'fixture:1', search), ['https://coach.test/']);
+    await assert.rejects(runSearch(pool, run, 'fixture:2', async () => { searches++; throw new Error('Response lost'); }), /Response lost/);
+    assert.equal(await runSearch(pool, run, 'fixture:2', search), undefined);
+    assert.equal(searches, 2);
     const wikidata = { ...seed, method: 'Wikidata' as const, sourceKey: 'wikidata:Q12345' };
     const publisher = { ...source('publisher-two.test', 'board development'), permission: 'https://publisher-two.test/terms' };
     await saveDiscovery(pool, run, [wikidata, publisher,
@@ -38,6 +45,7 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     assert.equal((await pool.query('SELECT 1 FROM origin_businesses')).rowCount, 1);
     assert.equal(await control(pool, run.id, 'pause'), true);
     assert.equal(await control(pool, run.id, 'resume'), true);
+    assert.equal(await runSearch(pool, run, 'fixture:3', search), undefined);
     assert.equal(await saveStage(pool, run, job, emptyCheckpoint(), 'INVESTIGATING'), null);
     await pool.query("UPDATE origin_runs SET lease_until=now()-interval '1 second' WHERE id=$1", [run.id]);
     const recovered = (await claimRun(pool))!;

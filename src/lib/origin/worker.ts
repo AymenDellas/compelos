@@ -1,18 +1,18 @@
 import type { Pool } from 'pg';
 import { discoverPublicationPointers, gdeltCredits, publicationAdapter, verifyPublications } from './auto-publishers';
-import { activitySearchName, businessSearchCredit, businessSearchName, createActivitySearch, createBusinessSearch } from './business-search';
+import { activitySearchName, businessSearchCredit, businessSearchName, campaignSearchName, createActivitySearch, createBusinessSearch, createCampaignSearch, createEvidenceFollowUp } from './business-search';
 import { discover, feed, niches, wikidata } from './discovery';
 import type { Adapter } from './discovery';
 import { modelAdvisory } from './model';
 import { decide, domain } from './policy';
-import type { SourceResult } from './policy';
+import type { PublisherPointer, Seed, SourceResult } from './policy';
 import { createPublicWeb } from './public-web';
 import type { PublicWeb } from './public-web';
 import { hasSchema } from './read-model';
 import { coachingContracts, procurementAdapter, procurementCredit, tenderAdapter } from './procurement';
-import { enrichAcquisition, investigate, resolveBusiness, verifyOpportunity } from './research';
+import { enrichAcquisition, enrichCommercial, investigate, resolveBusiness, verifyOpportunity } from './research';
 import { approvedFeeds } from './sources';
-import { claimRun, failStage, finish, newPublishedBusinesses, nextJob, recentPublisherEvidence, recentSearchDomains, recentWikiPointers, release, revisit, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
+import { claimRun, failStage, finish, newPublishedBusinesses, nextJob, recentPublisherEvidence, recentSearchDomains, recentWikiPointers, release, revisit, runSearch, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
 import type { Run, SourceQuality } from './store';
 
 type Limiter = <T>(run: () => Promise<T>) => Promise<T>;
@@ -34,6 +34,8 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
   const web = options.web ?? createPublicWeb(limitRequest);
   const search = options.web ? undefined : createBusinessSearch();
   const activitySearch = options.web ? undefined : createActivitySearch();
+  const campaignSearch = options.web ? undefined : createCampaignSearch();
+  const followUp = options.web ? undefined : createEvidenceFollowUp();
   let nextProbe = 0;
   let ready = false;
   let probeCount = 0;
@@ -49,22 +51,38 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
     const limit = run.config.candidateLimit;
     const hold = (name: string) => history.find(item => item.adapter === name && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
     const adapters: Adapter[] = [];
+    const recentDomains = new Set(search ? await recentSearchDomains(pool) : []);
+    const batch = <T,>(name: string, count: number, lookup: (index: number, signal: AbortSignal) => Promise<T[]>,
+      reduce: (results: T[][]) => ReturnType<Adapter['run']>) => {
+      const previous = history.find(item => item.adapter === name && item.queryIndex !== undefined)?.queryIndex ?? -1;
+      const adapter: Adapter = { name, credit: businessSearchCredit, queryIndex: previous + count, retryAt: hold(name), run: async () => {
+        const results: T[][] = [];
+        for (let start = 1; start <= count && !signal.aborted; start += 3) {
+          const keys = Array.from({ length: Math.min(count - start + 1, 3) }, (_, index) => previous + start + index);
+          const queries = await Promise.allSettled(keys.map(index => limitRequest(() => runSearch(pool, run, `${name}:${index}`,
+            () => lookup(index, perSource(signal, 14_000))))));
+          for (const outcome of queries) if (outcome.status === 'fulfilled' && outcome.value) results.push(outcome.value);
+          const failure = queries.find(outcome => outcome.status === 'rejected');
+          if (failure) {
+            if (!results.length) throw failure.reason;
+            break;
+          }
+        }
+        adapter.searches = results.length;
+        return reduce(results);
+      } };
+      adapters.push(adapter);
+    };
+    const ranked = async (groups: Seed[][]) => Array.from({ length: 10 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : []))
+      .flat().filter(seed => !recentDomains.has(domain(seed.website)));
     if (search) {
-      const previousQuery = history.find(item => item.adapter === businessSearchName && item.queryIndex !== undefined)?.queryIndex;
-      const queryIndex = (previousQuery ?? -1) + 1;
-      adapters.push({ name: businessSearchName, credit: businessSearchCredit, queryIndex, retryAt: hold(businessSearchName), run: async () => {
-        const recent = new Set(await recentSearchDomains(pool));
-        const ranked = await limitRequest(() => search(queryIndex, 10, perSource(signal, 15_000)));
-        return ranked.filter(seed => !recent.has(domain(seed.website))).slice(0, Math.ceil(run.config.candidateLimit / 2));
-      } });
+      batch(businessSearchName, Math.max(3, Math.ceil(limit / 5)), (index, requestSignal) => search(index, 10, requestSignal), ranked);
     }
+    if (campaignSearch) batch(campaignSearchName, Math.max(2, Math.ceil(limit / 12)),
+      (index, requestSignal) => campaignSearch(index, run.config.activityDays, requestSignal), ranked);
     if (activitySearch) {
-      const previousQuery = history.find(item => item.adapter === activitySearchName && item.queryIndex !== undefined)?.queryIndex;
-      const queryIndex = (previousQuery ?? -1) + 1;
-      adapters.push({ name: activitySearchName, credit: businessSearchCredit, queryIndex, retryAt: hold(activitySearchName), run: async () => {
-        const pointers = await limitRequest(() => activitySearch(queryIndex, run.config.activityDays, perSource(signal, 15_000)));
-        return verifyPublications(web, pointers, run.config.activityDays, perSource(signal, 16_000), 5);
-      } });
+      batch<PublisherPointer>(activitySearchName, 2, (index, requestSignal) => activitySearch(index, run.config.activityDays, requestSignal),
+        groups => verifyPublications(web, groups.flat(), run.config.activityDays, perSource(signal, 20_000), 10));
     }
     for (const [index, name] of [['contracts', procurementAdapter], ['tender', tenderAdapter]] as const) {
       const probes = history.filter(item => item.adapter === name && item.status === 'OK').length;
@@ -133,23 +151,42 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
     if (!run) { nextProbe = Date.now() + 12_000; return false; }
     const signal = perSource(shutdown.signal, Math.max(1, Math.min(74_000, run.deadline_at.getTime() - Date.now())));
     try {
-      if (!run.sources) await discovery(run, signal);
+      if (!run.sources) {
+        try { await discovery(run, signal); }
+        catch (error) { if (!signal.aborted) throw error; }
+      }
       else {
         const job = await nextJob(pool, run);
         if (!job) await finish(pool, run, run.sources.every(source => source.status !== 'OK' || !source.discovered) &&
           run.sources.some(source => source.status === 'FAILED') ? 'A discovery source was unavailable. See Discovery for its latest status.' : undefined);
         else try {
+          const startedAt = Date.now();
           if (job.stage === 'RESOLVING') {
             const { checkpoint, done } = await resolveBusiness(web, job, signal);
+            checkpoint.stageMs = { ...checkpoint.stageMs, resolve: Date.now() - startedAt };
             await saveStage(pool, run, job, checkpoint, done ? decide(checkpoint.gates, checkpoint.evidence) : 'INVESTIGATING');
           } else if (job.stage === 'INVESTIGATING') {
-            const { checkpoint, artifacts } = await investigate(web, job, run.config, signal);
+            const { checkpoint, artifacts } = await investigate(web, job, run.config, signal, !options.web);
+            checkpoint.stageMs = { ...checkpoint.stageMs, investigate: Date.now() - startedAt };
             await saveStage(pool, run, job, checkpoint, checkpoint.gates.some(gate => gate.state === 'CONTRADICTED')
               ? decide(checkpoint.gates, checkpoint.evidence) : 'VERIFYING', artifacts);
           } else {
             const publications = await enrichAcquisition(web, job, run.config, signal);
             const checkpoint = await verifyOpportunity(web, job, signal, run.config.browser);
             await modelAdvisory(pool, run, job, checkpoint, signal);
+            const passed = new Set(checkpoint.gates.filter(item => item.state === 'VERIFIED').map(item => item.name));
+            const suggestion = checkpoint.advisory?.assessment;
+            const purpose = !passed.has('substance') && (suggestion === 'VERIFY_COMMERCIAL_EVIDENCE' || passed.has('opportunity')) ? 'case' :
+              !passed.has('acquisition') && (suggestion === 'VERIFY_ACQUISITION_ACTIVITY' || passed.has('substance') || passed.has('contact')) ? 'campaign' : null;
+            if (followUp && purpose && !signal.aborted && passed.has('niche') && passed.has('geography')) {
+              try {
+                const evidenceBudget = perSource(signal, 16_000);
+                const urls = await limitRequest(() => runSearch(pool, run, `follow-up:${purpose}:${job.domain}`, () => followUp(job.domain, run.config.activityDays, purpose, evidenceBudget)));
+                if (urls?.length && purpose === 'campaign') await enrichAcquisition(web, { ...job, seeds: [...job.seeds, ...publications] }, run.config, evidenceBudget, urls);
+                if (urls?.length && purpose === 'case') await enrichCommercial(web, job, urls, evidenceBudget);
+              } catch { /* Retain the checkpoint when a bounded follow-up is unavailable. */ }
+            }
+            checkpoint.stageMs = { ...checkpoint.stageMs, verify: Date.now() - startedAt };
             await saveStage(pool, run, job, checkpoint, decide(checkpoint.gates, checkpoint.evidence), [], publications);
           }
         } catch (error) {

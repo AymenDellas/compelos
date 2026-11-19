@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
-export const POLICY_VERSION = 'origin-v5';
+export const POLICY_VERSION = 'origin-v6';
+export const MAX_CANDIDATES = 72;
+export const MAX_RUN_MINUTES = 75;
 export const gateNames = ['identity', 'niche', 'geography', 'substance', 'acquisition', 'opportunity', 'contact'] as const;
 export type GateName = typeof gateNames[number];
 export type Outcome = 'QUALIFIED' | 'UNRESOLVED' | 'REJECTED';
@@ -9,8 +11,8 @@ export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLI
 
 export const settingsSchema = z.object({
   intervalMinutes: z.number().int().min(60).max(43_200).nullable(),
-  candidateLimit: z.number().int().min(1).max(24),
-  runMinutes: z.number().int().min(2).max(30),
+  candidateLimit: z.number().int().min(1).max(MAX_CANDIDATES),
+  runMinutes: z.number().int().min(2).max(MAX_RUN_MINUTES),
   browser: z.boolean(),
   activityDays: z.number().int().min(30).max(180),
   runBudgetCents: z.number().int().min(0).max(10_000),
@@ -20,7 +22,7 @@ export const settingsSchema = z.object({
 }).strict();
 export type Settings = z.infer<typeof settingsSchema>;
 export const defaults: Settings = {
-  intervalMinutes: null, candidateLimit: 8, runMinutes: 10, browser: true, activityDays: 120,
+  intervalMinutes: null, candidateLimit: 36, runMinutes: 30, browser: true, activityDays: 120,
   runBudgetCents: 200, dailyBudgetCents: 600, monthlyBudgetCents: 2500, modelCalls: 0,
 };
 
@@ -38,6 +40,7 @@ export type Seed = {
   publisher?: string;
   publisherLinks?: string[];
   discoveryPriority?: number;
+  activityLinks?: string[];
   contract?: { amountGbp: number; awardedOn: string; buyer?: string };
   publication?: { checkedAt: string; permissionPage: string; digest: string; use?: 'FACTS_ONLY'; title?: string; recordUrl?: string };
 };
@@ -94,7 +97,7 @@ export function decide(findings: Gate[], evidence: Evidence[], now = Date.now())
 export type Decision = ReturnType<typeof decide>;
 
 export type SourceResult = { adapter: string; discovered: number; elapsedMs: number; status: 'OK' | 'FAILED' | 'DEFERRED'; code?: string; retryAt?: string;
-  publisherAudit?: PublisherAudit[]; credit?: string; queryIndex?: number };
+  publisherAudit?: PublisherAudit[]; credit?: string; queryIndex?: number; searches?: number };
 export type PublisherAudit = { url: string; code: string; records: number; license?: string; publisher?: string; use?: 'FACTS_ONLY'; checkedTerms?: string[] };
 export type PublisherPointer = { url: string; name?: string; website?: string; viaOfficial?: boolean };
 
@@ -113,11 +116,15 @@ export type Checkpoint = {
   advisory?: { assessment: string; evidence: string };
   breakage?: { url: string; from: string; label: string; status: number; evidence: string; alternatives: boolean; soft?: boolean };
   bookingMismatch?: { url: string; destination: string; from: string; promised: number; listed: number; evidence: string[] };
+  inquiryMismatch?: { url: string; destination: string; from: string; label: string; evidence: string[]; kind?: 'message' | 'fee' };
+  missingBookingSection?: { url: string; fragment: string; label: string; evidence: string };
   funnel?: { found: number; tested: number; interactive: boolean };
   acquisitionSources?: number;
   ownedActivities?: { date: string; evidence: Evidence }[];
+  ownedFeeds?: string[];
   publisherPointers?: PublisherPointer[];
   publisherAudit?: PublisherAudit[];
   mediaPage?: string;
+  stageMs?: Partial<Record<'resolve' | 'investigate' | 'verify', number>>;
 };
 export const emptyCheckpoint = (): Checkpoint => ({ evidence: [], gates: [], journey: [] });

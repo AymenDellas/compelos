@@ -8,7 +8,7 @@ import { discoverPublicationPointers, gdeltCredits, publicationAdapter, verifyPu
 import { evaluate, evaluations } from '../src/lib/origin/evaluation';
 import { readModelConfig } from '../src/lib/origin/model';
 import { agentOnline, followRun, notifyAgent } from '../src/lib/origin/operations';
-import { defaults, domain, hash, POLICY_VERSION, settingsSchema } from '../src/lib/origin/policy';
+import { defaults, domain, hash, MAX_CANDIDATES, MAX_RUN_MINUTES, POLICY_VERSION, settingsSchema } from '../src/lib/origin/policy';
 import type { Settings } from '../src/lib/origin/policy';
 import { coachingContracts, procurementAdapter, procurementCredit, tenderAdapter } from '../src/lib/origin/procurement';
 import { createPublicWeb, documentUrl, PublicFailure } from '../src/lib/origin/public-web';
@@ -24,8 +24,8 @@ const uuid = z.string().uuid();
 const active = ['QUEUED', 'RUNNING', 'PAUSED'];
 const commands = {
   help: [], migrate: [], status: [], doctor: ['strict'],
-  start: ['limit', 'minutes', 'no-browser', 'qualification'],
-  run: ['limit', 'minutes', 'no-browser', 'qualification', 'timeout', 'require-qualified', 'quiet'],
+  start: ['limit', 'minutes', 'model-calls', 'no-browser', 'qualification'],
+  run: ['limit', 'minutes', 'model-calls', 'no-browser', 'qualification', 'timeout', 'require-qualified', 'quiet'],
   work: ['timeout', 'require-qualified', 'quiet'], wait: ['timeout', 'require-qualified', 'quiet'],
   pause: [], resume: [], cancel: [], runs: ['limit'], 'show-run': [],
   investigations: ['run', 'outcome', 'limit'], opportunities: ['run', 'limit'], dossier: [], evidence: [], artifact: ['output'],
@@ -58,7 +58,7 @@ Usage: node origin.cjs <command> [arguments] [options]
                                          Run a private, isolated evaluation and record its summary
   evaluations [--limit N]                 Inspect stored benchmark summaries
 
-Start/run overrides: --limit 1..24 --minutes 2..30 --no-browser.
+Start/run overrides: --limit 1..${MAX_CANDIDATES} --minutes 2..${MAX_RUN_MINUTES} --model-calls 0..5 --no-browser.
 Run/work/wait options: --timeout seconds --quiet --require-qualified.
 Every run discovers its sources automatically and applies the same qualification gates.
 Commands emit JSON. Run progress goes to stderr. Ctrl+C leaves saved checkpoints available.`;
@@ -122,7 +122,7 @@ async function inspectSources(pool: Pool, signal: AbortSignal) {
 
 async function main(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, strict: true, options: {
-    help: { type: 'boolean', short: 'h' }, limit: { type: 'string' }, minutes: { type: 'string' }, timeout: { type: 'string' },
+    help: { type: 'boolean', short: 'h' }, limit: { type: 'string' }, minutes: { type: 'string' }, timeout: { type: 'string' }, 'model-calls': { type: 'string' },
     'no-browser': { type: 'boolean' }, qualification: { type: 'boolean' }, quiet: { type: 'boolean' }, strict: { type: 'boolean' },
     'require-qualified': { type: 'boolean' }, run: { type: 'string' }, outcome: { type: 'string' }, output: { type: 'string' }, publisher: { type: 'string' },
   } });
@@ -170,7 +170,7 @@ async function main(argv: string[]) {
     if (command === 'benchmark' || command === 'acceptance') {
       const kind = command === 'acceptance' ? 'live' : operand;
       if (kind !== 'fixture' && kind !== 'live') throw new CommandError('Select benchmark fixture or benchmark live.');
-      const report = await runBenchmark(pool, connection, kind, limit(12, 24), signal);
+      const report = await runBenchmark(pool, connection, kind, limit(defaults.candidateLimit, MAX_CANDIDATES), signal);
       print(report);
       if (!report.operational || (kind === 'fixture' && !report.passed)) return 4;
       if ((command === 'acceptance' && !report.deliveryTargetMet) || (values['require-qualified'] && !report.published)) return 5;
@@ -179,8 +179,9 @@ async function main(argv: string[]) {
     if (command === 'start' || command === 'run') {
       await migrate(pool);
       const override: Partial<Settings> = {};
-      if (values.limit !== undefined) override.candidateLimit = limit(8, 24);
-      if (values.minutes !== undefined) override.runMinutes = parseNumber(values.minutes, 10, 2, 30, 'Run minutes');
+      if (values.limit !== undefined) override.candidateLimit = limit(defaults.candidateLimit, MAX_CANDIDATES);
+      if (values.minutes !== undefined) override.runMinutes = parseNumber(values.minutes, defaults.runMinutes, 2, MAX_RUN_MINUTES, 'Run minutes');
+      if (values['model-calls'] !== undefined) override.modelCalls = parseNumber(values['model-calls'], defaults.modelCalls, 0, 5, 'Model calls');
       if (values['no-browser']) override.browser = false;
       const id = await start(pool, override);
       if (!id) throw new CommandError('An ORIGIN run is already active. Use work active, wait active, or cancel active.');

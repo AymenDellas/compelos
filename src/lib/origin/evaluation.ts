@@ -6,6 +6,13 @@ import { modelUsage, runSummary } from './read-model';
 export async function evaluate(pool: Pool, runId: string) {
   const run = await runSummary(pool, runId);
   if (!run) return null;
+  const hasProviderStatus = (await pool.query("SELECT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='origin_model_usage'::regclass AND attname='provider_status' AND NOT attisdropped) AS available")).rows[0].available;
+  const modelActivity = (await pool.query(`SELECT model,status,${hasProviderStatus ? 'provider_status' : 'NULL AS provider_status'},count(*)::int AS requests,
+    sum(provider_tokens)::int AS tokens,sum(reserved_cents)::int AS reserved_cents
+    FROM origin_model_usage WHERE run_id=$1 GROUP BY model,status${hasProviderStatus ? ',provider_status' : ''} ORDER BY model,status`, [runId])).rows;
+  const hasSearchReceipts = (await pool.query("SELECT to_regclass('origin_search_receipts') IS NOT NULL AS available")).rows[0].available;
+  const searchActivity = hasSearchReceipts ? (await pool.query(`SELECT status,count(*)::int AS requests
+    FROM origin_search_receipts WHERE run_id=$1 GROUP BY status ORDER BY status`, [runId])).rows : [];
   const { rows } = await pool.query<{ id: string; name: string; domain: string; decision: Decision | null; stage: string; artifacts: number; checkpoint: Checkpoint; seeds: Seed[] }>(`
     SELECT j.id,b.name,b.domain,j.decision,j.stage,j.checkpoint,j.seeds,
     (SELECT count(*)::int FROM origin_artifacts a WHERE a.investigation_id=j.id AND a.image IS NOT NULL) AS artifacts
@@ -39,9 +46,13 @@ export async function evaluate(pool: Pool, runId: string) {
       artifacts: row.artifacts,
       blockers: row.decision?.gates.filter(gate => gate.state !== 'VERIFIED') ?? [] };
   });
+  const stageWork = Object.fromEntries((['resolve', 'investigate', 'verify'] as const).map(stage => {
+    const samples = rows.flatMap(row => row.checkpoint.stageMs?.[stage] === undefined ? [] : [row.checkpoint.stageMs[stage]!]);
+    return [stage, { checkpoints: samples.length, elapsedMs: samples.reduce((sum, item) => sum + item, 0) }];
+  }));
   return {
     run, gates, publisherChecks, blockers: [...blockers.values()].sort((a, b) => b.count - a.count || a.gate.localeCompare(b.gate)),
-    investigated: rows.length, captures: rows.reduce((sum, row) => sum + row.artifacts, 0), usage: await modelUsage(pool, runId),
+    investigated: rows.length, captures: rows.reduce((sum, row) => sum + row.artifacts, 0), usage: await modelUsage(pool, runId), stageWork, modelActivity, searchActivity,
     investigationCoverage: { businessPagesRead: results.filter(row => row.pages.some(page => page.result === 'READABLE')).length,
       bookingDestinationsRead: results.reduce((count, row) => count + row.booking.observations.length, 0),
       bookingDestinationsRechecked: results.filter(row => row.booking.rechecked).length },

@@ -7,7 +7,7 @@ import type { PublisherAudit, Seed, SourceResult } from './policy';
 import type { PublisherFeed } from './sources';
 
 export const niches = ['executive coach', 'leadership coach', 'business coach', 'career coach'];
-export const relevantCoach = /\b(?:executive|leadership|business|career|professional development)(?: (?:and|&) (?:executive|leadership|business|career))?\s+coach(?:es|ing)?\b|\bcoach(?:es|ing)?\s+for (?:[\w-]+ ){0,2}(?:executives|founders|leaders|business owners)\b/i;
+export const relevantCoach = /\b(?:executive(?: team)?|leadership(?: team)?|business|career|CEO|founder|professional development)(?: (?:and|&) (?:executive|leadership|business|career))?\s+coach(?:es|ing)?\b|\bcoach(?:es|ing)?\s+for (?:[\w-]+ ){0,2}(?:executives|founders|leaders|business owners)\b/i;
 const wikidataHost = 'www.wikidata.org';
 const wikiUrl = (parameters: Record<string, string>) => `https://${wikidataHost}/w/api.php?${new URLSearchParams({ format: 'json', maxlag: '5', ...parameters })}`;
 const qid = z.string().regex(/^Q[1-9]\d{0,14}$/);
@@ -91,7 +91,7 @@ export async function feed(web: PublicWeb, publisher: PublisherFeed, limit: numb
   }).slice(0, limit);
 }
 
-export type Adapter = { name: string; run: () => Promise<Seed[] | { seeds: Seed[]; audit: PublisherAudit[] }>; retryAt?: string; deferred?: string; credit?: string; queryIndex?: number };
+export type Adapter = { name: string; run: () => Promise<Seed[] | { seeds: Seed[]; audit: PublisherAudit[] }>; retryAt?: string; deferred?: string; credit?: string; queryIndex?: number; searches?: number };
 
 export async function discover(adapters: Adapter[], limit: number, historical: Seed[] = []) {
   const observations = await Promise.all(adapters.map(async (adapter): Promise<{ seeds: Seed[]; status: SourceResult }> => {
@@ -105,12 +105,12 @@ export async function discover(adapters: Adapter[], limit: number, historical: S
       const found = Array.isArray(content) ? content : content.seeds;
       return { seeds: found.map(seed => ({ ...seed, adapter: seed.adapter ?? adapter.name })), status: {
         adapter: adapter.name, status: 'OK', discovered: found.length, elapsedMs: Date.now() - before,
-        publisherAudit: Array.isArray(content) ? undefined : content.audit, credit: adapter.credit, queryIndex: adapter.queryIndex,
+        publisherAudit: Array.isArray(content) ? undefined : content.audit, credit: adapter.credit, queryIndex: adapter.queryIndex, searches: adapter.searches,
       } };
     } catch (error) {
       const code = error instanceof PublicFailure ? error.code : error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name) ? 'TIMEOUT' : 'SOURCE_UNAVAILABLE';
       return { seeds: [], status: { adapter: adapter.name, status: 'FAILED', discovered: 0, elapsedMs: Date.now() - before,
-        code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined, credit: adapter.credit, queryIndex: adapter.queryIndex } };
+        code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined, credit: adapter.credit, queryIndex: adapter.queryIndex, searches: adapter.searches } };
     }
   }));
   const results = observations.map(observation => observation.status);

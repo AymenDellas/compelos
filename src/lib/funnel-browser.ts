@@ -65,9 +65,11 @@ export type RenderedPage = {
   incompleteAssets: boolean;
   elementCaptures: Record<string, string>;
   bookingDialogs?: BookingDialog[];
+  missingBookingSections?: MissingBookingSection[];
 };
 
 type BookingDialog = { device: FunnelScreenshot['device']; label: string; heading: string; hasForm: boolean };
+type MissingBookingSection = { device: FunnelScreenshot['device']; label: string; fragment: string };
 
 type CaptureTarget = { index: number; top: number; section: NonNullable<FunnelScreenshot["section"]>; priority: number };
 
@@ -231,6 +233,7 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
       // Inspect at most one declared in-page dialog per viewport with every new
       // request blocked. Keep the original viewport captures for the dossier.
       let bookingDialog: BookingDialog | undefined;
+      let missingBookingSection: MissingBookingSection | undefined;
       if (options.inspectBookingDialogs && signal.aborted === false) {
         networkDisabled = true;
         const result = await page.evaluate(async () => {
@@ -251,8 +254,28 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
           return { label, heading, hasForm: Boolean(target.querySelector('form')?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) };
         }).catch(() => null);
         if (result && page.url() === documentUrl) bookingDialog = { ...result, device };
+        if (!result && page.url() === documentUrl) {
+          const missing = await page.evaluate(async () => {
+            const links = [...document.querySelectorAll<HTMLAnchorElement>('main a[href^="#"],article a[href^="#"]')];
+            const link = links.find(item => /^(?:book|schedule)\b.{0,50}\b(?:call|session|consultation|meeting)\b/i.test(item.innerText.trim()) &&
+              /^#[a-z][a-z\d_-]{2,70}$/i.test(item.hash) && !item.matches('[onclick],[aria-controls],[data-toggle],[data-bs-toggle]') &&
+              item.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) && !document.getElementById(item.hash.slice(1)) && !document.getElementsByName(item.hash.slice(1)).length);
+            if (!link || location.hash === link.hash) return null;
+            const controls = [...document.querySelectorAll('form,dialog,[role="dialog"],iframe')];
+            const previouslyVisible = controls.filter(item => item.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+            const label = link.innerText.trim().slice(0, 100);
+            const fragment = link.hash;
+            link.click();
+            await new Promise(resolve => setTimeout(resolve, 180));
+            const opened = [...document.querySelectorAll('form,dialog,[role="dialog"],iframe')].some(item => !previouslyVisible.includes(item) &&
+              item.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+            return location.hash === fragment && !opened && !document.getElementById(fragment.slice(1)) && !document.getElementsByName(fragment.slice(1)).length
+              ? { label, fragment } : null;
+          }).catch(() => null);
+          if (missing && page.url().split('#')[0] === documentUrl) missingBookingSection = { ...missing, device };
+        }
       }
-      return { url: finalUrl, html, screenshots, elementCaptures, incompleteAssets, bookingDialog };
+      return { url: finalUrl, html, screenshots, elementCaptures, incompleteAssets, bookingDialog, missingBookingSection };
     } finally {
       signal.removeEventListener("abort", close);
       await context.close().catch(() => {});
@@ -273,6 +296,7 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
         url: page.url, html: page.html, screenshots,
         elementCaptures: page.elementCaptures,
         bookingDialogs: views.flatMap(view => view.url === page.url && view.bookingDialog ? [view.bookingDialog] : []),
+        missingBookingSections: views.flatMap(view => view.url === page.url && view.missingBookingSection ? [view.missingBookingSection] : []),
         unavailable: (["desktop", "mobile"] as const).filter((device) => !screenshots.some((shot) => shot.device === device && !shot.section)),
         incompleteAssets: views.some((view) => view.incompleteAssets),
       };

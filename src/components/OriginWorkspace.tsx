@@ -97,6 +97,12 @@ export default function OriginWorkspace() {
               <td>{(run.counts.QUALIFIED ?? 0) + (run.counts.REJECTED ?? 0) + (run.counts.UNRESOLVED ?? 0)}</td><td>{stamp(run.finished_at)}</td>
             </tr>)}</tbody></table></div> : <p className="origin-empty">There are no investigation runs yet.</p>}
         </section>
+        {!!data.gateProgress?.length && <section className="origin-section">
+          <div className="origin-heading"><h2>Latest run evidence</h2></div>
+          <div className="origin-scroll"><table><thead><tr><th>Requirement</th><th>Examined</th><th>Verified</th><th>Unresolved</th><th>Contradicted</th></tr></thead>
+            <tbody>{data.gateProgress.map(gate => <tr key={gate.name}><td>{human(gate.name)}</td><td>{gate.reached}</td><td>{gate.verified}</td>
+              <td>{gate.held}</td><td>{gate.contradicted}</td></tr>)}</tbody></table></div>
+        </section>}
       </>}
       {tab === 'Discovery' && <Discovery data={data} />}
       {tab === 'Opportunities' && <Opportunities data={data} open={setDossierId} />}
@@ -106,7 +112,7 @@ export default function OriginWorkspace() {
         <section className="origin-section">
           <div className="origin-heading"><h2>Operations</h2>{active && <RunActions run={active} busy={busy} mutate={mutate} />}</div>
           <dl className="origin-detail"><dt>Worker heartbeat</dt><dd>{stamp(data.worker_seen_at)}</dd><dt>Scheduled run</dt><dd>{data.next_run_at ? stamp(data.next_run_at) : 'Disabled'}</dd>
-            <dt>AgentRouter</dt><dd>{data.configured ? 'Configured' : 'No verified per-request cost ceiling configured'}</dd>
+            <dt>AgentRouter</dt><dd>{data.configured ? 'Configured. Pricing is checked before dispatch.' : 'Provider configuration unavailable'}</dd>
             <dt>Requests reserved today</dt><dd>{data.usage.calls}</dd><dt>Budget reserved today</dt><dd>{money(data.usage.reserved_cents)}</dd>
             <dt>Provider-reported cost</dt><dd>{data.usage.provider_cents == null ? 'Unavailable' : money(data.usage.provider_cents)}</dd>
             <dt>Provider-reported tokens</dt><dd>{data.usage.tokens ?? 'Unavailable'}</dd><dt>Last provider status</dt><dd>{data.usage.last_status ? human(data.usage.last_status) : 'No requests'}</dd>
@@ -265,8 +271,8 @@ function SettingsForm({ config, busy, save }: { config: Settings; busy: boolean;
   return <form className="origin-section" onSubmit={submit}><div className="origin-heading"><h2>Research settings</h2></div>
     <div className="origin-fields">
       <label>Schedule interval (minutes)<input name="intervalMinutes" type="number" min="60" max="43200" placeholder="Off" defaultValue={config.intervalMinutes ?? ''} /></label>
-      <label>Candidates per run<input required name="candidateLimit" type="number" min="1" max="24" defaultValue={config.candidateLimit} /></label>
-      <label>Time budget (minutes)<input required name="runMinutes" type="number" min="2" max="30" defaultValue={config.runMinutes} /></label>
+      <label>Candidates per run<input required name="candidateLimit" type="number" min="1" max="72" defaultValue={config.candidateLimit} /></label>
+      <label>Time budget (minutes)<input required name="runMinutes" type="number" min="2" max="75" defaultValue={config.runMinutes} /></label>
       <label>Acquisition lookback (days)<input required name="activityDays" type="number" min="30" max="180" defaultValue={config.activityDays} /></label>
       <label>Model requests per run<input required name="modelCalls" type="number" min="0" max="5" defaultValue={config.modelCalls} /></label>
       <label>Per-run budget (USD)<input required name="runBudgetCents" type="number" min="0" max="100" step="0.01" defaultValue={config.runBudgetCents / 100} /></label>

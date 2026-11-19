@@ -88,9 +88,14 @@ function pageMetadata(html: string, url: string) {
     if (!link || domain(link) !== domain(url)) return false;
     return new URL(link).pathname.replace(/\/$/, '') === new URL(url).pathname.replace(/\/$/, '');
   };
-  const scoped = graph.filter(node => typeOf(node, recordTypes) &&
+  const records = graph.filter(node => typeOf(node, recordTypes));
+  const scoped = records.filter(node =>
     [node.url, node['@id'], node.mainEntityOfPage, ...objects(node.mainEntityOfPage).map(item => item['@id'] ?? item.url)]
       .some(samePage));
+  const articleTitle = clean($('main h1,article h1,h1').first().text());
+  const matching = records.filter(node => typeOf(node, /^(?:Article|NewsArticle|BlogPosting|Interview|PodcastEpisode|Event|BusinessEvent|EducationEvent)$/i) &&
+    !node.url && !node.mainEntityOfPage && normalizedName(string(node.headline ?? node.name)) === normalizedName(articleTitle));
+  if (!scoped.length && canonical && samePage(canonical) && articleTitle && matching.length === 1) scoped.push(matching[0]);
   const declaredLicenses = [...$('head link[rel~="license"]').toArray().map(node => $(node).attr('href')),
     ...$('article a[rel~="license"]').toArray().flatMap(node => {
       const context = clean($(node).closest('p').text());
@@ -114,7 +119,7 @@ function pageMetadata(html: string, url: string) {
   const verifiedNames = [...new Map(publisherNames.filter(name => name.length >= 3 && name.length <= 100).map(name => [normalizedName(name), name])).values()];
   const publisher = verifiedNames.length === 1 ? verifiedNames[0] : !verifiedNames.length && masthead && siteName.length >= 3 && siteName.length <= 100 ? siteName : null;
   const title = clean(string($('head meta[property="og:title"]').attr('content')) || string(scoped[0]?.headline) || $('main h1, article h1, h1').first().text()).slice(0, 220);
-  const explicit = (role: string) => scoped.flatMap(node => objects(node[role]).filter(person => typeOf(person, /^Person$/i)));
+  const explicit = (role: string) => scoped.flatMap(node => objects(node[role]).filter(person => typeOf(person, /^(?:Person|Organization|ProfessionalService)$/i)));
   const guests = [...explicit('performer'), ...explicit('guest'), ...scoped.filter(node => typeOf(node, /^PodcastEpisode$/i)).flatMap(node => objects(node.actor))];
   const people = guests.map(person => ({ name: clean(string(person.name)), site: publisherPointer(string(person.url)), job: string(person.jobTitle) }));
   for (const node of $('main a[itemprop~="performer"], article a[itemprop~="performer"], main a[rel~="author"], article a[rel~="author"]').slice(0, 8).toArray()) {
@@ -123,7 +128,7 @@ function pageMetadata(html: string, url: string) {
     if (target && relevantCoach.test(context)) people.push({ name: clean($(node).text()), site: publisherPointer(target), job: context });
   }
   const isEvent = scoped.some(node => typeOf(node, /Event$/i));
-  const markupDates = $('article time[itemprop="datePublished"][datetime], main time[itemprop="datePublished"][datetime], article header time[datetime]').slice(0, 6).toArray().map(node => $(node).attr('datetime'));
+  const markupDates = $('article time[itemprop="datePublished"][datetime], main time[itemprop="datePublished"][datetime], article header time[datetime], article time.published[datetime], main time.published[datetime]').slice(0, 6).toArray().map(node => $(node).attr('datetime'));
   const dates = (isEvent ? scoped.filter(node => typeOf(node, /Event$/i)).map(node => node.startDate) : [
     ...scoped.map(node => node.datePublished), $('head meta[property="article:published_time"]').first().attr('content'), ...markupDates,
   ]).map(textDate).filter((date): date is number => date !== null);

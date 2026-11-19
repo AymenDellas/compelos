@@ -22,3 +22,21 @@ test('ORIGIN opens a declared booking dialog without dispatching any new request
     await browser.close();
   }
 });
+
+test('the browser distinguishes a missing booking anchor from an existing section', { timeout: 35_000 }, async () => {
+  const url = 'https://coach.test/';
+  let section = '';
+  const browser = createFunnelBrowser(async requested => ({ url: requested, status: 200,
+    headers: { 'content-type': 'text/html' }, body: Buffer.from(`<main><h1>Executive coaching</h1><a href="#booking">Book a call</a>${section}</main>`) }),
+  AbortSignal.timeout(30_000), { inspectBookingDialogs: true });
+  try {
+    const broken = await browser.render(url, 'missing');
+    assert.equal(broken.missingBookingSections?.length, 2);
+    assert.ok(broken.missingBookingSections.every(item => item.fragment === '#booking'));
+    section = '<section id="booking"><h2>Schedule a call</h2></section>';
+    const corrected = await browser.render(url, 'present');
+    assert.deepEqual(corrected.missingBookingSections, []);
+  } finally {
+    await browser.close();
+  }
+});
