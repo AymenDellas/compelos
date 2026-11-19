@@ -5,7 +5,7 @@ import { Pool } from 'pg';
 import { modelAdvisory, readOrReserve } from '../../src/lib/origin/model';
 import { decide, defaults, emptyCheckpoint, finding, gateNames, observe } from '../../src/lib/origin/policy';
 import { artifact, dossier, overview, readyOpportunities } from '../../src/lib/origin/read-model';
-import { claimRun, control, finish, migrate, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
+import { claimRun, control, finish, migrate, nextJob, recentPublisherEvidence, release, revisit, runSearch, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
 import { official, seed, source } from './fixtures';
 
 test('PostgreSQL fences interrupted stages, deduplicates identities, enforces budgets and serves only current qualified opportunities', {
@@ -96,6 +96,13 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     assert.equal((await overview(pool)).usage.last_status, 'QUOTA');
     assert.equal(await readOrReserve(pool, metered, secondJob, 'fixture-model', 1, 'different', 30), null);
     assert.equal(decide(advisory.gates, advisory.evidence).outcome, 'QUALIFIED');
+
+    const needsIntake = { ...checkpoint, funnel: { found: 1, tested: 1, interactive: true },
+      gates: checkpoint.gates.map(gate => gate.name === 'opportunity' ? finding('opportunity', 'UNVERIFIED', 'Intake evidence missing.') : gate) };
+    await saveStage(pool, metered, secondJob, needsIntake, decide(needsIntake.gates, needsIntake.evidence));
+    assert.equal((await revisit(pool, 2)).find(record => record.method === 'IGNITION')?.discoveryPriority, 9);
+    await pool.query("UPDATE origin_investigations SET checkpoint=jsonb_set(checkpoint,'{funnel,comparedIntake}','true') WHERE id=$1", [secondJob.id]);
+    assert.deepEqual(await revisit(pool, 2), []);
   } finally {
     await pool.end();
     if (created) await admin.query(`DROP SCHEMA ${name} CASCADE`);

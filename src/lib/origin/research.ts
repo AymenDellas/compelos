@@ -43,7 +43,10 @@ type MarketStatement = { country: NonNullable<Checkpoint['country']>; evidence: 
 export type Page = { url: string; state: string; evidence: Evidence; identity: string; brand?: string; canonical: string | null;
   statements: string[]; headings: string[]; title: string; links: Link[]; contact: { address: string; context: string } | null;
   contactProhibited: boolean; bookingControl: boolean; markets: MarketStatement[]; missingPage: boolean; activityDates: string[]; activityAction?: string;
-  testimonials?: string[]; genericInquiry?: string; scheduling?: boolean; schedulerProblem?: string; feedUrl?: string };
+  testimonials?: string[]; genericInquiry?: string; consultationIntake?: string[]; informedIntake?: boolean;
+  scheduling?: boolean; schedulerProblem?: string; feedUrl?: string };
+
+const intakeDisclosure = /\b(?:(?:request|apply for) (?:an? |the |your )?(?:call|consultation|session|appointment)|application form|(?:we|I|our team) (?:will|'ll) (?:be in touch|contact you|reach out|respond|reply|follow up|get back to you)|(?:after|once) you submit|subject to (?:review|approval))\b/i;
 
 function linkedUrl(value: string, current: string) {
   try {
@@ -211,6 +214,25 @@ export function parseBusinessPage(html: string, url: string) {
     return element.is('input,[data-cal-link],[data-calendly-url]') || /calendly|acuityscheduling|cal\.com|schedule|select (?:a )?(?:date|time)/i.test([element.attr('src'), element.attr('aria-label'), element.text()].join(' '));
   }) || links.some(link => booking.test(link.label) || /\b(?:calendar|choose a time|book online)\b/i.test(link.label)) ||
     /calendly-inline-widget|acuity-embed|cal-embed|hubspot-meetings|meetings\.hubspot\.com/i.test(html);
+  const informedIntake = [title, ...headings, ...statements].some(value => intakeDisclosure.test(value));
+  const consultationIntake = !scheduling && !informedIntake ? read('form').slice(0, 6).toArray().flatMap(node => {
+    const form = $(node);
+    const labels = form.find('label[for]').toArray().map(label => [$(label).attr('for'), squash($(label).text()).replace(/\s*\*$/, '')] as const);
+    const byId = new Map(labels);
+    const context = squash(`${form.attr('aria-label') ?? ''} ${form.text()}`);
+    if (!/\b(?:initial|introductory|discovery|complimentary|strategy)\b.{0,55}\b(?:consultation|call|session)\b/i.test(context)) return [];
+    const fields = new Map<string, string>();
+    form.find('input[required],select[required],textarea[required],input[aria-required="true"],select[aria-required="true"],textarea[aria-required="true"]').each((_index, field) => {
+      const control = $(field);
+      if (control.is('[disabled],[readonly],[type="hidden"],[type="submit"],[type="button"]') || control.closest('fieldset[disabled]').length) return;
+      const label = control.closest('fieldset').find('legend').first().text() || byId.get(control.attr('id')) || control.attr('aria-label') || control.closest('label').text();
+      const key = control.is('[type="radio"],[type="checkbox"]') ? control.attr('name') : control.attr('id') || control.attr('name');
+      if (key && label) fields.set(key, squash(label).replace(/\s*\*$/, '').slice(0, 75));
+    });
+    const prompts = [...new Set(fields.values())];
+    return prompts.length >= 8 && prompts.some(label => /\b(?:current )?(?:employment|job title|job role|annual income)\b/i.test(label)) &&
+      prompts.some(label => /\b(?:address|city|state|province|post(?:al)? code|zip|country)\b/i.test(label)) ? [prompts] : [];
+  })[0] : undefined;
   $('main a[href^="mailto:"],article a[href^="mailto:"], address a[href^="mailto:"], a[href^="mailto:"]').each((_i, node) => {
     const a = $(node);
     const address = (a.attr('href') ?? '').slice(7).trim().toLowerCase();
@@ -237,7 +259,7 @@ export function parseBusinessPage(html: string, url: string) {
   const schedulerProblem = [title, ...headings.slice(0, 4), ...statements.slice(0, 12)].find(item =>
     /\b(?:this (?:calendly |booking |scheduling |meeting |event )?link (?:is no longer valid|is invalid|has expired|is not active)|this event type is (?:inactive|unavailable)|this calendly url is not valid|we couldn.t find (?:that|this) event)\b/i.test(item));
   return { identity, brand, canonical, statements, headings, title, links, contact, bookingControl, markets, missingPage, activityDates, activityAction: eventAction,
-    testimonials, genericInquiry, scheduling, schedulerProblem, feedUrl: feedUrl ?? undefined,
+    testimonials, genericInquiry, consultationIntake, informedIntake, scheduling, schedulerProblem, feedUrl: feedUrl ?? undefined,
     contactProhibited: forbidden.test(bodyText), challenged: challenge.test(`${title} ${bodyText.slice(0, 850)}`) };
 }
 
@@ -608,6 +630,11 @@ function bookingToInquiry(from: Page, link: Link, destination: Page) {
   if (!destination.scheduling && destination.genericInquiry) {
     return { kind: 'message' as const, evidence: [advertised, quote(destination, destination.genericInquiry, 'Generic message form at booking destination')] };
   }
+  if (!from.informedIntake && !destination.scheduling && destination.consultationIntake) {
+    const fields = destination.consultationIntake;
+    return { kind: 'intake' as const, evidence: [advertised, quote(destination,
+      `The consultation form requires ${fields.length} prompts before submission: ${fields.join(', ')}. No calendar or explained callback step was visible.`, 'Required consultation intake before date selection')] };
+  }
 }
 
 function offerOn(page: Page) {
@@ -735,7 +762,7 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   }
   const routes = [...routesByUrl.values()].filter(({ link }) => routeHost(link.url, job.domain)).slice(0, 3);
   const cta = routes[0]?.link;
-  checkpoint.funnel = { found: routesByUrl.size, tested: 0, interactive: prioritized.some(item => item.bookingControl) };
+  checkpoint.funnel = { found: routesByUrl.size, tested: 0, interactive: prioritized.some(item => item.bookingControl), comparedIntake: true };
   checkpoint.signature = { offer: hash(normalized(`${line ?? ''} ${engagement ?? ''}`)), booking: cta?.url ?? '' };
   if (job.signature) {
     const previousOffer = /^[a-f0-9]{64}$/.test(job.signature.offer) ? job.signature.offer : hash(job.signature.offer);
@@ -877,23 +904,28 @@ export async function verifyOpportunity(web: PublicWeb, job: Job, signal: AbortS
       const repeated = destination.url === inquiry.destination && bookingToInquiry(offer, link, destination);
       if (repeated && repeated.kind === (inquiry.kind ?? 'message')) {
         const proof = [...stored, ...repeated.evidence];
-        if (browserEnabled && repeated.kind === 'message') {
-          const budget = AbortSignal.any([signal, AbortSignal.timeout(12_000)]);
-          const browser = createFunnelBrowser((url, requestSignal) => web.asset(url, requestSignal, destination.url), budget);
+        if (browserEnabled && repeated.kind !== 'fee') {
+          const budget = AbortSignal.any([signal, AbortSignal.timeout(18_000)]);
+          const browser = createFunnelBrowser((url, requestSignal) => web.asset(url, requestSignal, destination.url), budget, { inspectBookingDialogs: true });
           try {
             const rendered = await browser.render(destination.url, job.id);
             const observed = parseBusinessPage(rendered.html, rendered.url);
-            if (rendered.url === destination.url && !observed.challenged && observed.genericInquiry && !observed.scheduling && !rendered.bookingDialogs?.length) {
-              proof.push(observe('browser', rendered.url, 'The rendered destination showed a general message form.', 'Independent booking destination render', Buffer.from(rendered.html)));
+            const confirmedPrompts = observed.consultationIntake?.filter(prompt => destination.consultationIntake?.includes(prompt)) ?? [];
+            const sameForm = repeated.kind === 'message' ? observed.genericInquiry : confirmedPrompts.length >= 8;
+            if (rendered.url === destination.url && !observed.challenged && sameForm && !observed.scheduling && !rendered.bookingDialogs?.length) {
+              const observation = repeated.kind === 'message' ? 'The rendered destination showed a general message form.' :
+                `The rendered destination showed ${confirmedPrompts.length} of the same required intake prompts before any choice of appointment time.`;
+              proof.push(observe('browser', rendered.url, observation, 'Independent booking destination render', Buffer.from(rendered.html)));
             }
           } catch { /* Browser corroboration is required before making a dynamic-page claim. */ }
           finally { await browser.close(); }
         }
-        const independentlyVerified = !browserEnabled || repeated.kind === 'fee' || proof.some(item => item.kind === 'browser');
+        const independentlyVerified = repeated.kind === 'fee' || proof.some(item => item.kind === 'browser') || !browserEnabled && repeated.kind === 'message';
         add(checkpoint, 'opportunity', independentlyVerified ? 'VERIFIED' : 'UNVERIFIED', independentlyVerified
           ? repeated.kind === 'fee' ? 'The offer advertises a complimentary call. Its linked destination lists a charge for an introductory call. Both descriptions reproduced. Align the advertised promise and booking terms.'
+            : repeated.kind === 'intake' ? 'The call to action offers scheduling. The linked consultation form requires at least eight answers, including work and location details, before any time selection. The browser reproduced the route. Explain the intake and timing or move those questions after scheduling.'
             : 'The offer promises booking a call. Its linked contact page only collects a general message and offers no scheduling option. Both steps reproduced. Add a scheduling step or explain the inquiry and response process at the call to action.'
-          : 'The static pages suggest a booking-to-message mismatch. The destination could not be corroborated in a browser.', proof);
+          : 'The static pages suggest a booking-to-intake mismatch. The destination could not be corroborated in a browser.', proof);
         return checkpoint;
       }
     }

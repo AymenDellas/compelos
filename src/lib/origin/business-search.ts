@@ -98,14 +98,19 @@ export function createBusinessSearch() {
 export function createCampaignSearch() {
   const search = createBoundedSearch();
   if (search) return async (attempt: number, activityDays: number, signal: AbortSignal) => {
-    const market = markets[attempt % markets.length];
-    const topic = specialties[attempt % specialties.length].split(' (')[0];
-    const since = new Date(Date.now() - activityDays * 86_400_000).toISOString().slice(0, 10);
-    const formats = ['("join" OR "register") (webinar OR workshop)', '("newsletter" OR "podcast") ("subscribe" OR "work with me")', '("applications open" OR "next cohort" OR "reserve your spot")'];
-    const format = formats[(attempt % markets.length + Math.floor(attempt / markets.length)) % formats.length];
-    const query = `${topic} "${market}" ${format} after:${since} -site:linkedin.com -site:youtube.com -site:reddit.com -site:eventbrite.com`;
-    return businessSearchSeeds(await search(query, signal), 10, true);
+    return businessSearchSeeds(await search(campaignSearchQuery(attempt, activityDays), signal), 10, true);
   };
+}
+
+export function campaignSearchQuery(attempt: number, activityDays: number) {
+  const market = markets[attempt % markets.length];
+  const topic = specialties[attempt % specialties.length].split(' (')[0];
+  const since = new Date(Date.now() - activityDays * 86_400_000).toISOString().slice(0, 10);
+  const formats = ['("join" OR "register") (webinar OR workshop)', '("newsletter" OR "podcast") ("subscribe" OR "work with me")',
+    '("applications open" OR "next cohort" OR "reserve your spot")',
+    '(workshop OR webinar OR "upcoming events") ("book a call" OR "schedule a consultation" OR "discovery call")'];
+  const format = formats[(attempt % markets.length + Math.floor(attempt / markets.length)) % formats.length];
+  return `${topic} "${market}" ${format} after:${since} -site:linkedin.com -site:youtube.com -site:reddit.com -site:eventbrite.com`;
 }
 
 export function activitySearchPointers(rows: unknown[]) {

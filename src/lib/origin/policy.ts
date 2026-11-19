@@ -116,10 +116,10 @@ export type Checkpoint = {
   advisory?: { assessment: string; evidence: string };
   breakage?: { url: string; from: string; label: string; status: number; evidence: string; alternatives: boolean; soft?: boolean };
   bookingMismatch?: { url: string; destination: string; from: string; promised: number; listed: number; evidence: string[] };
-  inquiryMismatch?: { url: string; destination: string; from: string; label: string; evidence: string[]; kind?: 'message' | 'fee' };
+  inquiryMismatch?: { url: string; destination: string; from: string; label: string; evidence: string[]; kind?: 'message' | 'fee' | 'intake' };
   missingBookingSection?: { url: string; fragment: string; label: string; evidence: string };
   mobileBookingDepth?: { from: string; destination: string; evidence: string };
-  funnel?: { found: number; tested: number; interactive: boolean };
+  funnel?: { found: number; tested: number; interactive: boolean; comparedIntake?: boolean };
   acquisitionSources?: number;
   ownedActivities?: { date: string; evidence: Evidence }[];
   ownedFeeds?: string[];

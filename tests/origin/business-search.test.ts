@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { activitySearchPointers, businessSearchQuery, businessSearchSeeds, createBusinessSearch } from '../../src/lib/origin/business-search';
+import { activitySearchPointers, businessSearchQuery, businessSearchSeeds, campaignSearchQuery, createBusinessSearch } from '../../src/lib/origin/business-search';
 
 test('business search rotates across markets and specialties and returns distinct discovery pointers', () => {
   assert.equal(new Set(Array.from({ length: 15 }, (_, index) => businessSearchQuery(index))).size, 15);
@@ -42,4 +42,12 @@ test('syndicated podcast directories enter neither business-first nor campaign-f
   const indexed = { title: 'Executive coaching podcast | Podscan', link: 'https://podscan.fm/podcasts/coaching-real-leaders' };
   assert.deepEqual(businessSearchSeeds([indexed], 8), []);
   assert.deepEqual(businessSearchSeeds([indexed], 8, true), []);
+});
+
+test('campaign searches look for active promotions with a buyer action in each eligible market', () => {
+  for (const market of ['United States', 'United Kingdom', 'Canada']) {
+    const queries = Array.from({ length: 12 }, (_, index) => campaignSearchQuery(index, 120)).filter(query => query.includes(`"${market}"`));
+    assert.ok(queries.some(query => query.includes('"schedule a consultation"') && query.includes('workshop')));
+    assert.ok(queries.some(query => query.includes('"reserve your spot"')));
+  }
 });
