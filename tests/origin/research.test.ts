@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { discover, feed } from '../../src/lib/origin/discovery';
 import { classifyModelError } from '../../src/lib/origin/model';
 import { decide, defaults, finding, gateNames, observe } from '../../src/lib/origin/policy';
 import { createPublicWeb, documentUrl, robotsAllows } from '../../src/lib/origin/public-web';
@@ -95,4 +96,23 @@ test('provider quota, authentication, timeouts and throttling have distinct outc
   assert.equal(classifyModelError(new DOMException('fixture', 'TimeoutError')).code, 'TIMEOUT');
   assert.equal(classifyModelError(new Error(), 429).code, 'RATE_LIMIT');
   assert.equal(classifyModelError(new SyntaxError()).code, 'INVALID_RESPONSE');
+});
+
+test('a permitted feed preserves dated discovery and explicit same-record contributor relationships', async () => {
+  const url = 'https://publisher-one.test/feed';
+  const feedBody = `<rss version="2.0"><channel><item><title>Executive coaching guests</title>
+    <pubDate>${new Date(Date.now() - 86_400_000).toUTCString()}</pubDate><link>https://publisher-one.test/episode</link>
+    <description><![CDATA[<p>Executive coaching with <a rel="author" href="${official}">Cedar Leadership</a>
+    and <a itemprop="performer" href="https://fir-leadership.test/">Fir Leadership</a>.
+    <a href="https://irrelevant.test/">Generic hyperlink</a></p>]]></description></item></channel></rss>`;
+  const web = createPublicWeb(async run => run(), async requested => requested.endsWith('/robots.txt')
+    ? { url: requested, status: 404, headers: {}, body: Buffer.alloc(0) }
+    : { url: requested, status: 200, headers: {}, body: Buffer.from(feedBody) });
+  const permission = 'https://publisher-one.test/terms';
+  const result = await discover([{ name: 'Fixture publisher', run: () => feed(web, { url, permission, title: 'Fixture' }, 6, signal()) }], 4);
+  assert.deepEqual(result.seeds.map(item => item.method), ['ECHO', 'CONSTELLATION']);
+  assert.equal(result.seeds[1].parent, official);
+  assert.equal(result.seeds[0].permission, permission);
+  assert.equal(result.seeds[0].adapter, 'Fixture publisher');
+  assert.equal(result.results[0].discovered, 2);
 });

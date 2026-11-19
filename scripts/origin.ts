@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Pool } from 'pg';
-import { defaults } from '../src/lib/origin/policy';
+import { defaults, POLICY_VERSION } from '../src/lib/origin/policy';
 import { dossier, overview } from '../src/lib/origin/read-model';
 import { migrate, saveSettings, start } from '../src/lib/origin/store';
 import { createOriginLane } from '../src/lib/origin/worker';
@@ -13,6 +13,7 @@ const connection = { connectionString: process.env.DATABASE_URL, connectionTimeo
 
 async function acceptance(admin: Pool) {
   const name = `origin_acceptance_${randomBytes(8).toString('hex')}`;
+  await migrate(admin);
   await admin.query(`CREATE SCHEMA ${name}`);
   const pool = new Pool({ ...connection, options: `-c search_path=${name}`, max: 5 });
   let worker = createOriginLane(pool, createLimiter(3, 96));
@@ -37,13 +38,20 @@ async function acceptance(admin: Pool) {
     const records = (await pool.query<{ id: string }>('SELECT id FROM origin_investigations ORDER BY created_at,id')).rows;
     const dossiers = [];
     for (const record of records) dossiers.push(await dossier(pool, record.id));
-    const artifactCount = (await pool.query('SELECT count(*)::int AS n FROM origin_artifacts WHERE image IS NOT NULL')).rows[0].n;
     const dir = resolve('data/engine-v2/origin');
-    await mkdir(dir, { recursive: true });
-    await writeFile(resolve(dir, 'live-run.json'), JSON.stringify({ id, phases, result, dossiers, artifactCount }, null, 2));
-    console.log(JSON.stringify({ id, state: result.runs[0]?.state, counts: result.runs[0]?.counts, sources: result.runs[0]?.sources,
+    const captureDir = resolve(dir, `captures-${id}`);
+    const captures = (await pool.query<{ id: string; image: Buffer }>('SELECT id,image FROM origin_artifacts WHERE image IS NOT NULL ORDER BY id')).rows;
+    const artifactCount = captures.length;
+    await mkdir(captureDir, { recursive: true });
+    for (const capture of captures) await writeFile(resolve(captureDir, `${capture.id}.jpg`), capture.image, { flag: 'wx' });
+    const report = `live-run-${id}.json`;
+    await writeFile(resolve(dir, report), JSON.stringify({ id, phases, result, dossiers, artifactCount, captureDir }, null, 2), { flag: 'wx' });
+    const summary = { id, state: result.runs[0]?.state, counts: result.runs[0]?.counts, sources: result.runs[0]?.sources,
       elapsedSeconds: Math.round((Date.now() - clock) / 1000), artifactCount, reservedRequests: result.usage.calls,
-      report: 'data/engine-v2/origin/live-run.json' }, null, 2));
+      report: `data/engine-v2/origin/${report}` };
+    await admin.query(`INSERT INTO origin_evaluations(run_id,policy_version,kind,report) VALUES($1,$2,'LIVE',$3)`,
+      [id, POLICY_VERSION, JSON.stringify(summary)]);
+    console.log(JSON.stringify(summary, null, 2));
     if (result.runs[0]?.state !== 'COMPLETED' || !records.length) process.exitCode = 1;
   } finally {
     worker.stop();

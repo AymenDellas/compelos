@@ -82,4 +82,11 @@ CREATE TABLE IF NOT EXISTS origin_model_usage (
   UNIQUE(investigation_id,cache_key,attempt)
 );
 CREATE INDEX IF NOT EXISTS origin_model_usage_recent ON origin_model_usage(created_at DESC);
+CREATE TABLE IF NOT EXISTS origin_evaluations (
+  run_id uuid PRIMARY KEY,
+  policy_version text NOT NULL,
+  kind text NOT NULL,
+  report jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 `;

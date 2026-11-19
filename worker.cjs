@@ -52,7 +52,7 @@ async function main(){
     if (!researching) {
      researching = true;
      try { if (await origin.runOnce()) return { origin: true }; }
-     catch (error) { log('ORIGIN lane: '+(error.code || error.name || 'checkpoint unavailable')); }
+     catch (error) { log('ORIGIN lane: '+(error?.code || error?.name || 'checkpoint unavailable')); }
      finally { researching = false; }
     }
     return existing.runOnce();

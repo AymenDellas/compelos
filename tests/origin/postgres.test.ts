@@ -4,7 +4,7 @@ import test from 'node:test';
 import { Pool } from 'pg';
 import { modelAdvisory, readOrReserve } from '../../src/lib/origin/model';
 import { decide, defaults, emptyCheckpoint, finding, gateNames, observe } from '../../src/lib/origin/policy';
-import { dossier, overview, readyOpportunities } from '../../src/lib/origin/read-model';
+import { artifact, dossier, overview, readyOpportunities } from '../../src/lib/origin/read-model';
 import { claimRun, control, finish, migrate, nextJob, release, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
 import { official, seed, source } from './fixtures';
 
@@ -52,9 +52,11 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
       contact: 'vendors@cedar-leadership.test', acquisitionSources: 2, evidence: [evidence],
       gates: gateNames.map(name => finding(name, 'VERIFIED', 'Fixture qualifying evidence.', [evidence])) };
     const decision = decide(checkpoint.gates, checkpoint.evidence);
-    await saveStage(pool, recovered, job, checkpoint, decision);
+    const image = Buffer.from('fixture image bytes');
+    await saveStage(pool, recovered, job, checkpoint, decision, [{ id: evidence.id, url: official, device: 'desktop', digest: evidence.digest, image }]);
     assert.equal((await readyOpportunities(pool))[0].business_id, job.business_id);
     assert.equal((await dossier(pool, job.id))?.decision?.outcome, 'QUALIFIED');
+    assert.deepEqual(await artifact(pool, job.id, evidence.id), image);
     const { usage, sources, runs } = await overview(pool);
     assert.equal(usage.reserved_cents, 2);
     assert.equal(usage.provider_cents, null);

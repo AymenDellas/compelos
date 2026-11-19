@@ -42,6 +42,7 @@ import CrmDatabase from "./CrmDatabase";
 import EngineMetricsPanel from './EngineMetricsPanel';
 import BusinessWorkspace from "./business/BusinessWorkspace";
 import CaseStudyHunter from "./business/CaseStudyHunter";
+import OriginWorkspace from './OriginWorkspace';
 import DiscoveryCallsWorkspace from "./business/DiscoveryCallsWorkspace";
 import FunnelAnalyzer from "./FunnelAnalyzer";
 import ContentCreate from "./content-create/ContentCreate";
@@ -206,7 +207,7 @@ function describeLead(l: any): string {
     return `${who} — ${String(status).toLowerCase()}`;
 }
 
-type TabId = 'engine' | 'cleaner' | 'hunter' | 'unbouncer' | 'finder' | 'crm' | 'case-study' | 'discovery' | 'funnel' | 'content-create' | 'copy-studio' | BusinessView;
+type TabId = 'engine' | 'cleaner' | 'hunter' | 'unbouncer' | 'finder' | 'origin' | 'crm' | 'case-study' | 'discovery' | 'funnel' | 'content-create' | 'copy-studio' | BusinessView;
 
 type NavItem = { id: TabId; label: string; icon: typeof Radar; signal?: boolean };
 
@@ -222,6 +223,7 @@ const NAV_GROUPS: { label: string; collapsible?: boolean; items: NavItem[] }[] =
     { label: 'Acquisition', items: [
         { id: 'case-study', label: 'Case Study Hunter', icon: ScanSearch, signal: true },
         { id: 'finder', label: 'Finder', icon: Radar },
+        { id: 'origin', label: 'ORIGIN', icon: ScanSearch },
         { id: 'engine', label: 'Engine', icon: Zap },
         { id: 'crm', label: 'Leads', icon: Database, signal: true },
     ] },
@@ -254,6 +256,7 @@ const SCREENS: Record<TabId, { title: string; sub: string }> = {
     'copy-studio': { title: 'Copy Studio', sub: 'Turn your offer into a landing page that gives people a reason to act' },
     funnel: { title: 'Funnel Analyzer', sub: 'Find landing-page conversion killers and plan the rebuild' },
     engine: { title: 'Engine', sub: 'Scrapes LinkedIn profiles and finds their contact details' },
+    origin: { title: 'ORIGIN', sub: 'Discover and verify conversion opportunities for Compel' },
     finder: { title: 'Finder', sub: 'Searches Google for profiles matching a niche and location' },
     crm: { title: 'Leads', sub: 'Everything found so far, and who is ready to email' },
     unbouncer: { title: 'Verify email', sub: 'Checks whether an address accepts mail before you send to it' },
@@ -1902,6 +1905,8 @@ export default function Dashboard() {
                             handleStartEngine(0, [], urls);
                         }, 500);
                     }} />
+                ) : activeTab === 'origin' ? (
+                    <OriginWorkspace />
                 ) : activeTab === 'case-study' ? (
                     <CaseStudyHunter initialView={caseStudyEntryView} />
                 ) : activeTab === 'discovery' ? (
