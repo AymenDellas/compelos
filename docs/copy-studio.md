@@ -73,6 +73,8 @@ AgentRouter uses the same pinned, genuine Qwen Code client as the working standa
 
 AgentRouter's primary model is tried first. If the provider confirms it has no route, Copy Studio switches once to `gpt-6.1-sol` over Responses and uses it for the rest of that operation. Copy Studio retries one explicit capacity failure if the provider supplies no wait instruction. The connection test reports the model that actually answered. Local generation allows up to ten minutes for the strategy, draft and review. The Vercel request limit remains five minutes.
 
+The November 19, 2026 live regression reproduced the configured `deepseek-v4-flash` route failure. AgentRouter completed a synthetic six-section lead magnet through `gpt-6.1-sol` in 5 minutes and 53 seconds, including the review stage. Earlier direct-to-call attempts ended during drafting, and a separate lead-magnet attempt recorded the provider's `no_capacity` error. The fixture suite covers the missing-route and capacity-retry sequence and the provider's `Retry-After` instruction.
+
 ## Saved projects
 
 Projects use this browser's local storage at the dashboard address, under `compel:copy-studio:library:v2`. They are separate from lead and content databases. Saved project data from `localhost:3874` is not automatically accessible at `localhost:3000` because browser storage is scoped by origin. To bring an existing project over, export **Project backup** from the standalone tool, then choose **Tools → Import a project** in the dashboard. The file format is unchanged.
