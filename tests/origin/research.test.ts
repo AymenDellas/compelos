@@ -61,6 +61,18 @@ test('a general study cannot count as the provider’s own coaching program', as
   }
 });
 
+test('a published project price and an attributed coaching client account establish separate commercial facts', async () => {
+  const client = '<p>“I used the coaching throughout a difficult leadership transition in my company.”</p><p>Alex Winters, Founder, Fir Works</p>';
+  const { web } = fixture(page.replace('<p>Our business was founded in 2012.</p>', client));
+  const job = candidate();
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const researched = await investigate(web, { ...job, checkpoint }, settings, signal());
+  const commercial = researched.checkpoint.gates.find(item => item.name === 'substance');
+  assert.equal(commercial?.state, 'VERIFIED');
+  assert.deepEqual(researched.checkpoint.evidence.filter(item => commercial?.evidence.includes(item.id)).map(item => item.method),
+    ['Published offer price', 'Attributed coaching client account']);
+});
+
 test('a search title alone cannot verify identity and official branding supplies the business name', async () => {
   const job = candidate([{ ...seed, name: 'Local leadership coaches', method: 'BUSINESS_SEARCH', source: official, occurredAt: undefined }]);
   const unbranded = await resolveBusiness(fixture(page.replace('<title>Cedar Leadership</title>', '<title>Local leadership coaches</title>')
@@ -137,6 +149,23 @@ test('the researcher finds a first-party subscriber feed and verifies two distin
   assert.equal(acquisition?.evidence.length, 2);
 });
 
+test('Wix coaching feeds verify dated publications with categories tied to the feed’s stated audience', async () => {
+  const feedUrl = `${official}blog-feed.xml`;
+  const base = fixture(page.replace('</head>', '<meta name="generator" content="Wix.com Website Builder"></head>'));
+  const feed = `<rss><channel><title>Cedar Leadership</title><description>Business coaching for entrepreneurs.</description>
+    ${['Review your numbers', 'Focus on today'].map((title, index) => `<item><title>${title}</title><category>Growth strategies</category>
+      <pubDate>${new Date(Date.now() - (index + 1) * 86_400_000).toUTCString()}</pubDate><link>${official}briefing-${index}</link></item>`).join('')}</channel></rss>`;
+  const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
+    if (args[0] === feedUrl) return { url: feedUrl, status: 200, headers: { 'content-type': 'text/xml' }, body: Buffer.from(feed) };
+    return base.web.document(...args);
+  } };
+  const job = candidate([{ ...seed, occurredAt: undefined }]);
+  const initial = await resolveBusiness(web, job, signal());
+  const { checkpoint } = await investigate(web, { ...job, checkpoint: initial.checkpoint }, settings, signal());
+  await enrichAcquisition(web, { ...job, checkpoint }, settings, signal());
+  assert.equal(checkpoint.gates.find(item => item.name === 'acquisition')?.state, 'VERIFIED');
+});
+
 test('a material discrepancy on a working booking route must reproduce before it qualifies', async () => {
   const home = page.replace('Book a call', 'Book a 20-minute call');
   for (const secondMinutes of [50, 20]) {
@@ -198,6 +227,24 @@ test('consultation intake evidence counts required prompts and respects an expla
     assert.equal(checkpoint.evidence.some(item => /requires 8 prompts/.test(item.excerpt)), !disclosed);
     await verifyOpportunity(web, { ...job, checkpoint }, signal());
     assert.equal(checkpoint.gates.find(item => item.name === 'opportunity')?.state, 'UNVERIFIED');
+  }
+});
+
+test('conflicting monthly starting prices must reproduce with a live consultation route', async () => {
+  const prices = '<p>Investment levels range from £1,300 at a monthly fee or £10,000 as a fixed project.</p>' +
+    '<p>Fees start at a monthly fee of £1200 or £10,000 for a fixed project.</p>';
+  const text = page.replace('</main>', `${prices}</main>`).replace('Book a call', 'Book a Free Consult');
+  const job = candidate();
+  for (const changed of [false, true]) {
+    const first = fixture(text, () => ({ status: 200, body: '<main><h1>Choose a time</h1></main>' }));
+    const { checkpoint } = await resolveBusiness(first.web, job, signal());
+    const researched = await investigate(first.web, { ...job, checkpoint }, settings, signal());
+    assert.deepEqual(researched.checkpoint.priceMismatch?.amounts, [1200, 1300]);
+    const second = changed ? fixture(text.replace('£1200', '£1300')) : first;
+    await verifyOpportunity(second.web, { ...job, checkpoint: researched.checkpoint }, signal());
+    const outcome = researched.checkpoint.gates.find(item => item.name === 'opportunity');
+    assert.equal(outcome?.state, changed ? 'UNVERIFIED' : 'VERIFIED');
+    if (!changed) assert.match(outcome!.assertion, /£1,200 and £1,300/);
   }
 });
 

@@ -105,8 +105,10 @@ export function parseBusinessPage(html: string, url: string) {
   const logo = $('header a[href="/"] img[alt], header a[href="/"][aria-label]').first();
   const copyright = squash($('footer').text()).match(/(?:Copyright\s*)?©\s*20\d{2}\s*([^.!?]{3,95})\.?\s+All rights reserved/i)?.[1];
   const canonical = linkedUrl($('link[rel="canonical"]').attr('href') ?? '', url);
+  const generator = $('meta[name="generator"]').attr('content') ?? '';
+  const defaultFeed = /\bWordPress\b/i.test(generator) ? '/feed/' : /\bWix\.com Website Builder\b/i.test(generator) ? '/blog-feed.xml' : '';
   const feedUrl = linkedUrl($('head link[rel="alternate"][type="application/rss+xml"],head link[rel="alternate"][type="application/atom+xml"]').first().attr('href') ??
-    (/\bWordPress\b/i.test($('meta[name="generator"]').attr('content') ?? '') ? '/feed/' : ''), url);
+    defaultFeed, url);
   const datedRecords: string[] = [];
   const names: string[] = [];
   $('script[type="application/ld+json"]').slice(0, 12).each((_index, node) => {
@@ -144,6 +146,15 @@ export function parseBusinessPage(html: string, url: string) {
     }
   });
   const markets = markedMarkets($, url);
+  $('footer').slice(0, 4).each((_index, footer) => {
+    const section = $(footer);
+    if (!section.find('a[href^="mailto:"]').length || !section.find('a[href^="tel:"]').length) return;
+    for (const paragraph of section.find('p,address').slice(0, 45).toArray()) {
+      const location = squash($(paragraph).text());
+      const market = location.match(/^[\p{L} .'-]{2,45},\s*[\p{L} .'-]{2,45},\s*(United Kingdom|United States|Canada)\s*$/iu)?.[1];
+      if (market) markets.push({ country: /Canada/i.test(market) ? 'CA' : /Kingdom/i.test(market) ? 'UK' : 'US', evidence: `Published business contact location: ${location}` });
+    }
+  });
   const postalMarkets = [
     { country: 'UK', countryName: /\bUnited Kingdom\b/i, postalCode: /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i },
     { country: 'CA', countryName: /\bCanada\b/i, postalCode: /\b[A-Z]\d[A-Z]\s*\d[A-Z]\d\b/i },
@@ -164,6 +175,15 @@ export function parseBusinessPage(html: string, url: string) {
   $('br').replaceWith(' ');
   const content = $('main,[role="main"]').first();
   const read = (selector: string) => content.length ? content.find(selector) : $(selector).filter((_i, node) => !$(node).closest('nav,footer,aside').length);
+  const paragraphs = read('p').slice(0, 120).toArray().map(node => squash($(node).text())).filter(Boolean);
+  for (let index = 0; index < paragraphs.length - 1; index++) {
+    const clientAccount = paragraphs[index].replace(/^[\s\u200b]+/, '');
+    const attribution = paragraphs[index + 1];
+    if (/^[“"].{45,700}[”"]$/u.test(clientAccount) && /\b(?:I|we|our)\b/i.test(clientAccount) && /\bcoach(?:ed|ing)?\b/i.test(clientAccount) &&
+        /^\p{Lu}[\p{L}'’-]+(?: \p{Lu}[\p{L}.'’-]+){1,3},\s*(?:Founder|Co-founder|Chief\b[^,]{0,50}|CEO|COO|Director|Managing Director|President|Head of\b[^,]{0,50}),\s*\S.{1,80}$/u.test(attribution)) {
+      testimonials.push(`${attribution} · ${clientAccount.slice(0, 320)}`);
+    }
+  }
   const headings = read('h1,h2,h3').slice(0, 50).toArray().map(node => squash($(node).text()).slice(0, 240));
   const activityDates = datedRecords.length ? datedRecords : read('time[datetime]').slice(0, 12).toArray().map(node => $(node).attr('datetime') ?? '');
   if (!activityDates.length) activityDates.push($('meta[property="article:published_time"]').attr('content') ?? $('meta[name="date"]').attr('content') ?? '');
@@ -203,7 +223,8 @@ export function parseBusinessPage(html: string, url: string) {
   const invitation = /\b(?:vendor|supplier|partnership|service provider|business development|business|general)\s+(?:enquir(?:ies|y)|inquir(?:ies|y)|proposals?)\b/i;
   const forbidden = /no\s+(?:unsolicited|solicitations?)|do not (?:contact|send|submit).{0,55}(?:sales|marketing|solicitations?)|not accept.{0,25}(?:unsolicited|solicitations?)/i;
   const bodyText = squash($('body').text()).slice(0, 12_000);
-  const contactPage = [headings[0], title].some(value => value && contactLink.test(value));
+  const contactPage = /\/(?:contact(?:-us|-me)?|get-in-touch)\/?$/i.test(new URL(url).pathname) ||
+    [headings[0], title].some(value => value && contactLink.test(value));
   const genericInquiry = contactPage ? read('form').toArray().flatMap(node => {
     const form = $(node);
     const label = squash([form.attr('aria-label'), form.text(), form.find('input[type="submit"]').attr('value')].join(' '));
@@ -475,11 +496,14 @@ async function ownedFeedActivities(web: PublicWeb, url: string, host: string, si
     if (!$('rss,feed').length) return [];
     const identity = squash($('channel > title,feed > title').first().text());
     if (/\b(?:comments|replies|reviews)\b/i.test(identity)) return [];
+    const description = squash($('channel > description,feed > subtitle').first().text()).slice(0, 450);
+    const coachingPublication = relevantCoach.test(description) && (activityAudience.test(description) || /\bentrepreneurs?\b/i.test(description));
     return $('item,entry').slice(0, 12).toArray().flatMap(node => {
       const item = $(node);
       const title = squash(item.children('title').first().text()).slice(0, 140);
       const category = item.children('category').toArray().slice(0, 6).map(entry => $(entry).text()).join(' ');
-      if (!title || (!relevantCoach.test(`${title} ${category}`) && !activityAudience.test(title))) return [];
+      const relatedCategory = coachingPublication && /\b(?:leadership|business (?:growth|finance|strateg(?:y|ies))|growth strategies|shareholder value)\b/i.test(category);
+      if (!title || (!relevantCoach.test(`${title} ${category}`) && !activityAudience.test(title) && !relatedCategory)) return [];
       const date = Date.parse(item.children('pubDate,published').first().text());
       const link = item.children('link').filter((_index, entry) => !$(entry).attr('rel') || $(entry).attr('rel') === 'alternate').first();
       const target = linkedUrl(link.attr('href') || link.text(), response.url);
@@ -638,6 +662,24 @@ function bookingToInquiry(from: Page, link: Link, destination: Page) {
   }
 }
 
+function monthlyPriceMismatch(page: Page) {
+  const prices = new Map<number, Evidence>();
+  let currency: string | undefined;
+  for (const statement of page.statements) {
+    if (/\b(?:members only|discount|different tiers|add-ons?|renewal|last year|formerly|depending on the plan)\b/i.test(statement)) continue;
+    const match = statement.match(/\b(?:investment|pricing|fees?|rates?) (?:levels? )?(?:(?:starts?|begins?) (?:at|from)|ranges? from)\s+(?:(a monthly fee of)\s+)?(GBP|USD|CAD|£)\s*((?:\d{1,3}(?:,\d{3})+|\d{3,5}))(?![\d,.])([^.!?]{0,32})/i);
+    if (!match || !match[1] && !/^\s*(?:at a monthly fee|a month|per month)\b/i.test(match[4])) continue;
+    const symbol = match[2] === '£' ? 'GBP' : match[2].toUpperCase();
+    if (currency && symbol !== currency) return;
+    currency = symbol;
+    prices.set(Number(match[3].replaceAll(',', '')), quote(page, match[0].trim().split(/\s+or\s+/i)[0], 'Published starting monthly coaching fee'));
+  }
+  const amounts = [...prices.keys()].sort((a, b) => a - b);
+  if (currency && amounts.length === 2 && amounts[0] >= 500 && amounts[1] - amounts[0] >= 50) {
+    return { currency, amounts: [amounts[0], amounts[1]] as [number, number], evidence: amounts.map(amount => prices.get(amount)!) };
+  }
+}
+
 function offerOn(page: Page) {
   const softwareCoach = /\b(?:AI (?:teammate|(?:powered )?(?:executive |CEO |leadership |business )?coach(?:ing)? (?:agent|tool|software))|(?:executive |CEO |leadership |business )?coach(?:ing)? AI agent)\b/i;
   if ([page.title, ...page.headings.slice(0, 4)].some(text => softwareCoach.test(text))) return;
@@ -730,18 +772,18 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     const procurement = job.seeds.find(seed => seed.method === 'PROCUREMENT' && seed.contract &&
       normalized(seed.name) === normalized(checkpoint.identityName ?? job.name) && domain(seed.website) === job.domain);
     const testimonial = (offer.testimonials ?? [])[0];
-    const proof = price ? quote(offer, price, 'Published offer price') : clientCase ?? (procurement?.contract ? observe('external', procurement.source,
+    const proof = clientCase ?? (procurement?.contract ? observe('external', procurement.source,
       `${procurement.contract.buyer} recorded a coaching award to ${procurement.name} on ${procurement.contract.awardedOn.slice(0, 10)}. Value GBP ${procurement.contract.amountGbp}. Open Government Licence v3.0.`, 'Public contract award') : undefined);
     const program = offer.statements.find(item => /\b(?:(?:[3-9]|1[0-9]|three|four|five|six|nine|twelve)[- ]months?|(?:[6-9]|[1-9]\d) (?:private |individual |executive |leadership )?coaching sessions)\b/i.test(item)
       && /\b(?:coaching|engagement|program(?:me)?)\b/i.test(item)
       && !/\b(?:free|may offer|might offer|formerly|according to|report (?:on|by|from)|(?:a |the )?(?:study|survey|report|research) (?:shows|found|finds|documents|suggests|by|from))\b/i.test(item)
       && (/\b(?:our|my) (?:[\w-]+ ){0,5}(?:coaching|engagement|program(?:me)?)\b|\b(?:at|with) (?:our|this|the) (?:practice|firm)\b|\b(?:we|I) (?:offer|deliver|provide|run|include)\b/i.test(item)
         || containsName(item, checkpoint.identityName ?? job.name)));
-    const commercial = [proof ?? (testimonial && quote(offer, testimonial, 'Attributed coaching client account')), substance && quote(substance.page, substance.statement, 'First-party operating history'),
+    const commercial = [price && quote(offer, price, 'Published offer price'), proof ?? (testimonial && quote(offer, testimonial, 'Attributed coaching client account')), substance && quote(substance.page, substance.statement, 'First-party operating history'),
       program && quote(offer, program, 'Published coaching program scope')].filter((item): item is Evidence => Boolean(item));
     add(checkpoint, 'substance', commercial.length >= 2 ? 'VERIFIED' : 'UNVERIFIED', commercial.length >= 2
       ? 'Multiple documented measures establish commercial substance for the scoped coaching offer.'
-      : 'Commercial substance needs two supporting signals across a substantial program, a price or client engagement, and operating history.', commercial);
+      : 'Commercial substance needs two supporting signals across a substantial program, published pricing, a client engagement, and operating history.', commercial);
   } else {
     add(checkpoint, 'niche', 'UNVERIFIED', line ? 'A specialized offer was visible, but the provider did not establish its coaching scope.' : 'A specialized coaching offer was not established.');
     add(checkpoint, 'substance', 'UNVERIFIED', 'A matching scoped coaching engagement is needed before commercial proof can qualify.');
@@ -789,6 +831,12 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
         ...(soft ? { soft: true } : {}) };
     }
     if (index === 0 && offer === from) {
+      const pricing = link.main && destination.state === 'READABLE' && !soft && monthlyPriceMismatch(from);
+      if (pricing) {
+        checkpoint.evidence.push(...pricing.evidence);
+        checkpoint.priceMismatch = { url: from.url, booking: link.url, currency: pricing.currency, amounts: pricing.amounts,
+          evidence: pricing.evidence.map(item => item.id) };
+      }
       const mismatch = durationMismatch(from, link, destination);
       if (mismatch) {
         checkpoint.evidence.push(...mismatch.evidence);
@@ -805,7 +853,7 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   }
 
   const renderPage = routes[0]?.from ?? offer ?? page;
-  const promising = [checkpoint.breakage, checkpoint.bookingMismatch, checkpoint.inquiryMismatch].some(Boolean) ||
+  const promising = [checkpoint.breakage, checkpoint.bookingMismatch, checkpoint.inquiryMismatch, checkpoint.priceMismatch].some(Boolean) ||
     checkpoint.gates.filter(item => item.name !== 'identity' && item.state === 'VERIFIED').length >= 3;
   if (settings.browser && (!shortlistCaptures || promising) && (offer || cta) && pages[0].state === 'READABLE' && !signal.aborted) {
     const browserSignal = AbortSignal.any([signal, AbortSignal.timeout(19_000)]);
@@ -865,6 +913,18 @@ export async function verifyOpportunity(web: PublicWeb, job: Job, signal: AbortS
   const inquiry = checkpoint.inquiryMismatch;
   const section = checkpoint.missingBookingSection;
   const mobile = checkpoint.mobileBookingDepth;
+  const pricing = checkpoint.priceMismatch;
+  if (!issue && pricing) {
+    const page = await inspect(web, pricing.url, signal, 'Independent published price recheck', url => domain(url.href) === job.domain);
+    const initial = checkpoint.evidence.filter(item => pricing.evidence.includes(item.id));
+    const repeated = page.url === pricing.url && page.state === 'READABLE' && page.links.some(link =>
+      link.main && link.url === pricing.booking && booking.test(link.label)) && monthlyPriceMismatch(page);
+    if (initial.length === 2 && repeated && repeated.currency === pricing.currency && repeated.amounts.every((amount, index) => amount === pricing.amounts[index])) {
+      const [lower, upper] = pricing.amounts.map(value => new Intl.NumberFormat('en', { style: 'currency', currency: pricing.currency, maximumFractionDigits: 0 }).format(value));
+      add(checkpoint, 'opportunity', 'VERIFIED', `The same coaching page publishes two starting monthly prices, ${lower} and ${upper}, alongside a consultation route. Both prices reproduced. Reconcile the starting price before prospects book.`, [...initial, page.evidence, ...repeated.evidence]);
+      return checkpoint;
+    }
+  }
   if (!issue && !mismatch && !inquiry && !section && mobile && browserEnabled) {
     const first = checkpoint.evidence.find(item => item.id === mobile.evidence);
     const budget = AbortSignal.any([signal, AbortSignal.timeout(16_000)]);

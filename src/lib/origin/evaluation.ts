@@ -34,7 +34,7 @@ export async function evaluate(pool: Pool, runId: string) {
     const journey = row.checkpoint.journey;
     const testedGates = new Set(row.checkpoint.gates.map(gate => gate.name));
     const bookingUrls = new Set(evidence.filter(item => item.method === 'Initial direct booking GET').map(item => item.id));
-    const bookingRechecked = evidence.some(item => /^Independent (?:direct booking GET|booking duration recheck|message-form recheck|booking destination render|mobile placement recheck|missing-section recheck)$/.test(item.method));
+    const bookingRechecked = evidence.some(item => /^Independent (?:direct booking GET|booking duration recheck|message-form recheck|booking destination render|mobile placement recheck|missing-section recheck|published price recheck)$/.test(item.method));
     return { id: row.id, name: row.checkpoint.identityName ?? row.name, domain: row.domain, stage: row.stage, outcome: row.decision?.outcome ?? null,
       policy: row.decision?.version ?? null, discovery: row.seeds.map(seed => ({ adapter: seed.adapter ?? seed.method, url: seed.source })),
       gates: row.decision?.gates.map(gate => ({ name: gate.name, state: testedGates.has(gate.name) ? gate.state : 'NOT_REACHED', reason: gate.assertion,
