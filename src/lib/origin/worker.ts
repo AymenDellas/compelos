@@ -61,7 +61,8 @@ export function createOriginLane(pool: Pool, limit: Limiter, options: { runId?: 
       adapters.push({ name: 'ECHO supplemental feeds', deferred: 'INVALID_FEED_CONFIGURATION', run: async () => [] });
     }
     adapters.push({ name: publicationAdapter, credit: gdeltCredits, retryAt: hold(publicationAdapter), run: async () => {
-      const indexSignal = perSource(signal, 11_000);
+      // Leave time for the index to return a rate-limit response and its retry instructions.
+      const indexSignal = perSource(signal, 21_000);
       const pointers = await discoverPublicationPointers(web, strategy, indexSignal);
       return verifyPublications(web, pointers, run.config.activityDays, perSource(signal, 12_000));
     } });
