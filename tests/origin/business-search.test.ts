@@ -51,3 +51,15 @@ test('campaign searches look for active promotions with a buyer action in each e
     assert.ok(queries.some(query => query.includes('"reserve your spot"')));
   }
 });
+
+test('business search can require an intake action and a commercial reference in regional markets', () => {
+  for (const [offset, city] of ['Chicago', 'London', 'Toronto'].entries()) {
+    const query = businessSearchQuery(45 + offset);
+    assert.match(query, /consultation/);
+    assert.match(query, /client stories/);
+    assert.ok(query.includes(city));
+  }
+  const coverage = { title: 'Terra Coaching expansion announcement', link: 'https://www.theglobeandmail.com/investing/markets/pressreleases/coaching/' };
+  assert.deepEqual(businessSearchSeeds([coverage], 4, true), []);
+  assert.deepEqual(activitySearchPointers([coverage]), [{ url: coverage.link }]);
+});

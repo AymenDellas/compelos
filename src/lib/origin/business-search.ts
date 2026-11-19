@@ -10,6 +10,8 @@ export const campaignSearchName = 'Serper · Coaching campaigns';
 export const businessSearchCredit = 'Serper organic search, discovery pointers only';
 
 const markets = ['United States', 'United Kingdom', 'Canada'];
+const marketQueries = ['("United States" OR Chicago OR Atlanta OR Boston)', '("United Kingdom" OR London OR Manchester OR Edinburgh)',
+  '(Canada OR Toronto OR Vancouver OR Calgary)'];
 const specialties = [
   '"executive coaching" ("leadership team" OR "executive team")',
   '("CEO coaching" OR "founder coaching" OR "strategic leadership adviser")',
@@ -19,16 +21,21 @@ const specialties = [
 ];
 const excludedDomains = ['linkedin.com', 'facebook.com', 'instagram.com', 'youtube.com', 'reddit.com',
   'wikipedia.org', 'google.com', 'indeed.com', 'glassdoor.com', 'forbes.com', 'clutch.co', 'coachfederation.org', 'coachingfederation.org',
-  'podscan.fm', 'listennotes.com', 'feedspot.com', 'player.fm', 'goodpods.com', 'podchaser.com', 'podcasts.apple.com', 'spotify.com'];
+  'podscan.fm', 'listennotes.com', 'feedspot.com', 'player.fm', 'goodpods.com', 'podchaser.com', 'podcasts.apple.com', 'spotify.com',
+  'theglobeandmail.com', 'prnewswire.com', 'businesswire.com', 'globenewswire.com'];
 const service = /\b(?:coach(?:es|ing)?|leadership development|leadership advis(?:er|or|ory)|executive advis(?:er|or|ory)|CEO mentor)\b/i;
 const directory = /\b(?:top \d+|best \d+|find a coach|coach(?:es|ing) directory|certification|training for coaches|job openings)\b/i;
 const genericName = /^(?:(?:home|services|programs?|offerings|work with us|about us)$|(?:executive|leadership|career|business|CEO|founder|corporate|team) (?:coaches?|coaching)(?:\s+(?:in|services|programs?)\b.*)?$)/i;
 
 export function businessSearchQuery(attempt: number) {
-  const market = markets[attempt % markets.length];
+  const marketIndex = attempt % markets.length;
   const specialty = specialties[Math.floor(attempt / markets.length) % specialties.length];
-  const intent = ['("book a discovery call" OR "schedule a consultation" OR "book a call")', '("client results" OR "case study" OR "leadership coaching program")', '("executive briefing" OR "coaching program" OR "coaching enquiry")'][Math.floor(attempt / (markets.length * specialties.length)) % 3];
-  return `${specialty} "${market}" ${intent} -jobs -certification -directory -site:linkedin.com -site:indeed.com`;
+  const intents = ['("book a discovery call" OR "schedule a consultation" OR "book a call")',
+    '("client results" OR "case study" OR "leadership coaching program")', '("executive briefing" OR "coaching program" OR "coaching enquiry")',
+    '("book a call" OR "schedule a consultation" OR "discovery call") ("client results" OR "case studies" OR "client stories" OR "coaching engagement")'];
+  const rotation = Math.floor(attempt / (markets.length * specialties.length)) % intents.length;
+  const market = rotation === 3 ? marketQueries[marketIndex] : `"${markets[marketIndex]}"`;
+  return `${specialty} ${market} ${intents[rotation]} -jobs -certification -directory -site:linkedin.com -site:indeed.com`;
 }
 
 export function businessSearchSeeds(rows: unknown[], limit: number, campaign = false): Seed[] {

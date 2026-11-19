@@ -109,6 +109,7 @@ export type Checkpoint = {
   identityPage?: string;
   identityName?: string;
   offer?: string;
+  attributedProgramScope?: boolean;
   country?: 'US' | 'UK' | 'CA';
   contact?: string;
   signature?: { offer: string; booking: string };

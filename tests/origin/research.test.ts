@@ -46,6 +46,21 @@ test('first-party business address, scoped program and public inquiries are veri
   assert.equal(held.checkpoint.contact, undefined);
 });
 
+test('a general study cannot count as the provider’s own coaching program', async () => {
+  const study = 'The Independent Leadership Center report on coaching documents outcomes within six to twelve months.';
+  const offer = 'Most executive coaching engagements at the practice run three to twelve months.';
+  for (const explicitOffer of ['', offer]) {
+    const text = page.replace('Coaching engagement pricing is $5,000.', `${study}</p><p>${explicitOffer}`);
+    const { web } = fixture(text);
+    const job = candidate();
+    const { checkpoint } = await resolveBusiness(web, job, signal());
+    const researched = await investigate(web, { ...job, checkpoint }, settings, signal());
+    const program = researched.checkpoint.evidence.find(item => item.method === 'Published coaching program scope');
+    assert.equal(program?.excerpt, explicitOffer || undefined);
+    assert.equal(researched.checkpoint.gates.find(item => item.name === 'substance')?.state, explicitOffer ? 'VERIFIED' : 'UNVERIFIED');
+  }
+});
+
 test('a search title alone cannot verify identity and official branding supplies the business name', async () => {
   const job = candidate([{ ...seed, name: 'Local leadership coaches', method: 'BUSINESS_SEARCH', source: official, occurredAt: undefined }]);
   const unbranded = await resolveBusiness(fixture(page.replace('<title>Cedar Leadership</title>', '<title>Local leadership coaches</title>')

@@ -9,7 +9,7 @@ import type { PublicWeb } from './public-web';
 import { domain } from './store';
 import type { Artifact, Job } from './store';
 
-const booking = /^(?:book|schedule|request|apply for)\b.{0,55}\b(?:call|session|consultation|assessment|coaching|meeting)\b|^(?:book now|book a time|apply now)$/i;
+const booking = /^(?:book|schedule|request|apply for)\b.{0,55}\b(?:call|session|consult(?:ation)?|assessment|coaching|meeting)\b|^(?:book now|book a time|apply now)$/i;
 const offerLink = /\b(?:coach(?:ing)?|program(?:me)?s?|services|work with (?:me|us)|for (?:organisations|organizations|leaders|executives))\b/i;
 const contactLink = /^(?:contact(?: us| me)?|get in touch|connect|inquir(?:e|ies)|enquir(?:e|ies))\b/i;
 const aboutLink = /^(?:about\b|our story|company|meet (?:the )?(?:team|founder|coach)|the team)/i;
@@ -616,7 +616,7 @@ function durationMismatch(from: Page, link: Link, destination: Page) {
 }
 
 function bookingToInquiry(from: Page, link: Link, destination: Page) {
-  const promise = /^(?:book|schedule)\b.{0,55}\b(?:call|session|consultation|appointment|meeting)\b/i;
+  const promise = /^(?:book|schedule)\b.{0,55}\b(?:call|session|consult(?:ation)?|appointment|meeting)\b/i;
   if (!link.main || !promise.test(link.label) || destination.state !== 'READABLE') return;
   if (/\b(?:request|inquir|enquir|application)\b/i.test(link.label) || from.links.some(other => other.url !== link.url && promise.test(other.label))) return;
   const advertised = quote(from, link.label, 'Direct booking CTA');
@@ -714,6 +714,7 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   const offer = selected?.page;
   const line = selected?.line;
   const engagement = selected?.detail;
+  checkpoint.attributedProgramScope = true;
   if (offer && line && engagement) {
     checkpoint.offer = line;
     add(checkpoint, 'niche', 'VERIFIED', 'The official page describes a specialized coaching engagement.', [quote(offer, line, 'Offer heading'), quote(offer, engagement, 'Engagement scope')]);
@@ -732,7 +733,10 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     const proof = price ? quote(offer, price, 'Published offer price') : clientCase ?? (procurement?.contract ? observe('external', procurement.source,
       `${procurement.contract.buyer} recorded a coaching award to ${procurement.name} on ${procurement.contract.awardedOn.slice(0, 10)}. Value GBP ${procurement.contract.amountGbp}. Open Government Licence v3.0.`, 'Public contract award') : undefined);
     const program = offer.statements.find(item => /\b(?:(?:[3-9]|1[0-9]|three|four|five|six|nine|twelve)[- ]months?|(?:[6-9]|[1-9]\d) (?:private |individual |executive |leadership )?coaching sessions)\b/i.test(item)
-      && /\b(?:coaching|engagement|program(?:me)?)\b/i.test(item) && !/\b(?:free|may offer|might offer|formerly)\b/i.test(item));
+      && /\b(?:coaching|engagement|program(?:me)?)\b/i.test(item)
+      && !/\b(?:free|may offer|might offer|formerly|according to|report (?:on|by|from)|(?:a |the )?(?:study|survey|report|research) (?:shows|found|finds|documents|suggests|by|from))\b/i.test(item)
+      && (/\b(?:our|my) (?:[\w-]+ ){0,5}(?:coaching|engagement|program(?:me)?)\b|\b(?:at|with) (?:our|this|the) (?:practice|firm)\b|\b(?:we|I) (?:offer|deliver|provide|run|include)\b/i.test(item)
+        || containsName(item, checkpoint.identityName ?? job.name)));
     const commercial = [proof ?? (testimonial && quote(offer, testimonial, 'Attributed coaching client account')), substance && quote(substance.page, substance.statement, 'First-party operating history'),
       program && quote(offer, program, 'Published coaching program scope')].filter((item): item is Evidence => Boolean(item));
     add(checkpoint, 'substance', commercial.length >= 2 ? 'VERIFIED' : 'UNVERIFIED', commercial.length >= 2

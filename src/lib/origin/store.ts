@@ -272,10 +272,11 @@ export async function sourceQuality(db: DB) {
 }
 
 export async function revisit(db: DB, limit: number) {
-  return (await db.query<{ seed: Seed; seeds: Seed[]; review_intake: boolean }>(`SELECT seed,seeds,review_intake FROM (
+  return (await db.query<{ seed: Seed; seeds: Seed[]; review_recent: boolean }>(`SELECT seed,seeds,review_recent FROM (
     SELECT b.seed,b.investigated_at,j.seeds,j.outcome,j.expires_at,
       COALESCE(j.outcome='UNRESOLVED' AND j.checkpoint->'funnel'->>'intakeVersion' IS NULL
-        AND (j.checkpoint->'funnel'->>'tested')::int>0 AND checks.verified>=5 AND checks.opportunity_unverified, false) AS review_intake
+        AND (j.checkpoint->'funnel'->>'tested')::int>0 AND checks.verified>=5 AND checks.opportunity_unverified, false)
+      OR (j.outcome='QUALIFIED' AND NOT (j.checkpoint ? 'attributedProgramScope')) AS review_recent
     FROM origin_businesses b JOIN LATERAL (
       SELECT seeds,outcome,expires_at,checkpoint,decision FROM origin_investigations WHERE business_id=b.id
       ORDER BY created_at DESC LIMIT 1
@@ -284,11 +285,11 @@ export async function revisit(db: DB, limit: number) {
         bool_or(gate->>'name'='opportunity' AND gate->>'state'='UNVERIFIED') AS opportunity_unverified
       FROM jsonb_array_elements(j.decision->'gates') gate
     ) checks
-  ) prospects WHERE review_intake OR (outcome='QUALIFIED' AND expires_at<=now()+interval '4 hours')
+  ) prospects WHERE review_recent OR (outcome='QUALIFIED' AND expires_at<=now()+interval '4 hours')
       OR (outcome='UNRESOLVED' AND investigated_at<now()-interval '7 days')
-    ORDER BY expires_at ASC NULLS LAST,review_intake DESC,investigated_at LIMIT $1`, [limit])).rows.flatMap(({ seed, seeds, review_intake }) => {
+    ORDER BY expires_at ASC NULLS LAST,review_recent DESC,investigated_at LIMIT $1`, [limit])).rows.flatMap(({ seed, seeds, review_recent }) => {
     const visit: Seed = { ...seed, method: 'IGNITION', sourceKey: `revisit:${seed.sourceKey}`, occurredAt: undefined,
-      ...(review_intake ? { discoveryPriority: 9 } : {}) };
+      ...(review_recent ? { discoveryPriority: 9 } : {}) };
     return [...seeds.filter(item => item.method !== 'IGNITION'), visit];
   });
 }
