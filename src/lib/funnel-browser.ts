@@ -95,8 +95,11 @@ async function visibleElements(page: Page, nodes: JSHandle<NodeListOf<Element>>,
   }, nodes, indices, scrollTop);
 }
 
-export function createFunnelBrowser(read: ReadResource = readFunnelResource, scanSignal?: AbortSignal, options: { inspectBookingDialogs?: boolean } = {}) {
+export function createFunnelBrowser(read: ReadResource = readFunnelResource, scanSignal?: AbortSignal, options: {
+  inspectBookingDialogs?: boolean; captureScreenshots?: boolean;
+} = {}) {
   let browser: Promise<Browser> | undefined;
+  const captureScreenshots = options.captureScreenshots !== false;
   // Leave response space for the original desktop and mobile screenshots.
   let sectionBytesRemaining = 900_000;
   const launch = async () => {
@@ -129,7 +132,7 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
 
   async function capture(instance: Browser, url: string, id: string, device: FunnelScreenshot["device"]) {
     const context = await instance.createBrowserContext();
-    const timeout = AbortSignal.timeout(8_000);
+    const timeout = AbortSignal.timeout(captureScreenshots ? 8_000 : 14_000);
     const signal = scanSignal ? AbortSignal.any([scanSignal, timeout]) : timeout;
     const close = () => { void context.close().catch(() => {}); };
     signal.addEventListener("abort", close, { once: true });
@@ -156,6 +159,10 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
 
       async function fulfill(request: HTTPRequest) {
         const mainDocument = request.isNavigationRequest() && request.frame() === page.mainFrame();
+        if (!captureScreenshots && ['image', 'font'].includes(request.resourceType())) {
+          await request.abort('blockedbyclient').catch(() => {});
+          return;
+        }
         try {
           const target = funnelUrl(request.url()).href;
           if (
@@ -192,7 +199,7 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
       }
       page.on("request", (request) => { void fulfill(request); });
       try {
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 5_000 });
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: captureScreenshots ? 5_000 : 8_000 });
       } catch (error) {
         if (documentFailure || !(error instanceof Error && error.name === "TimeoutError") || page.url() === "about:blank") {
           throw documentFailure ?? error;
@@ -226,9 +233,9 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
         screenshots.push({ id: captureId, url: finalUrl, device, width, height, dataUrl: `data:image/jpeg;base64,${data}`, analyzed: false, section });
         for (const index of visible) elementCaptures[index] ??= captureId;
       }
-      await save(id, mobile ? [] : await visibleElements(page, nodes, indices).catch(() => []));
+      if (captureScreenshots) await save(id, mobile ? [] : await visibleElements(page, nodes, indices).catch(() => []));
 
-      if (!mobile) {
+      if (captureScreenshots && !mobile) {
         const ranked = targets.sort((a, b) => b.priority - a.priority || a.top - b.top);
         const sampled: number[] = [];
         for (const target of ranked) {
@@ -299,7 +306,8 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
   return {
     async render(url: string, pageId: string): Promise<RenderedPage> {
       const instance = await (browser ??= launch());
-      const attempts = await Promise.allSettled((["desktop", "mobile"] as const).map((device) =>
+      const devices: FunnelScreenshot['device'][] = captureScreenshots ? ['desktop', 'mobile'] : ['desktop'];
+      const attempts = await Promise.allSettled(devices.map((device) =>
         capture(instance, funnelUrl(url).href, `${pageId}-${device}`, device),
       ));
       const views = attempts.flatMap((attempt) => attempt.status === "fulfilled" ? [attempt.value] : []);
@@ -312,7 +320,7 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
         bookingDialogs: views.flatMap(view => view.url === page.url && view.bookingDialog ? [view.bookingDialog] : []),
         missingBookingSections: views.flatMap(view => view.url === page.url && view.missingBookingSection ? [view.missingBookingSection] : []),
         bookingLayouts: views.flatMap(view => view.url === page.url && view.bookingLayout ? [view.bookingLayout] : []),
-        unavailable: (["desktop", "mobile"] as const).filter((device) => !screenshots.some((shot) => shot.device === device && !shot.section)),
+        unavailable: captureScreenshots ? devices.filter((device) => !screenshots.some((shot) => shot.device === device && !shot.section)) : [],
         incompleteAssets: views.some((view) => view.incompleteAssets),
       };
     },

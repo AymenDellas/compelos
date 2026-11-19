@@ -119,7 +119,7 @@ export type Checkpoint = {
   inquiryMismatch?: { url: string; destination: string; from: string; label: string; evidence: string[]; kind?: 'message' | 'fee' | 'intake' };
   missingBookingSection?: { url: string; fragment: string; label: string; evidence: string };
   mobileBookingDepth?: { from: string; destination: string; evidence: string };
-  funnel?: { found: number; tested: number; interactive: boolean; comparedIntake?: boolean };
+  funnel?: { found: number; tested: number; interactive: boolean; intakeVersion?: number };
   acquisitionSources?: number;
   ownedActivities?: { date: string; evidence: Evidence }[];
   ownedFeeds?: string[];

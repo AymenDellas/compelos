@@ -219,7 +219,8 @@ export function parseBusinessPage(html: string, url: string) {
     const form = $(node);
     const labels = form.find('label[for]').toArray().map(label => [$(label).attr('for'), squash($(label).text()).replace(/\s*\*$/, '')] as const);
     const byId = new Map(labels);
-    const context = squash(`${form.attr('aria-label') ?? ''} ${form.text()}`);
+    const formCopy = form.find('label,legend,p,h2,h3,h4').toArray().map(element => $(element).text());
+    const context = squash([form.attr('aria-label'), ...formCopy, form.text()].join(' '));
     if (!/\b(?:initial|introductory|discovery|complimentary|strategy)\b.{0,55}\b(?:consultation|call|session)\b/i.test(context)) return [];
     const fields = new Map<string, string>();
     form.find('input[required],select[required],textarea[required],input[aria-required="true"],select[aria-required="true"],textarea[aria-required="true"]').each((_index, field) => {
@@ -638,6 +639,8 @@ function bookingToInquiry(from: Page, link: Link, destination: Page) {
 }
 
 function offerOn(page: Page) {
+  const softwareCoach = /\b(?:AI (?:teammate|(?:powered )?(?:executive |CEO |leadership |business )?coach(?:ing)? (?:agent|tool|software))|(?:executive |CEO |leadership |business )?coach(?:ing)? AI agent)\b/i;
+  if ([page.title, ...page.headings.slice(0, 4)].some(text => softwareCoach.test(text))) return;
   const specialty = /\b(?:(?:strategic )?leadership advis(?:ory|er|or)|CEO mentor(?:ing|ship)?|founder advis(?:ory|er|or)|executive development)\b/i;
   const training = /\b(?:coach(?:ing)? (?:skills |credential )?(?:training|education|certification|accreditation)|(?:become|qualify as) (?:an? )?(?:certified |professional |executive )?coach|leader as coach)\b/i;
   const servicesForCoaches = /\b(?:lead generation|digital marketing|seo|paid ads?|web design|appointment setting|branding|lead magnet)\b/i;
@@ -762,7 +765,7 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   }
   const routes = [...routesByUrl.values()].filter(({ link }) => routeHost(link.url, job.domain)).slice(0, 3);
   const cta = routes[0]?.link;
-  checkpoint.funnel = { found: routesByUrl.size, tested: 0, interactive: prioritized.some(item => item.bookingControl), comparedIntake: true };
+  checkpoint.funnel = { found: routesByUrl.size, tested: 0, interactive: prioritized.some(item => item.bookingControl), intakeVersion: 1 };
   checkpoint.signature = { offer: hash(normalized(`${line ?? ''} ${engagement ?? ''}`)), booking: cta?.url ?? '' };
   if (job.signature) {
     const previousOffer = /^[a-f0-9]{64}$/.test(job.signature.offer) ? job.signature.offer : hash(job.signature.offer);
@@ -905,8 +908,9 @@ export async function verifyOpportunity(web: PublicWeb, job: Job, signal: AbortS
       if (repeated && repeated.kind === (inquiry.kind ?? 'message')) {
         const proof = [...stored, ...repeated.evidence];
         if (browserEnabled && repeated.kind !== 'fee') {
-          const budget = AbortSignal.any([signal, AbortSignal.timeout(18_000)]);
-          const browser = createFunnelBrowser((url, requestSignal) => web.asset(url, requestSignal, destination.url), budget, { inspectBookingDialogs: true });
+          const budget = AbortSignal.any([signal, AbortSignal.timeout(23_000)]);
+          const browser = createFunnelBrowser((url, requestSignal) => web.asset(url, requestSignal, destination.url), budget,
+            { inspectBookingDialogs: true, captureScreenshots: false });
           try {
             const rendered = await browser.render(destination.url, job.id);
             const observed = parseBusinessPage(rendered.html, rendered.url);

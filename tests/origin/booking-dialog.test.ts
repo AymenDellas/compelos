@@ -59,3 +59,20 @@ test('the renderer measures real booking-link placement across independent viewp
     await browser.close();
   }
 });
+
+test('a form recheck reads the visible document without waiting for images or taking screenshots', { timeout: 30_000 }, async () => {
+  const url = 'https://coach.test/';
+  const reads: string[] = [];
+  const browser = createFunnelBrowser(async requested => {
+    reads.push(requested);
+    return { url: requested, status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(
+      '<main><img src="/portrait.jpg"><form><label>City<input required></label><div hidden>Hidden field</div></form></main>') };
+  }, AbortSignal.timeout(24_000), { inspectBookingDialogs: true, captureScreenshots: false });
+  try {
+    const rendered = await browser.render(url, 'intake');
+    assert.match(rendered.html, /City/);
+    assert.doesNotMatch(rendered.html, /Hidden field/);
+    assert.deepEqual(rendered.screenshots, []);
+    assert.ok(!reads.some(request => request.endsWith('/portrait.jpg')));
+  } finally { await browser.close(); }
+});

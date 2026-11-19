@@ -170,7 +170,7 @@ test('consultation intake evidence counts required prompts and respects an expla
   for (const disclosed of [false, true]) {
     const base = fixture(home);
     const html = `<main><h1>Contact us</h1>${disclosed ? '<p>After you submit, we will contact you to arrange a time.</p>' : ''}
-      <form aria-label="Complimentary initial consultation">${inputs}<input type="hidden" required>
+      <form>${inputs}<input type="hidden" required><label><input type="checkbox" name="topic">Complimentary initial consultation</label><label>Comments</label>
         <fieldset disabled><label><input required>Internal field</label></fieldset><button>Submit</button></form></main>`;
     const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
       if (args[0] === `${official}contact`) return { url: args[0], status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(html) };
@@ -184,6 +184,15 @@ test('consultation intake evidence counts required prompts and respects an expla
     await verifyOpportunity(web, { ...job, checkpoint }, signal());
     assert.equal(checkpoint.gates.find(item => item.name === 'opportunity')?.state, 'UNVERIFIED');
   }
+});
+
+test('an AI coaching agent offered as software does not verify a coaching practice', async () => {
+  const html = page.replace('<main>', '<main><h1>AI CEO Coach Agent</h1>');
+  const { web } = fixture(html);
+  const job = candidate();
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const investigated = await investigate(web, { ...job, checkpoint }, settings, signal());
+  assert.equal(investigated.checkpoint.gates.find(item => item.name === 'niche')?.state, 'UNVERIFIED');
 });
 
 test('syndicated mentions and model-like instructions establish no traffic or acquisition gate', async () => {
