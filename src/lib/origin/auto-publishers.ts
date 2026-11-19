@@ -9,19 +9,27 @@ import type { PublicWeb } from './public-web';
 export const publicationAdapter = 'ECHO · Public publisher discovery';
 export const gdeltCredits = 'The GDELT Project · https://www.gdeltproject.org/';
 const gdelt = 'api.gdeltproject.org';
-const directorySites = /(?:^|\.)(?:apple\.com|spotify\.com|wikipedia\.org|wikidata\.org|imdb\.com|amazon\.com|goodreads\.com)$/i;
+const directorySites = /(?:^|\.)(?:apple\.com|spotify\.com|wikipedia\.org|wikidata\.org|imdb\.com|amazon\.com|goodreads\.com|about\.me|therapyden\.com|psychologytoday\.com)$/i;
 const accessWarning = /\b(?:verify (?:that )?you are human|checking your browser|just a moment|access denied|captcha)\b/i;
-const restrictedUse = /\b(?:may not|must not|do not|agree not to|prohibit(?:ed|s)?|forbid(?:den|s)?|without (?:our |prior |express )?(?:written )?permission)\b[^.!?]{0,135}\b(?:scrap(?:e|ing)|crawl(?:ers?|ing)?|spiders?|bots?|automated (?:access|means)|data (?:mining|extraction)|commercial use|commercial purposes)|\bnon[- ]commercial (?:use|purposes) only\b|\bpersonal(?:,| and)?\s+(?:solely )?non[- ]commercial\b|\b(?:scraping|crawling|automated (?:access|means)|commercial (?:use|purposes))\b[^.!?]{0,105}\b(?:prohibited|forbidden|not permitted|requires? (?:prior |written )?consent)\b/i;
-const termLink = /^(?:terms(?: and conditions| of (?:use|service))?|legal terms|website terms)$/i;
-const publisherTypes = /^(?:Organization|NewsMediaOrganization|Corporation|EducationalOrganization|ProfessionalService)$/i;
+const automated = String.raw`(?:scrap(?:e|ing|ers?)|crawl(?:ers?|ing)?|spiders?|robots?|bots?|automated (?:access|means|systems?|collection)|(?:data|information) (?:mining|extraction|harvesting)|lead generation|prospect(?:ing| collection))`;
+const denied = String.raw`(?:shall not|may not|must not|do not|cannot|agree not to|prohibit(?:ed|s)?|forbid(?:den|s)?|without (?:our |prior |express )?(?:written )?permission)`;
+const restrictedUse = new RegExp(String.raw`\b${denied}\b[^.!?]{0,135}\b${automated}\b|\b${automated}\b[^.!?]{0,105}\b(?:prohibited|forbidden|not (?:allowed|permitted)|requires? (?:prior |written )?consent)\b|\b(?:use of (?:this|our|the) (?:site|website|service|data)|(?:use|access) (?:this|our|the) (?:site|website|service|data))\b[^.!?]{0,75}\b(?:non[- ]commercial|personal use only|commercial (?:use|purposes) (?:is |are )?(?:prohibited|forbidden|not permitted))\b|\b(?:you (?:may|can) not|you must not|you agree not to) (?:access|use) (?:this|our|the) (?:site|website|service|data) for (?:any )?commercial purposes\b`, 'i');
+const termLink = /^(?:terms(?: (?:and|&) conditions| of (?:use|service))?|legal(?: terms)?|website terms|acceptable use(?: policy)?)$/i;
+const publisherTypes = /^(?:Organization|NewsMediaOrganization|Corporation|EducationalOrganization|ProfessionalService|PodcastSeries)$/i;
 const recordTypes = /^(?:Article|NewsArticle|BlogPosting|Interview|PodcastEpisode|SocialMediaPosting|Event|BusinessEvent|EducationEvent|WebPage)$/i;
 const appearanceTypes = /^(?:Interview|PodcastEpisode|Event|BusinessEvent|EducationEvent)$/i;
 const appearance = /\b(?:interview|podcast|episode|guest|speaker|conference|keynote|webinar|summit|panel discussion|fireside chat)\b/i;
 type RecordNode = Record<string, unknown>;
 const string = (value: unknown) => typeof value === 'string' ? value.trim() : '';
 const clean = (value: string) => value.replace(/\s+/g, ' ').trim();
-export const normalizedName = (value: string) => clean(value.normalize('NFKD').replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}]/gu, ' ')).toLowerCase();
+export const normalizedName = (value: string) => clean(value.normalize('NFKD').replace(/\p{M}/gu, '').replace(/[’']/gu, '').replace(/[^\p{L}\p{N}]/gu, ' ')).toLowerCase();
 const namesMatch = (a: string, b: string) => Boolean(b) && ` ${normalizedName(a)} `.includes(` ${normalizedName(b)} `);
+
+function blocksFactRead(text: string) {
+  // A prohibition on automated registration applies to creating an account.
+  const accountRegistration = /\baccounts? (?:registered|created|opened) by\b[^.!?]{0,165}\b(?:not (?:permitted|allowed)|prohibited|forbidden)\b/i;
+  return restrictedUse.test(text.replace(accountRegistration, ''));
+}
 
 export function relatedPublisherHosts(first: string, second: string) {
   return first === second || first.endsWith(`.${second}`) || second.endsWith(`.${first}`);
@@ -75,9 +83,14 @@ function pageMetadata(html: string, url: string) {
     catch { return []; }
   });
   const canonical = publicLink($('head link[rel~="canonical"]').first().attr('href'), url);
+  const samePage = (value: unknown) => {
+    const link = publicLink(value, url);
+    if (!link || domain(link) !== domain(url)) return false;
+    return new URL(link).pathname.replace(/\/$/, '') === new URL(url).pathname.replace(/\/$/, '');
+  };
   const scoped = graph.filter(node => typeOf(node, recordTypes) &&
     [node.url, node['@id'], node.mainEntityOfPage, ...objects(node.mainEntityOfPage).map(item => item['@id'] ?? item.url)]
-      .some(value => publicLink(value, url) === url));
+      .some(samePage));
   const declaredLicenses = [...$('head link[rel~="license"]').toArray().map(node => $(node).attr('href')),
     ...$('article a[rel~="license"]').toArray().flatMap(node => {
       const context = clean($(node).closest('p').text());
@@ -86,14 +99,20 @@ function pageMetadata(html: string, url: string) {
     ...scoped.flatMap(node => typeof node.license === 'string' ? [node.license] : objects(node.license).map(license => license.url ?? license['@id']))];
   const licenses = declaredLicenses.map(cleanLicense);
   const license = licenses.length && licenses.every(Boolean) ? licenses[0] : null;
-  const publisherNames = [...scoped.flatMap(node => objects(node.publisher)), ...graph.filter(node => typeOf(node, publisherTypes))]
+  const publisherNames = [...scoped.flatMap(node => [...objects(node.publisher), ...objects(node.organizer), ...objects(node.partOfSeries)]),
+    ...graph.filter(node => typeOf(node, publisherTypes))]
     .filter(node => typeOf(node, publisherTypes) && [node.url, node['@id']].some(value => {
-      const site = publicLink(value);
+      const site = publicLink(value, url);
       return site && domain(site) === domain(url);
     })).map(node => clean(string(node.name)));
+  const siteName = clean(string($('head meta[property="og:site_name"]').first().attr('content')));
+  const masthead = $('header a[href], a[rel~="home"], a[class*="site-title"]').slice(0, 40).toArray().some(node => {
+    const link = publicLink($(node).attr('href'), url);
+    const label = clean($(node).text() || $(node).attr('aria-label') || $(node).find('img[alt]').first().attr('alt') || '');
+    return link && new URL(link).pathname === '/' && domain(link) === domain(url) && normalizedName(label) === normalizedName(siteName);
+  });
   const verifiedNames = [...new Map(publisherNames.filter(name => name.length >= 3 && name.length <= 100).map(name => [normalizedName(name), name])).values()];
-  // These assertions refer to the item itself. A site-wide social display name cannot establish a publisher's ownership.
-  const publisher = verifiedNames.length === 1 ? verifiedNames[0] : null;
+  const publisher = verifiedNames.length === 1 ? verifiedNames[0] : !verifiedNames.length && masthead && siteName.length >= 3 && siteName.length <= 100 ? siteName : null;
   const title = clean(string($('head meta[property="og:title"]').attr('content')) || string(scoped[0]?.headline) || $('main h1, article h1, h1').first().text()).slice(0, 220);
   const explicit = (role: string) => scoped.flatMap(node => objects(node[role]).filter(person => typeOf(person, /^Person$/i)));
   const guests = [...explicit('performer'), ...explicit('guest'), ...scoped.filter(node => typeOf(node, /^PodcastEpisode$/i)).flatMap(node => objects(node.actor))];
@@ -103,27 +122,77 @@ function pageMetadata(html: string, url: string) {
     const target = publicLink($(node).attr('href'), url);
     if (target && relevantCoach.test(context)) people.push({ name: clean($(node).text()), site: publisherPointer(target), job: context });
   }
-  const dates = [...scoped.map(node => typeOf(node, /Event$/i) ? node.startDate : node.datePublished),
-    $('head meta[property="article:published_time"]').first().attr('content')].map(textDate).filter((date): date is number => date !== null);
+  const isEvent = scoped.some(node => typeOf(node, /Event$/i));
+  const markupDates = $('article time[itemprop="datePublished"][datetime], main time[itemprop="datePublished"][datetime], article header time[datetime]').slice(0, 6).toArray().map(node => $(node).attr('datetime'));
+  const dates = (isEvent ? scoped.filter(node => typeOf(node, /Event$/i)).map(node => node.startDate) : [
+    ...scoped.map(node => node.datePublished), $('head meta[property="article:published_time"]').first().attr('content'), ...markupDates,
+  ]).map(textDate).filter((date): date is number => date !== null);
   const links = $('a[href]').toArray();
   const terms = [...new Set([...$('head link[rel~="terms-of-service"]').toArray(),
     ...links.filter(node => (($(node).attr('rel') ?? '').split(/\s+/).includes('terms-of-service') || termLink.test(clean($(node).text()))))]
     .map(node => publicLink($(node).attr('href'), url)).filter((value): value is string => Boolean(value && value !== url)))].slice(0, 3);
   const out = links.flatMap(node => {
     const target = publicLink($(node).attr('href'), url);
-    return target ? [{ url: target, label: clean($(node).text()).slice(0, 120) }] : [];
+    if (!target || $(node).closest('footer,nav,aside,header').length) return [];
+    return [{ url: target, label: clean($(node).text()).slice(0, 120), context: clean($(node).closest('p,li,figcaption').text()).slice(0, 360) }];
   });
+  for (const link of out) {
+    if (!/^(?:\p{Lu}[\p{L}’'\-]{1,30} ?){2,5}$/u.test(link.label) || !relevantCoach.test(link.context)) continue;
+    const directDescription = link.context.startsWith(`${link.label},`) ||
+      /\b(?:interviewed|featured|speaker|guest|joined by|coach)\b/i.test(link.context.slice(0, Math.max(0, link.context.indexOf(link.label))));
+    const site = publisherPointer(link.url);
+    if (site && directDescription) people.push({ name: link.label, site, job: link.context });
+  }
+  $('script,style,template,[hidden],aside,nav').remove();
   const keyText = clean($('main,article').first().text() || $('body').text()).slice(0, 18_000);
   const topical = relevantCoach.test(title) || (appearance.test(title) && relevantCoach.test(keyText)) ||
     (scoped.some(node => typeOf(node, appearanceTypes)) && relevantCoach.test(keyText));
   const agents = $('head meta[name="robots" i], head meta[name="compel-origin" i]').toArray().map(node => $(node).attr('content')).join(' ');
-  return { canonical, license, publisher, title, people, dates, terms, out, topical, text: keyText, restricted: /\b(?:noarchive|nofollow|none)\b/i.test(agents),
+  const subjects = $('main h1, article h1, article header, main p, article p').slice(0, 100).toArray().map(node => clean($(node).text()).slice(0, 500));
+  const rss = publicLink($('head link[rel~="alternate"][type="application/rss+xml"]').first().attr('href'), url);
+  const headings = $('h1,h2').slice(0, 4).toArray().map(node => normalizedName($(node).text()));
+  return { canonical, license, publisher, title, people, dates, terms, out, topical, subjects, rss, headings, text: keyText,
+    restricted: /\b(?:nofollow|none)\b/i.test(agents) || scoped.some(node => node.isAccessibleForFree === false || node.isAccessibleForFree === 'false'),
     challenge: accessWarning.test(`${$('title').first().text()} ${keyText.slice(0, 400)}`) };
+}
+
+function buzzsproutFeed(page: string, feed: string | null) {
+  const origin = new URL(page);
+  const id = origin.pathname.match(/^\/(\d{1,12})\/episodes\/\d+(?:-[^/]+)?\/?$/)?.[1];
+  if (!id || !/^[a-z\d-]+\.buzzsprout\.com$/.test(origin.hostname) ||
+    feed !== `https://feeds.buzzsprout.com/${id}.rss`) return null;
+  return feed;
+}
+
+async function episodeFact(web: PublicWeb, episode: string, feed: string, headings: string[], signal: AbortSignal) {
+  const alternate = new URL(new URL(feed).pathname, 'https://rss.buzzsprout.com').href;
+  const response = await web.document(feed, signal, url => url.href === feed || url.href === alternate);
+  if (response.status !== 200 || response.body.length > 1_500_000 || !/\bxml\b/i.test(response.headers['content-type'] ?? '') ||
+    /\b(?:nofollow|none)\b/i.test(response.headers['x-robots-tag'] ?? '')) return null;
+  const xml = load(response.body.toString('utf8'), { xml: true });
+  const channel = xml('rss > channel').first();
+  const publisher = clean(channel.children('title').first().text());
+  if (publisher.length < 3 || publisher.length > 100 || !headings.includes(normalizedName(publisher))) return null;
+  const episodeId = new URL(episode).pathname.match(/\/episodes\/(\d+)/)?.[1];
+  const channelUrl = publicLink(channel.children('link').first().text());
+  const sameChannel = channelUrl && domain(channelUrl) === domain(episode);
+  const item = channel.children('item').slice(0, 60).toArray().find(node => {
+    const link = publicLink(xml(node).children('link').text());
+    if (!link) return Boolean(sameChannel && episodeId && xml(node).children('guid').text().trim() === `Buzzsprout-${episodeId}`);
+    if (!relatedPublisherHosts(domain(link), 'buzzsprout.com')) return false;
+    return new URL(link).pathname.match(/\/episodes\/(\d+)/)?.[1] === episodeId && buzzsproutFeed(link, feed) !== null;
+  });
+  const date = item ? Date.parse(xml(item).children('pubDate').text()) : NaN;
+  return Number.isFinite(date) ? { publisher, date } : null;
 }
 
 async function readPublisher(web: PublicWeb, pointer: PublisherPointer, activityDays: number, signal: AbortSignal) {
   let inspected = pointer.url;
-  const audit = (code: string, records = 0, license?: string, publisher?: string): PublisherAudit => ({ url: inspected, code, records, license, publisher });
+  const checkedTerms: string[] = [];
+  const audit = (code: string, records = 0, license?: string | null, publisher?: string | null): PublisherAudit => ({
+    url: inspected, code, records, ...(license ? { license } : {}), ...(publisher ? { publisher } : {}),
+    ...(records ? { use: 'FACTS_ONLY' as const } : {}), ...(checkedTerms.length ? { checkedTerms } : {}),
+  });
   try {
     const host = domain(pointer.url);
     const own = (url: URL) => domain(url.href) === host && url.protocol === 'https:';
@@ -132,44 +201,60 @@ async function readPublisher(web: PublicWeb, pointer: PublisherPointer, activity
     if (response.status !== 200) return { audit: audit(`HTTP_${response.status}`), seeds: [] };
     if (!/(?:text\/html|application\/xhtml\+xml)/i.test(response.headers['content-type'] ?? '')) return { audit: audit('NOT_HTML'), seeds: [] };
     const meta = pageMetadata(response.body.toString('utf8'), inspected);
-    if (meta.challenge || meta.restricted || /\b(?:noarchive|nofollow|none)\b/i.test(response.headers['x-robots-tag'] ?? '')) return { audit: audit('RESTRICTED'), seeds: [] };
+    if (meta.challenge || meta.restricted || /\b(?:nofollow|none)\b/i.test(response.headers['x-robots-tag'] ?? '')) return { audit: audit('RESTRICTED'), seeds: [] };
     if (meta.canonical && domain(meta.canonical) !== host) return { audit: audit('SYNDICATED'), seeds: [] };
-    if (restrictedUse.test(meta.text)) return { audit: audit('TERMS_RESTRICTED'), seeds: [] };
-    if (!meta.license) return { audit: audit('PERMISSION_UNVERIFIED'), seeds: [] };
-    if (!meta.publisher) return { audit: audit('PUBLISHER_UNVERIFIED', 0, meta.license), seeds: [] };
+    if (blocksFactRead(meta.text)) return { audit: audit('TERMS_RESTRICTED'), seeds: [] };
+    const feed = buzzsproutFeed(inspected, meta.rss);
     let termsReceipt = inspected;
-    for (const terms of meta.terms) {
-      if (!own(new URL(terms))) return { audit: audit('TERMS_UNVERIFIED'), seeds: [] };
-      const permission = await web.document(terms, signal, own);
+    const listed = new Set([...meta.terms, ...(feed ? ['https://www.buzzsprout.com/tos'] : [])]);
+    const permitTerms = (url: URL) => url.protocol === 'https:' && (relatedPublisherHosts(domain(url.href), host) ||
+      Boolean(feed && url.hostname === 'www.buzzsprout.com' && /^\/tos\/?$/.test(url.pathname)));
+    for (const terms of listed) {
+      if (!permitTerms(new URL(terms))) return { audit: audit('TERMS_UNVERIFIED'), seeds: [] };
+      const permission = await web.document(terms, signal, permitTerms);
       const text = clean(load(permission.body.toString('utf8')).text());
       if (permission.status !== 200 || !text || accessWarning.test(text.slice(0, 400))) return { audit: audit('TERMS_UNVERIFIED'), seeds: [] };
-      if (restrictedUse.test(text)) return { audit: audit('TERMS_RESTRICTED'), seeds: [] };
+      checkedTerms.push(permission.url);
+      if (blocksFactRead(text)) return { audit: audit('TERMS_RESTRICTED'), seeds: [] };
       termsReceipt = permission.url;
     }
+    let feedFact: Awaited<ReturnType<typeof episodeFact>> = null;
+    if (feed && !meta.publisher) {
+      feedFact = await episodeFact(web, inspected, feed, meta.headings, signal).catch(() => null);
+      if (!feedFact) return { audit: audit('PODCAST_RECORD_UNVERIFIED', 0, meta.license), seeds: [] };
+    }
+    const publisher = meta.publisher ?? feedFact?.publisher;
+    if (!publisher) return { audit: audit('PUBLISHER_UNVERIFIED', 0, meta.license), seeds: [] };
     // Ambiguous publication timestamps and recent re-indexing cannot prove recent appearances.
     const now = Date.now();
-    const dates = [...new Set(meta.dates.map(date => new Date(date).toISOString().slice(0, 10)))];
-    if (!meta.topical || !meta.title || dates.length !== 1 || meta.dates[0] > now || meta.dates[0] < now - activityDays * 86_400_000) {
-      return { audit: audit('ACTIVITY_UNVERIFIED', 0, meta.license, meta.publisher), seeds: [] };
+    const observedDates = feedFact ? [...meta.dates, feedFact.date] : meta.dates;
+    const date = observedDates[0];
+    const dates = [...new Set(observedDates.map(value => new Date(value).toISOString().slice(0, 10)))];
+    if (!meta.topical || !meta.title) return { audit: audit('TOPIC_UNVERIFIED', 0, meta.license, publisher), seeds: [] };
+    if (dates.length !== 1 || date > now || date < now - activityDays * 86_400_000) {
+      return { audit: audit('ACTIVITY_UNVERIFIED', 0, meta.license, publisher), seeds: [] };
     }
     const people = meta.people.filter(person => person.site && relevantCoach.test(person.job));
     const { name: expectedName, website: expectedSite } = pointer;
-    if (expectedName && expectedSite && (namesMatch(meta.title, expectedName) || meta.people.some(person => namesMatch(person.name, expectedName)))) {
-      const identityLink = meta.out.some(link => domain(link.url) === domain(expectedSite) && namesMatch(link.label, expectedName));
+    if (expectedName && expectedSite && (namesMatch(meta.title, expectedName) || meta.people.some(person => namesMatch(person.name, expectedName)) ||
+      meta.subjects.some(subject => namesMatch(subject, expectedName) && relevantCoach.test(subject)))) {
+      const identityLink = meta.out.some(link => domain(link.url) === domain(expectedSite) && (namesMatch(link.label, expectedName) || namesMatch(link.context, expectedName)));
       const guest = meta.people.some(person => person.site && domain(person.site) === domain(expectedSite) && namesMatch(person.name, expectedName));
-      if (identityLink || guest) people.push({ name: expectedName, site: expectedSite, job: '' });
+      const subject = pointer.viaOfficial && namesMatch(meta.title, expectedName) && meta.subjects.some(text => namesMatch(text, expectedName) && relevantCoach.test(text));
+      if (identityLink || guest || subject) people.push({ name: expectedName, site: expectedSite, job: '' });
     }
     const seeds: Seed[] = [...new Map(people.flatMap(person => {
       const website = person.site;
       if (!website || relatedPublisherHosts(domain(website), host) || person.name.length < 3 || person.name.length > 120) return [];
-      const title = meta.title;
       const seed: Seed = { method: 'PUBLICATION', adapter: publicationAdapter, name: person.name, website,
-        source: inspected, sourceKey: `${host}:${normalizedName(title)}`, publisher: `organization:${normalizedName(meta.publisher!)}`,
-        permission: meta.license!, publication: { checkedAt: new Date(now).toISOString(), permissionPage: termsReceipt, title, digest: hash(response.body) },
-        occurredAt: new Date(meta.dates[0]).toISOString(), excerpt: `${meta.publisher} · ${title} · featured coach: ${person.name} · ${meta.license}` };
+        source: inspected, sourceKey: `${host}:${hash(normalizedName(meta.title))}`, publisher: `organization:${normalizedName(publisher)}`,
+        ...(meta.license ? { permission: meta.license } : {}),
+        publication: { checkedAt: new Date(now).toISOString(), permissionPage: termsReceipt, digest: hash(response.body), use: 'FACTS_ONLY',
+          ...(feedFact && feed ? { recordUrl: feed } : {}) },
+        occurredAt: new Date(date).toISOString(), excerpt: `${publisher} published an appearance or contribution by ${person.name} related to the coaching specialty.` };
       return [[`${domain(website)}:${normalizedName(person.name)}`, seed] as const];
     })).values()];
-    return { audit: audit(seeds.length ? 'ADMITTED' : 'OFFICIAL_LINK_UNVERIFIED', seeds.length, meta.license, meta.publisher), seeds };
+    return { audit: audit(seeds.length ? 'ADMITTED' : 'OFFICIAL_LINK_UNVERIFIED', seeds.length, meta.license, publisher), seeds };
   } catch (error) {
     return { audit: audit(error instanceof PublicFailure ? error.code : signal.aborted ? 'TIMEOUT' : 'SOURCE_UNAVAILABLE'), seeds: [] };
   }
@@ -180,8 +265,11 @@ export async function verifyPublications(web: PublicWeb, pointers: PublisherPoin
     const url = publisherPointer(pointer.url);
     return url ? [[url, { ...pointer, url }] as const] : [];
   })).values()].slice(0, limit);
-  const records = await Promise.all(unique.map(pointer => readPublisher(web, pointer, activityDays,
-    AbortSignal.any([signal, AbortSignal.timeout(7_500)]))));
+  const records: Awaited<ReturnType<typeof readPublisher>>[] = [];
+  for (let offset = 0; offset < unique.length && !signal.aborted; offset += 3) {
+    records.push(...await Promise.all(unique.slice(offset, offset + 3).map(pointer => readPublisher(web, pointer, activityDays,
+      AbortSignal.any([signal, AbortSignal.timeout(8_000)])))));
+  }
   return { seeds: records.flatMap(record => record.seeds), audit: records.map(record => record.audit) };
 }
 

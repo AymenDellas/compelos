@@ -7,7 +7,7 @@ import type { PublisherAudit, Seed, SourceResult } from './policy';
 import type { PublisherFeed } from './sources';
 
 export const niches = ['executive coach', 'leadership coach', 'business coach', 'career coach'];
-export const relevantCoach = /\b(?:executive|leadership|business|career|professional development)\s+coach(?:es|ing)?\b/i;
+export const relevantCoach = /\b(?:executive|leadership|business|career|professional development)(?: (?:and|&) (?:executive|leadership|business|career))?\s+coach(?:es|ing)?\b|\bcoach(?:es|ing)?\s+for (?:[\w-]+ ){0,2}(?:executives|founders|leaders|business owners)\b/i;
 const wikidataHost = 'www.wikidata.org';
 const wikiUrl = (parameters: Record<string, string>) => `https://${wikidataHost}/w/api.php?${new URLSearchParams({ format: 'json', maxlag: '5', ...parameters })}`;
 const qid = z.string().regex(/^Q[1-9]\d{0,14}$/);
@@ -49,7 +49,7 @@ export async function wikidata(web: PublicWeb, limit: number, strategy: string, 
     const match = Number(relevantCoach.test(description)) * 2 + Number(/\b(?:American|British|Canadian|United States|United Kingdom|Canada)\b/i.test(description));
     const websites = entity?.claims?.P856?.filter(item => item.rank !== 'deprecated') ?? [];
     const urls = websites.map(item => normalizedSite(item.mainsnak.datavalue?.value ?? '')).filter((url): url is string => Boolean(url));
-    if (!name || name.length < 3 || !urls.length) return [];
+    if (!name || name.length < 3 || !urls.length || /^(?:the )?(?:executive|leadership|business|career|professional development) coach(?:es|ing)?$/i.test(name)) return [];
     const unique = [...new Map(urls.map(url => [domain(url), url])).values()].slice(0, 3);
     const references = [...(entity?.claims?.P973?.filter(item => item.rank !== 'deprecated').map(item => item.mainsnak.datavalue?.value) ?? []),
       ...websites.flatMap(item => item.references?.flatMap(reference => reference.snaks.P854?.map(snak => snak.datavalue?.value) ?? []) ?? [])];
@@ -94,26 +94,27 @@ export async function feed(web: PublicWeb, publisher: PublisherFeed, limit: numb
 export type Adapter = { name: string; run: () => Promise<Seed[] | { seeds: Seed[]; audit: PublisherAudit[] }>; retryAt?: string; deferred?: string; credit?: string };
 
 export async function discover(adapters: Adapter[], limit: number, historical: Seed[] = []) {
-  const results: SourceResult[] = [];
-  const seeds: Seed[] = [];
-  for (const adapter of adapters) {
+  const observations = await Promise.all(adapters.map(async (adapter): Promise<{ seeds: Seed[]; status: SourceResult }> => {
     const before = Date.now();
     if (adapter.deferred || adapter.retryAt && Date.parse(adapter.retryAt) > before) {
-      results.push({ adapter: adapter.name, status: 'DEFERRED', discovered: 0, elapsedMs: 0, retryAt: adapter.retryAt, code: adapter.deferred, credit: adapter.credit });
-      continue;
+      return { seeds: [], status: { adapter: adapter.name, status: 'DEFERRED', discovered: 0, elapsedMs: 0,
+        retryAt: adapter.retryAt, code: adapter.deferred, credit: adapter.credit } };
     }
     try {
       const content = await adapter.run();
       const found = Array.isArray(content) ? content : content.seeds;
-      seeds.push(...found.map(seed => ({ ...seed, adapter: seed.adapter ?? adapter.name })));
-      results.push({ adapter: adapter.name, status: 'OK', discovered: found.length, elapsedMs: Date.now() - before,
-        publisherAudit: Array.isArray(content) ? undefined : content.audit, credit: adapter.credit });
+      return { seeds: found.map(seed => ({ ...seed, adapter: seed.adapter ?? adapter.name })), status: {
+        adapter: adapter.name, status: 'OK', discovered: found.length, elapsedMs: Date.now() - before,
+        publisherAudit: Array.isArray(content) ? undefined : content.audit, credit: adapter.credit,
+      } };
     } catch (error) {
       const code = error instanceof PublicFailure ? error.code : error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name) ? 'TIMEOUT' : 'SOURCE_UNAVAILABLE';
-      results.push({ adapter: adapter.name, status: 'FAILED', discovered: 0, elapsedMs: Date.now() - before,
-        code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined, credit: adapter.credit });
+      return { seeds: [], status: { adapter: adapter.name, status: 'FAILED', discovered: 0, elapsedMs: Date.now() - before,
+        code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined, credit: adapter.credit } };
     }
-  }
+  }));
+  const results = observations.map(observation => observation.status);
+  const seeds = observations.flatMap(observation => observation.seeds);
   const groups = new Map<string, Map<string, Seed>>();
   const discoveredHosts = new Set(seeds.map(seed => domain(seed.website)));
   for (const seed of [...seeds, ...historical]) {

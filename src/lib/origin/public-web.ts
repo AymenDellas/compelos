@@ -11,8 +11,10 @@ export const redirectCodes = [301, 302, 303, 307, 308];
 
 function indexUrl(value: string, host: string) {
   const url = funnelUrl(value);
-  const path = host === 'api.gdeltproject.org' ? '/api/v2/doc/doc' : host === 'www.wikidata.org' ? '/w/api.php' : null;
-  if (!path || url.protocol !== 'https:' || url.host !== host || url.pathname !== path) throw new PublicFailure('UNVERIFIED_SOURCE');
+  const matches = host === 'api.gdeltproject.org' && url.pathname === '/api/v2/doc/doc' || host === 'www.wikidata.org' && url.pathname === '/w/api.php' ||
+    host === 'www.find-tender.service.gov.uk' && /^\/api\/1\.0\/ocdsReleasePackages(?:\/\d{6}-\d{4})?$/.test(url.pathname) ||
+    host === 'www.contractsfinder.service.gov.uk' && url.pathname === '/Published/Notices/OCDS/Search';
+  if (!matches || url.protocol !== 'https:' || url.host !== host) throw new PublicFailure('UNVERIFIED_SOURCE');
   return url;
 }
 

@@ -1,13 +1,13 @@
 import type { Pool } from 'pg';
 import { gateNames, POLICY_VERSION } from './policy';
-import type { Decision, Gate, Outcome, PublisherAudit } from './policy';
+import type { Checkpoint, Decision, Gate, Outcome, Seed } from './policy';
 import { modelUsage, runSummary } from './read-model';
 
 export async function evaluate(pool: Pool, runId: string) {
   const run = await runSummary(pool, runId);
   if (!run) return null;
-  const { rows } = await pool.query<{ id: string; name: string; domain: string; decision: Decision | null; stage: string; artifacts: number; publisher_audit: PublisherAudit[] | null }>(`
-    SELECT j.id,b.name,b.domain,j.decision,j.stage,j.checkpoint->'publisherAudit' AS publisher_audit,
+  const { rows } = await pool.query<{ id: string; name: string; domain: string; decision: Decision | null; stage: string; artifacts: number; checkpoint: Checkpoint; seeds: Seed[] }>(`
+    SELECT j.id,b.name,b.domain,j.decision,j.stage,j.checkpoint,j.seeds,
     (SELECT count(*)::int FROM origin_artifacts a WHERE a.investigation_id=j.id AND a.image IS NOT NULL) AS artifacts
     FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id WHERE run_id=$1 ORDER BY b.domain`, [runId]);
   const gates = Object.fromEntries(gateNames.map(name => [name, { VERIFIED: 0, UNVERIFIED: 0, CONTRADICTED: 0, STALE: 0 } as Record<Gate['state'], number>]));
@@ -20,13 +20,31 @@ export async function evaluate(pool: Pool, runId: string) {
     group.count++;
     blockers.set(key, group);
   }
-  const publisherChecks = [...new Map([...(run.sources ?? []).flatMap(source => source.publisherAudit ?? []), ...rows.flatMap(row => row.publisher_audit ?? [])]
+  const publisherChecks = [...new Map([...(run.sources ?? []).flatMap(source => source.publisherAudit ?? []), ...rows.flatMap(row => row.checkpoint.publisherAudit ?? [])]
     .map(check => [`${check.url}:${check.code}`, check])).values()];
+  const results = rows.map(row => {
+    const evidence = row.checkpoint.evidence;
+    const journey = row.checkpoint.journey;
+    const testedGates = new Set(row.checkpoint.gates.map(gate => gate.name));
+    const bookingUrls = new Set(evidence.filter(item => item.method === 'Initial direct booking GET').map(item => item.id));
+    return { id: row.id, name: row.name, domain: row.domain, stage: row.stage, outcome: row.decision?.outcome ?? null,
+      policy: row.decision?.version ?? null, discovery: row.seeds.map(seed => ({ adapter: seed.adapter ?? seed.method, url: seed.source })),
+      gates: row.decision?.gates.map(gate => ({ name: gate.name, state: testedGates.has(gate.name) ? gate.state : 'NOT_REACHED', reason: gate.assertion,
+        sources: [...new Set(evidence.filter(item => gate.evidence.includes(item.id)).map(item => item.url))] })) ?? [],
+      identityRead: evidence.filter(item => ['Official entry point', 'Official About page'].includes(item.method)).map(item => ({ url: item.url, status: item.excerpt.split(' · ')[0] })),
+      pages: journey.filter(step => !bookingUrls.has(step.evidence)),
+      booking: { observations: journey.filter(step => bookingUrls.has(step.evidence)), rechecked: evidence.some(item => item.method === 'Independent direct booking GET'), observed: row.checkpoint.funnel },
+      publicationChecks: row.checkpoint.publisherAudit ?? [], acquisitionRecords: row.checkpoint.acquisitionSources ?? 0,
+      artifacts: row.artifacts,
+      blockers: row.decision?.gates.filter(gate => gate.state !== 'VERIFIED') ?? [] };
+  });
   return {
     run, gates, publisherChecks, blockers: [...blockers.values()].sort((a, b) => b.count - a.count || a.gate.localeCompare(b.gate)),
     investigated: rows.length, captures: rows.reduce((sum, row) => sum + row.artifacts, 0), usage: await modelUsage(pool, runId),
-    results: rows.map(row => ({ id: row.id, name: row.name, domain: row.domain, stage: row.stage, outcome: row.decision?.outcome ?? null,
-      policy: row.decision?.version ?? null, blockers: row.decision?.gates.filter(gate => gate.state !== 'VERIFIED') ?? [] })),
+    investigationCoverage: { businessPagesRead: results.filter(row => row.pages.some(page => page.result === 'READABLE')).length,
+      bookingDestinationsRead: results.reduce((count, row) => count + row.booking.observations.length, 0),
+      bookingDestinationsRechecked: results.filter(row => row.booking.rechecked).length },
+    results,
   };
 }
 

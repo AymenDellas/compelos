@@ -8,9 +8,10 @@ import type { SourceResult } from './policy';
 import { createPublicWeb } from './public-web';
 import type { PublicWeb } from './public-web';
 import { hasSchema } from './read-model';
+import { coachingContracts, procurementAdapter, procurementCredit, tenderAdapter } from './procurement';
 import { enrichAcquisition, investigate, resolveBusiness, verifyOpportunity } from './research';
 import { approvedFeeds } from './sources';
-import { claimRun, failStage, finish, nextJob, recentPublisherEvidence, recentWikiPointers, release, revisit, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
+import { claimRun, failStage, finish, newPublishedBusinesses, nextJob, recentPublisherEvidence, recentWikiPointers, release, revisit, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
 import type { Run, SourceQuality } from './store';
 
 type Limiter = <T>(run: () => Promise<T>) => Promise<T>;
@@ -44,6 +45,11 @@ export function createOriginLane(pool: Pool, limit: Limiter, options: { runId?: 
     const limit = run.config.candidateLimit;
     const hold = (name: string) => history.find(item => item.adapter === name && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
     const adapters: Adapter[] = [];
+    for (const [index, name] of [['contracts', procurementAdapter], ['tender', tenderAdapter]] as const) {
+      const probes = history.filter(item => item.adapter === name && item.status === 'OK').length;
+      adapters.push({ name, credit: procurementCredit, retryAt: hold(name),
+        run: () => coachingContracts(web, index, (probes % 12) * 6, limit, perSource(signal, 17_000)) });
+    }
     let feeds: ReturnType<typeof approvedFeeds> = [];
     try {
       feeds = approvedFeeds(run.publisher_feeds);
@@ -69,11 +75,16 @@ export function createOriginLane(pool: Pool, limit: Limiter, options: { runId?: 
     const publisherObservation = (seed: Awaited<ReturnType<typeof recentPublisherEvidence>>[number]) => {
       if (seed.method === 'PUBLICATION') {
         const age = Date.now() - Date.parse(seed.publication?.checkedAt ?? '');
-        return age >= 0 && age < 86_400_000 ? [seed] : [];
+        return seed.publication?.use === 'FACTS_ONLY' && age >= 0 && age < 86_400_000 ? [seed] : [];
       }
       const publisher = feeds.find(item => domain(item.url) === domain(seed.source) && item.permission === seed.permission);
       return publisher ? [{ ...seed, publisher: publisher.publisher ?? domain(publisher.url) }] : [];
     };
+    adapters.push({ name: 'Publisher relationships', run: async () => (await newPublishedBusinesses(pool, limit * 2)).flatMap(seed => {
+      const date = Date.parse(seed.occurredAt ?? '');
+      return date <= Date.now() && date > Date.now() - run.config.activityDays * 86_400_000
+        ? publisherObservation(seed).map(item => ({ ...item, adapter: 'Publisher relationships' })) : [];
+    }) });
     if (limit >= 3) adapters.push({ name: 'IGNITION', run: async () => (await revisit(pool, Math.floor(limit / 3)))
       .flatMap(seed => seed.occurredAt ? publisherObservation(seed) : [seed]) });
     const latestWikiHold = history.find(item => item.adapter.startsWith('Wikidata') && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
@@ -116,7 +127,7 @@ export function createOriginLane(pool: Pool, limit: Limiter, options: { runId?: 
               ? decide(checkpoint.gates, checkpoint.evidence) : 'VERIFYING', artifacts);
           } else {
             const publications = await enrichAcquisition(web, job, run.config, signal);
-            const checkpoint = await verifyOpportunity(web, job, signal);
+            const checkpoint = await verifyOpportunity(web, job, signal, run.config.browser);
             await modelAdvisory(pool, run, job, checkpoint, signal);
             await saveStage(pool, run, job, checkpoint, decide(checkpoint.gates, checkpoint.evidence), [], publications);
           }

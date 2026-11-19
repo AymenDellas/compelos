@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
-export const POLICY_VERSION = 'origin-v3';
+export const POLICY_VERSION = 'origin-v4';
 export const gateNames = ['identity', 'niche', 'geography', 'substance', 'acquisition', 'opportunity', 'contact'] as const;
 export type GateName = typeof gateNames[number];
 export type Outcome = 'QUALIFIED' | 'UNRESOLVED' | 'REJECTED';
-export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLICATION';
+export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLICATION' | 'PROCUREMENT';
 
 export const settingsSchema = z.object({
   intervalMinutes: z.number().int().min(60).max(43_200).nullable(),
@@ -38,7 +38,8 @@ export type Seed = {
   publisher?: string;
   publisherLinks?: string[];
   discoveryPriority?: number;
-  publication?: { checkedAt: string; permissionPage: string; title: string; digest: string };
+  contract?: { amountGbp: number; awardedOn: string; buyer?: string };
+  publication?: { checkedAt: string; permissionPage: string; digest: string; use?: 'FACTS_ONLY'; title?: string; recordUrl?: string };
 };
 
 export function domain(url: string) { return new URL(url).hostname.toLowerCase().replace(/^www\./, '').replace(/\.$/, ''); }
@@ -94,8 +95,8 @@ export type Decision = ReturnType<typeof decide>;
 
 export type SourceResult = { adapter: string; discovered: number; elapsedMs: number; status: 'OK' | 'FAILED' | 'DEFERRED'; code?: string; retryAt?: string;
   publisherAudit?: PublisherAudit[]; credit?: string };
-export type PublisherAudit = { url: string; code: string; records: number; license?: string; publisher?: string };
-export type PublisherPointer = { url: string; name?: string; website?: string };
+export type PublisherAudit = { url: string; code: string; records: number; license?: string; publisher?: string; use?: 'FACTS_ONLY'; checkedTerms?: string[] };
+export type PublisherPointer = { url: string; name?: string; website?: string; viaOfficial?: boolean };
 
 export type JourneyStep = { from: string; url: string; label: string; result: string; evidence: string };
 export type Checkpoint = {
@@ -110,7 +111,8 @@ export type Checkpoint = {
   signature?: { offer: string; booking: string };
   changes?: string[];
   advisory?: { assessment: string; evidence: string };
-  breakage?: { url: string; from: string; label: string; status: number; evidence: string; alternatives: boolean };
+  breakage?: { url: string; from: string; label: string; status: number; evidence: string; alternatives: boolean; soft?: boolean };
+  funnel?: { found: number; tested: number; interactive: boolean };
   acquisitionSources?: number;
   publisherPointers?: PublisherPointer[];
   publisherAudit?: PublisherAudit[];

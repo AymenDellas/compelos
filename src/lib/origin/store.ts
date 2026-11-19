@@ -202,8 +202,17 @@ export async function recentPublisherEvidence(db: DB, activityDays: number) {
   return (await db.query<{ seed: Seed }>(`SELECT DISTINCT ON (seed->>'website',seed->>'sourceKey') seed FROM
     (SELECT seeds FROM origin_investigations WHERE created_at>=now()-make_interval(days => $1)
       ORDER BY created_at DESC LIMIT 400) j CROSS JOIN LATERAL jsonb_array_elements(j.seeds) seed
-    WHERE seed->>'permission' IS NOT NULL AND seed->>'occurredAt' IS NOT NULL
+    WHERE (seed->>'permission' IS NOT NULL OR seed#>>'{publication,use}'='FACTS_ONLY') AND seed->>'occurredAt' IS NOT NULL
     ORDER BY seed->>'website',seed->>'sourceKey',seed->>'occurredAt' DESC LIMIT 1200`, [activityDays])).rows.map(row => row.seed);
+}
+
+export async function newPublishedBusinesses(db: DB, limit: number) {
+  return (await db.query<{ seed: Seed }>(`SELECT item AS seed FROM
+    (SELECT seeds FROM origin_investigations WHERE updated_at>=now()-interval '24 hours' ORDER BY updated_at DESC LIMIT 150) j
+    CROSS JOIN LATERAL jsonb_array_elements(j.seeds) item
+    WHERE item->>'method'='PUBLICATION' AND item#>>'{publication,use}'='FACTS_ONLY'
+    AND NOT EXISTS (SELECT 1 FROM origin_businesses b WHERE b.domain=lower(substring(item->>'website' FROM '^https?://(?:www\.)?([^/:?#]+)')))
+    LIMIT $1`, [limit])).rows.map(row => row.seed);
 }
 
 export async function recentWikiPointers(db: DB) {

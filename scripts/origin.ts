@@ -10,6 +10,7 @@ import { readModelConfig } from '../src/lib/origin/model';
 import { agentOnline, followRun, notifyAgent } from '../src/lib/origin/operations';
 import { defaults, domain, hash, POLICY_VERSION, settingsSchema } from '../src/lib/origin/policy';
 import type { Settings } from '../src/lib/origin/policy';
+import { coachingContracts, procurementAdapter, procurementCredit, tenderAdapter } from '../src/lib/origin/procurement';
 import { createPublicWeb, documentUrl, PublicFailure } from '../src/lib/origin/public-web';
 import { artifact, dossier, hasSchema, investigations, listRuns, modelUsage, overview, readyOpportunities, runSummary, sourceReadiness } from '../src/lib/origin/read-model';
 import { configuration, control, editPublishers, migrate, patchSettings, sourceHistory, sourceQuality, start } from '../src/lib/origin/store';
@@ -98,10 +99,13 @@ async function inspectSources(pool: Pool, signal: AbortSignal) {
   const configured = await sourceReadiness(pool);
   const web = createPublicWeb(createLimiter(3, 96));
   const bounded = () => AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
-  const recent = (await sourceHistory(pool)).find(source => source.adapter === publicationAdapter && source.retryAt && Date.parse(source.retryAt) > Date.now());
+  const history = await sourceHistory(pool);
+  const hold = (name: string) => history.find(source => source.adapter === name && source.retryAt && Date.parse(source.retryAt) > Date.now())?.retryAt;
   const found = await discover([
+    ...([['contracts', procurementAdapter], ['tender', tenderAdapter]] as const).map(([index, name]) => ({ name, credit: procurementCredit,
+      retryAt: hold(name), run: () => coachingContracts(web, index, 0, 4, bounded()) })),
     ...configured.feeds.map(publisher => ({ name: publisher.title, run: () => feed(web, publisher, 12, bounded()) })),
-    { name: publicationAdapter, retryAt: recent?.retryAt, run: async () => verifyPublications(web,
+    { name: publicationAdapter, retryAt: hold(publicationAdapter), run: async () => verifyPublications(web,
       await discoverPublicationPointers(web, niches[0], bounded()), defaults.activityDays, bounded()) },
     { name: 'Wikidata', run: () => wikidata(web, 3, niches[0], bounded()) },
   ], 24);

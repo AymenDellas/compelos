@@ -39,14 +39,16 @@ test('an explicitly licensed attributable publication can independently discover
   assert.match(result.seeds[0].publication?.digest ?? '', /^[a-f0-9]{64}$/);
 });
 
-test('public access, a licence for a different object and noncommercial licences do not authorize acquisition evidence', async () => {
-  const variations = [article(node, ''), article({ ...node, url: 'https://journal.example/unrelated', license }, ''),
-    article(node, head.replace('/by/', '/by-nc/')), article(node, head.replace('creativecommons.org', 'example.org')),
+test('a public fact citation retains no article title or text and needs no content reuse license', async () => {
+  const variations = [article(node, ''), article(node, head.replace('/by/', '/by-nc/')), article(node, head.replace('creativecommons.org', 'example.org')),
     article(node, '', `<a rel="license" href="${license}">Photo license</a>`)];
   for (const html of variations) {
     const result = await verifyPublications(transport(html).web, [{ url: item }], 120, AbortSignal.timeout(6_000));
-    assert.equal(result.audit[0].code, 'PERMISSION_UNVERIFIED');
-    assert.deepEqual(result.seeds, []);
+    assert.equal(result.audit[0].code, 'ADMITTED');
+    assert.equal(result.seeds[0]?.permission, undefined);
+    assert.equal(result.seeds[0]?.publication?.use, 'FACTS_ONLY');
+    assert.equal(result.seeds[0]?.publication?.title, undefined);
+    assert.doesNotMatch(result.seeds[0]?.excerpt ?? '', /Executive coaching interview/);
   }
 });
 
@@ -55,6 +57,12 @@ test('site access policies take precedence over page-level licensing', async () 
   const denied = transport(licensed, 'You agree not to use automated means to extract data from our site.');
   assert.equal((await verifyPublications(denied.web, [{ url: item }], 120, AbortSignal.timeout(6_000))).audit[0].code, 'TERMS_RESTRICTED');
   assert.ok(denied.requests.some(url => url.endsWith('/terms')));
+  const copyrighted = transport(licensed, 'All rights reserved. Reproduction of our photographs for commercial use is prohibited.');
+  assert.equal((await verifyPublications(copyrighted.web, [{ url: item }], 120, AbortSignal.timeout(6_000))).audit[0].code, 'ADMITTED');
+  const registrationOnly = transport(licensed, 'Accounts registered by “bots” or other automated methods are not permitted.');
+  assert.equal((await verifyPublications(registrationOnly.web, [{ url: item }], 120, AbortSignal.timeout(6_000))).audit[0].code, 'ADMITTED');
+  const accessAlso = transport(licensed, 'Accounts registered by bots are not permitted. Automated access is forbidden.');
+  assert.equal((await verifyPublications(accessAlso.web, [{ url: item }], 120, AbortSignal.timeout(6_000))).audit[0].code, 'TERMS_RESTRICTED');
   const robots = transport(article(), '', 'User-agent: *\nDisallow: /interview');
   assert.equal((await verifyPublications(robots.web, [{ url: item }], 120, AbortSignal.timeout(6_000))).audit[0].code, 'ROBOTS_DISALLOWED');
   assert.equal(robots.requests.length, 1);

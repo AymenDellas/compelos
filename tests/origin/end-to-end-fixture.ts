@@ -42,12 +42,14 @@ export function endToEndFixture() {
       if (!item) return reply(404, '');
       const title = `Executive coaching interview with ${item.name} on ${publisher ? 'succession' : 'onboarding'}`;
       const website = `https://${site(item.slug)}/`;
-      const license = item.slug === 'birch' && publisher === 1 ? 'by-nc/4.0' : 'by/4.0';
+      const blocked = item.slug === 'birch' && publisher === 1;
+      const license = 'by/4.0';
       return reply(200, `<html><head><title>${title}</title><link rel="license" href="https://creativecommons.org/licenses/${license}/">
         <script type="application/ld+json">${JSON.stringify({ '@type': 'PodcastEpisode', url: value, headline: title, datePublished: date(),
           publisher: { '@type': 'Organization', url: `https://${host}/`, name: publisher ? 'Executive Forum' : 'Leadership Journal' },
           actor: { '@type': 'Person', name: item.name, url: website, jobTitle: 'Executive coach' },
-        })}</script></head><body><main><h1>${title}</h1><a href="${website}">${item.name}</a></main></body></html>`);
+        })}</script></head><body><main><h1>${title}</h1><a href="${website}">${item.name}</a>
+        ${blocked ? '<p>Use of this website is for personal use only.</p>' : ''}</main></body></html>`);
     }
     const business = cases.find(item => site(item.slug) === host);
     if (!business) throw new Error('Fixture attempted a request outside its closed transport.');
