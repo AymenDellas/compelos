@@ -110,6 +110,7 @@ export type Checkpoint = {
   identityName?: string;
   offer?: string;
   attributedProgramScope?: boolean;
+  marketEvidenceChecked?: boolean;
   country?: 'US' | 'UK' | 'CA';
   contact?: string;
   signature?: { offer: string; booking: string };
@@ -118,7 +119,7 @@ export type Checkpoint = {
   breakage?: { url: string; from: string; label: string; status: number; evidence: string; alternatives: boolean; soft?: boolean };
   bookingMismatch?: { url: string; destination: string; from: string; promised: number; listed: number; evidence: string[] };
   priceMismatch?: { url: string; booking: string; currency: string; amounts: [number, number]; evidence: string[] };
-  inquiryMismatch?: { url: string; destination: string; from: string; label: string; evidence: string[]; kind?: 'message' | 'fee' | 'intake' };
+  inquiryMismatch?: { url: string; destination: string; from: string; label: string; evidence: string[]; kind?: 'message' | 'fee' | 'intake' | 'embedded'; widget?: string };
   missingBookingSection?: { url: string; fragment: string; label: string; evidence: string };
   mobileBookingDepth?: { from: string; destination: string; evidence: string };
   funnel?: { found: number; tested: number; interactive: boolean; intakeVersion?: number };

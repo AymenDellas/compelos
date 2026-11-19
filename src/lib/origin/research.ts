@@ -44,7 +44,7 @@ export type Page = { url: string; state: string; evidence: Evidence; identity: s
   statements: string[]; headings: string[]; title: string; links: Link[]; contact: { address: string; context: string } | null;
   contactProhibited: boolean; bookingControl: boolean; markets: MarketStatement[]; missingPage: boolean; activityDates: string[]; activityAction?: string;
   testimonials?: string[]; genericInquiry?: string; consultationIntake?: string[]; informedIntake?: boolean;
-  scheduling?: boolean; schedulerProblem?: string; feedUrl?: string };
+  scheduling?: boolean; schedulerProblem?: string; feedUrl?: string; embeddedInquiry?: string; hostedInquiry?: string };
 
 const intakeDisclosure = /\b(?:(?:request|apply for) (?:an? |the |your )?(?:call|consultation|session|appointment)|application form|(?:we|I|our team) (?:will|'ll) (?:be in touch|contact you|reach out|respond|reply|follow up|get back to you)|(?:after|once) you submit|subject to (?:review|approval))\b/i;
 
@@ -53,6 +53,10 @@ function linkedUrl(value: string, current: string) {
     if (!value || value.startsWith('#')) return null;
     return documentUrl(new URL(value, current).href).href;
   } catch { return null; }
+}
+
+function publicInquiryWidget(url: string) {
+  return /^https:\/\/api\.leadconnectorhq\.com\/widget\/form\/[a-z\d]{10,50}\/?$/i.test(url);
 }
 
 function markedMarkets(html: ReturnType<typeof load>, url: string): MarketStatement[] {
@@ -146,6 +150,15 @@ export function parseBusinessPage(html: string, url: string) {
     }
   });
   const markets = markedMarkets($, url);
+  if (/\/privacy(?:-policy|-notice)?\/?$/i.test(new URL(url).pathname)) {
+    const main = $('main,article').first();
+    const notice = (main.length ? main : $('body').first()).clone();
+    notice.find('script,style,noscript,template,[hidden],[aria-hidden="true"]').remove();
+    notice.find('p,div,li,address,br,h1,h2,h3').after(' ');
+    const policy = squash(notice.text());
+    const address = policy.match(/\b(?:contact us by post at|postal address (?:is|at))\b.{0,180}?,\s*([A-Z]{2}\s+\d{5}(?:-\d{4})?)\b.{0,85}?\bUnited States\b/u);
+    if (address) markets.push({ country: 'US', evidence: `Published U.S. postal contact for the business: ${address[1]}` });
+  }
   $('footer').slice(0, 4).each((_index, footer) => {
     const section = $(footer);
     if (!section.find('a[href^="mailto:"]').length || !section.find('a[href^="tel:"]').length) return;
@@ -235,6 +248,10 @@ export function parseBusinessPage(html: string, url: string) {
     return element.is('input,[data-cal-link],[data-calendly-url]') || /calendly|acuityscheduling|cal\.com|schedule|select (?:a )?(?:date|time)/i.test([element.attr('src'), element.attr('aria-label'), element.text()].join(' '));
   }) || links.some(link => booking.test(link.label) || /\b(?:calendar|choose a time|book online)\b/i.test(link.label)) ||
     /calendly-inline-widget|acuity-embed|cal-embed|hubspot-meetings|meetings\.hubspot\.com/i.test(html);
+  const embeddedInquiry = read('iframe[src]').slice(0, 12).toArray().map(node => $(node).attr('src') ?? '').find(publicInquiryWidget);
+  const hostedInquiry = publicInquiryWidget(url) && !scheduling && read('input[type="email"]').length && read('input[type="tel"]').length
+    ? read('label,textarea[aria-label]').toArray().map(node => squash($(node).text() || $(node).attr('aria-label') || ''))
+      .find(label => /^(?:what would you like help with|your message|how can we help|how can I help)\??\s*\*?$/i.test(label)) : undefined;
   const informedIntake = [title, ...headings, ...statements].some(value => intakeDisclosure.test(value));
   const consultationIntake = !scheduling && !informedIntake ? read('form').slice(0, 6).toArray().flatMap(node => {
     const form = $(node);
@@ -269,6 +286,11 @@ export function parseBusinessPage(html: string, url: string) {
     if (address?.split('@')[1] === domain(url)) contact = { address, context: labeled! };
   }
   if (!contact && contactPage && !forbidden.test(bodyText)) {
+    const visible = $('main p,main address,footer p,footer address').slice(0, 130).toArray().map(node => squash($(node).text()));
+    const address = visible.find(value => /^[a-z\d][a-z\d._+-]{0,79}@[a-z\d.-]+\.[a-z]{2,}$/i.test(value) && value.toLowerCase().split('@')[1] === domain(url));
+    if (address) contact = { address: address.toLowerCase(), context: 'Same-domain business email on the public contact page.' };
+  }
+  if (!contact && contactPage && !forbidden.test(bodyText)) {
     const inquiry = read('form').toArray().find(node => {
       const form = $(node);
       const text = squash(form.text());
@@ -281,7 +303,7 @@ export function parseBusinessPage(html: string, url: string) {
   const schedulerProblem = [title, ...headings.slice(0, 4), ...statements.slice(0, 12)].find(item =>
     /\b(?:this (?:calendly |booking |scheduling |meeting |event )?link (?:is no longer valid|is invalid|has expired|is not active)|this event type is (?:inactive|unavailable)|this calendly url is not valid|we couldn.t find (?:that|this) event)\b/i.test(item));
   return { identity, brand, canonical, statements, headings, title, links, contact, bookingControl, markets, missingPage, activityDates, activityAction: eventAction,
-    testimonials, genericInquiry, consultationIntake, informedIntake, scheduling, schedulerProblem, feedUrl: feedUrl ?? undefined,
+    testimonials, genericInquiry, consultationIntake, informedIntake, scheduling, schedulerProblem, feedUrl: feedUrl ?? undefined, embeddedInquiry, hostedInquiry,
     contactProhibited: forbidden.test(bodyText), challenged: challenge.test(`${title} ${bodyText.slice(0, 850)}`) };
 }
 
@@ -405,17 +427,18 @@ export async function resolveBusiness(web: PublicWeb, job: Job, signal: AbortSig
 
 function recordMarket(checkpoint: Checkpoint, pages: Page[]) {
   delete checkpoint.country;
+  checkpoint.marketEvidenceChecked = true;
   const region = /\b(?:serve|serves|serving|work with|work across|coaching (?:for|across|in)|our clients (?:are|include)|clients (?:based|located) in|(?:we are|our (?:practice|business|office) is|our headquarters (?:is|are)) based in)\b[^.;!?]{0,65}\b(United States\b|United Kingdom\b|Canada\b|U\.S\.|U\.K\.|USA\b|UK\b|US\b)/i;
   const outside = /\b(?:only|exclusively)\s+(?:serve|work with|coach)\b[^.;!?]{0,60}\b(France|Germany|Spain|Italy|Netherlands|Belgium|Switzerland|Australia|New Zealand|India|Singapore|Ireland)\b/i;
-  const positive = pages.flatMap(page => [...page.statements, page.title].flatMap(line => {
-    if (/\b(?:not|never|except|excludes?)\b/i.test(line)) return [];
+  const declared = pages.flatMap(page => [...page.statements, page.title].flatMap(line => {
+    if (/\b(?:not|never|except|excludes?)\b/i.test(line) || /\?$/.test(line) || /^(?:do|does|can|could|what|where|who|when|will|how|is|are)\b/i.test(line)) return [];
     const match = line.match(region);
     if (!match || /^(?:us|uk)$/i.test(match[1]) && match[1] !== match[1].toUpperCase()) return [];
     const country = /Canada/i.test(match[1]) ? 'CA' as const : /Kingdom|U\.?K/i.test(match[1]) ? 'UK' as const : 'US' as const;
     return [{ country, evidence: quote(page, line, 'Explicit market or business base') }];
   }));
-  positive.push(...pages.flatMap(page => page.markets.map(market => ({ country: market.country,
-    evidence: quote(page, market.evidence, 'Official service area or operating address') }))));
+  const positive = [...pages.flatMap(page => page.markets.map(market => ({ country: market.country,
+    evidence: quote(page, market.evidence, 'Official service area or operating address') }))), ...declared];
   const negative = pages.flatMap(page => page.statements.filter(line => outside.test(line)).map(line => quote(page, line, 'Exclusive market statement')));
   if (positive.length && negative.length) add(checkpoint, 'geography', 'UNVERIFIED', 'The site makes conflicting market statements.', [positive[0].evidence, negative[0]]);
   else if (negative.length) add(checkpoint, 'geography', 'CONTRADICTED', 'The business explicitly limits service to an ineligible market.', [negative[0]]);
@@ -501,8 +524,9 @@ async function ownedFeedActivities(web: PublicWeb, url: string, host: string, si
     return $('item,entry').slice(0, 12).toArray().flatMap(node => {
       const item = $(node);
       const title = squash(item.children('title').first().text()).slice(0, 140);
-      const category = item.children('category').toArray().slice(0, 6).map(entry => $(entry).text()).join(' ');
-      const relatedCategory = coachingPublication && /\b(?:leadership|business (?:growth|finance|strateg(?:y|ies))|growth strategies|shareholder value)\b/i.test(category);
+      const category = item.children('category').toArray().slice(0, 12).map(entry => $(entry).text()).join(' ');
+      const relatedCategory = /\b(?:leadership|business (?:growth|finance|strateg(?:y|ies))|growth strategies|shareholder value)\b/i.test(category)
+        && (coachingPublication || /\b(?:real estate|executive|leadership|business) coaching\b/i.test(category));
       if (!title || (!relevantCoach.test(`${title} ${category}`) && !activityAudience.test(title) && !relatedCategory)) return [];
       const date = Date.parse(item.children('pubDate,published').first().text());
       const link = item.children('link').filter((_index, entry) => !$(entry).attr('rel') || $(entry).attr('rel') === 'alternate').first();
@@ -639,7 +663,7 @@ function durationMismatch(from: Page, link: Link, destination: Page) {
     quote(destination, first.text, 'Booking page duration')] };
 }
 
-function bookingToInquiry(from: Page, link: Link, destination: Page) {
+function bookingToInquiry(from: Page, link: Link, destination: Page, widget?: Page) {
   const promise = /^(?:book|schedule)\b.{0,55}\b(?:call|session|consult(?:ation)?|appointment|meeting)\b/i;
   if (!link.main || !promise.test(link.label) || destination.state !== 'READABLE') return;
   if (/\b(?:request|inquir|enquir|application)\b/i.test(link.label) || from.links.some(other => other.url !== link.url && promise.test(other.label))) return;
@@ -654,6 +678,10 @@ function bookingToInquiry(from: Page, link: Link, destination: Page) {
   }
   if (!destination.scheduling && destination.genericInquiry) {
     return { kind: 'message' as const, evidence: [advertised, quote(destination, destination.genericInquiry, 'Generic message form at booking destination')] };
+  }
+  if (!destination.scheduling && widget?.url === destination.embeddedInquiry && widget?.hostedInquiry) {
+    return { kind: 'embedded' as const, evidence: [advertised, quote(destination, `The booking destination embeds a general inquiry widget at ${widget.url}.`, 'Booking destination and its public form'),
+      quote(widget, `The form asks for email, phone, and ${widget.hostedInquiry} without an appointment-time selector.`, 'General embedded business inquiry')] };
   }
   if (!from.informedIntake && !destination.scheduling && destination.consultationIntake) {
     const fields = destination.consultationIntake;
@@ -687,7 +715,9 @@ function offerOn(page: Page) {
   const training = /\b(?:coach(?:ing)? (?:skills |credential )?(?:training|education|certification|accreditation)|(?:become|qualify as) (?:an? )?(?:certified |professional |executive )?coach|leader as coach)\b/i;
   const servicesForCoaches = /\b(?:lead generation|digital marketing|seo|paid ads?|web design|appointment setting|branding|lead magnet)\b/i;
   if ([page.headings[0], page.title].some(value => training.test(value ?? '') || servicesForCoaches.test(value ?? '') && /\bfor (?:[^.]{0,42} )?coach(?:es|ing)\b/i.test(value ?? ''))) return null;
-  const line = [page.headings[0], page.title, ...page.headings].find(value => value && (relevantCoach.test(value) || specialty.test(value)) &&
+  const brokerageOffer = page.statements.some(value => /\b(?:brokerage (?:firms?|executives?|leaders?)|real estate teams?)\b/i.test(value));
+  const line = [page.headings[0], page.title, ...page.headings].find(value => value && (relevantCoach.test(value) || specialty.test(value) ||
+    brokerageOffer && /\breal estate coaching\b/i.test(value)) &&
     !/^(?:why|how|what|do|does|should|the .* questions)\b/i.test(value));
   if (!line) return null;
   const detail = page.statements.find(value => scope.test(value) && (relevantCoach.test(line) || /\bcoach(?:ing|es)?\b/i.test(value)) &&
@@ -765,7 +795,9 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     const substance = pages.flatMap(item => item.statements.map(statement => ({ page: item, statement })))
       .find(item => {
         const since = item.statement.match(/\b(?:founded|established|in business|(?:providing|offering|delivering) (?:executive |leadership |business )?coaching)\s+(?:in\s+|since\s+)?(19\d{2}|20\d{2})\b|\bcoached\b[^.!?]{0,100}\bsince (19\d{2}|20\d{2})\b/i);
+        const founding = item.statement.match(/\bin (19\d{2}|20\d{2}),\s*(?:we|I|she|he|[\p{L}]+ [\p{L}]+)\s+founded\b/iu);
         return Boolean(since && Number(since[1] ?? since[2]) <= new Date().getUTCFullYear() - 3) ||
+          Boolean(founding && Number(founding[1]) <= new Date().getUTCFullYear() - 3 && containsName(item.statement, checkpoint.identityName ?? job.name)) ||
           /\b(?:[5-9]|[1-9]\d)\+? years of (?:executive |career |leadership |business )?coaching experience\b/i.test(item.statement);
       });
     const clientCase = pages.map(caseEvidence).find(Boolean);
@@ -774,10 +806,10 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     const testimonial = (offer.testimonials ?? [])[0];
     const proof = clientCase ?? (procurement?.contract ? observe('external', procurement.source,
       `${procurement.contract.buyer} recorded a coaching award to ${procurement.name} on ${procurement.contract.awardedOn.slice(0, 10)}. Value GBP ${procurement.contract.amountGbp}. Open Government Licence v3.0.`, 'Public contract award') : undefined);
-    const program = offer.statements.find(item => /\b(?:(?:[3-9]|1[0-9]|three|four|five|six|nine|twelve)[- ]months?|(?:[6-9]|[1-9]\d) (?:private |individual |executive |leadership )?coaching sessions)\b/i.test(item)
+    const program = offer.statements.find(item => /\b(?:(?:[3-9]|1[0-9]|three|four|five|six|nine|twelve)[- ]months?|(?:[6-9]|[1-9]\d) (?:private |individual |executive |leadership |one-on-one )?coaching (?:sessions|calls))\b/i.test(item)
       && /\b(?:coaching|engagement|program(?:me)?)\b/i.test(item)
       && !/\b(?:free|may offer|might offer|formerly|according to|report (?:on|by|from)|(?:a |the )?(?:study|survey|report|research) (?:shows|found|finds|documents|suggests|by|from))\b/i.test(item)
-      && (/\b(?:our|my) (?:[\w-]+ ){0,5}(?:coaching|engagement|program(?:me)?)\b|\b(?:at|with) (?:our|this|the) (?:practice|firm)\b|\b(?:we|I) (?:offer|deliver|provide|run|include)\b/i.test(item)
+      && (/\b(?:our|my) (?:[\w-]+ ){0,5}(?:coaching|engagement|program(?:me)?)\b|\b(?:at|with) (?:our|this|the) (?:practice|firm)\b|\b(?:we|I) (?:offer|deliver|provide|run|include)\b|\byou(?:['’]ll| will) (?:receive|get)\b/i.test(item)
         || containsName(item, checkpoint.identityName ?? job.name)));
     const commercial = [price && quote(offer, price, 'Published offer price'), proof ?? (testimonial && quote(offer, testimonial, 'Attributed coaching client account')), substance && quote(substance.page, substance.statement, 'First-party operating history'),
       program && quote(offer, program, 'Published coaching program scope')].filter((item): item is Evidence => Boolean(item));
@@ -790,28 +822,24 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   }
   recordAcquisition(job, checkpoint, settings.activityDays);
 
-  const contact = pages.find(item => item.contact);
-  const termsLink = contact && !pages.some(item => item.contactProhibited) ? pages.flatMap(item => item.links)
-    .find(link => own(new URL(link.url)) && /^(?:website |site )?terms(?: (?:of (?:use|service)|and conditions))?$/i.test(link.label)) : undefined;
-  const terms = termsLink ? await inspect(web, termsLink.url, signal, 'Official contact restrictions', own) : undefined;
-  const restricted = [...pages, ...(terms ? [terms] : [])].find(item => item.contactProhibited);
-  delete checkpoint.contact;
-  if (contact?.contact && !restricted) {
-    checkpoint.contact = contact.contact.address;
-    add(checkpoint, 'contact', 'VERIFIED', 'The official site publishes a general business inquiry route.', [quote(contact, `${contact.contact.address} · ${contact.contact.context}`, 'Published business inquiry route')]);
-  } else add(checkpoint, 'contact', 'UNVERIFIED', restricted
-    ? 'The site publishes restrictions on unsolicited inquiries.' : 'No suitable public business inquiry route was found.', restricted ? [restricted.evidence] : []);
-
+  const privacyLink = !checkpoint.country && !checkpoint.gates.some(gate => gate.name === 'geography' && gate.state === 'CONTRADICTED')
+    ? pages.flatMap(item => item.links).find(link => own(new URL(link.url)) && /^(?:privacy policy|privacy notice)$/i.test(link.label)) : undefined;
+  if (privacyLink) {
+    const privacy = await inspect(web, privacyLink.url, signal, 'First-party business postal contact', own);
+    addJourney(checkpoint, page.url, privacy, privacyLink.label);
+    if (privacy.state === 'READABLE' && privacy.markets.length) recordMarket(checkpoint, [...pages, privacy]);
+  }
   const artifacts: Artifact[] = [];
   if (checkpoint.gates.some(gate => gate.state === 'CONTRADICTED')) return { checkpoint, artifacts };
   const prioritized = offer ? [offer, ...pages.filter(item => item !== offer)] : pages;
   const routesByUrl = new Map<string, { from: Page; link: Link }>();
   for (const from of prioritized) for (const link of [...from.links].sort((a, b) => Number(b.main) - Number(a.main))) {
-    if (booking.test(link.label) && !routesByUrl.has(link.url)) routesByUrl.set(link.url, { from, link });
+    const existing = routesByUrl.get(link.url);
+    if (booking.test(link.label) && (!existing || link.main && !existing.link.main)) routesByUrl.set(link.url, { from, link });
   }
   const routes = [...routesByUrl.values()].filter(({ link }) => routeHost(link.url, job.domain)).slice(0, 3);
   const cta = routes[0]?.link;
-  checkpoint.funnel = { found: routesByUrl.size, tested: 0, interactive: prioritized.some(item => item.bookingControl), intakeVersion: 1 };
+  checkpoint.funnel = { found: routesByUrl.size, tested: 0, interactive: prioritized.some(item => item.bookingControl), intakeVersion: 2 };
   checkpoint.signature = { offer: hash(normalized(`${line ?? ''} ${engagement ?? ''}`)), booking: cta?.url ?? '' };
   if (job.signature) {
     const previousOffer = /^[a-f0-9]{64}$/.test(job.signature.offer) ? job.signature.offer : hash(job.signature.offer);
@@ -830,8 +858,8 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
       checkpoint.breakage = { url: link.url, from: from.url, label: link.label, status, evidence: destination.evidence.id, alternatives,
         ...(soft ? { soft: true } : {}) };
     }
-    if (index === 0 && offer === from) {
-      const pricing = link.main && destination.state === 'READABLE' && !soft && monthlyPriceMismatch(from);
+    if (index === 0 && offer && (offer === from || offerOn(from)?.detail)) {
+      const pricing = offer === from && link.main && destination.state === 'READABLE' && !soft && monthlyPriceMismatch(from);
       if (pricing) {
         checkpoint.evidence.push(...pricing.evidence);
         checkpoint.priceMismatch = { url: from.url, booking: link.url, currency: pricing.currency, amounts: pricing.amounts,
@@ -843,14 +871,29 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
         checkpoint.bookingMismatch = { from: from.url, url: link.url, destination: destination.url,
           promised: mismatch.promised, listed: mismatch.listed, evidence: mismatch.evidence.map(item => item.id) };
       }
-      const inquiry = bookingToInquiry(from, link, destination);
+      const widgetUrl = link.main && !destination.scheduling ? destination.embeddedInquiry : undefined;
+      const widget = widgetUrl ? await inspect(web, widgetUrl, signal, 'Public embedded contact form', url => url.href === widgetUrl) : undefined;
+      const inquiry = bookingToInquiry(from, link, destination, widget);
       if (inquiry) {
         checkpoint.evidence.push(...inquiry.evidence);
         checkpoint.inquiryMismatch = { from: from.url, url: link.url, destination: destination.url, label: link.label,
-          kind: inquiry.kind, evidence: inquiry.evidence.map(item => item.id) };
+          kind: inquiry.kind, ...(inquiry.kind === 'embedded' && widgetUrl ? { widget: widgetUrl } : {}), evidence: inquiry.evidence.map(item => item.id) };
       }
     }
   }
+
+  const contactPages = [...pages, ...probes.filter(item => own(new URL(item.url)) && item.state === 'READABLE')];
+  const contact = contactPages.find(item => item.contact);
+  const termsLink = contact && !contactPages.some(item => item.contactProhibited) ? contactPages.flatMap(item => item.links)
+    .find(link => own(new URL(link.url)) && /^(?:website |site )?terms(?: (?:of (?:use|service)|and conditions))?$/i.test(link.label)) : undefined;
+  const terms = termsLink ? await inspect(web, termsLink.url, signal, 'Official contact restrictions', own) : undefined;
+  const restricted = [...contactPages, ...(terms ? [terms] : [])].find(item => item.contactProhibited);
+  delete checkpoint.contact;
+  if (contact?.contact && !restricted) {
+    checkpoint.contact = contact.contact.address;
+    add(checkpoint, 'contact', 'VERIFIED', 'The official site publishes a general business inquiry route.', [quote(contact, `${contact.contact.address} · ${contact.contact.context}`, 'Published business inquiry route')]);
+  } else add(checkpoint, 'contact', 'UNVERIFIED', restricted
+    ? 'The site publishes restrictions on unsolicited inquiries.' : 'No suitable public business inquiry route was found.', restricted ? [restricted.evidence] : []);
 
   const renderPage = routes[0]?.from ?? offer ?? page;
   const promising = [checkpoint.breakage, checkpoint.bookingMismatch, checkpoint.inquiryMismatch, checkpoint.priceMismatch].some(Boolean) ||
@@ -963,25 +1006,29 @@ export async function verifyOpportunity(web: PublicWeb, job: Job, signal: AbortS
   }
   if (!issue && !mismatch && inquiry) {
     const offer = await inspect(web, inquiry.from, signal, 'Independent booking CTA recheck', url => domain(url.href) === job.domain);
-    const link = offer.links.find(item => item.url === inquiry.url && item.label === inquiry.label);
+    const link = offer.links.find(item => item.main && item.url === inquiry.url && item.label === inquiry.label);
     const stored = checkpoint.evidence.filter(item => inquiry.evidence.includes(item.id));
-    if (link && stored.length === 2) {
+    if (link && stored.length === (inquiry.kind === 'embedded' ? 3 : 2)) {
       const destination = await inspect(web, inquiry.url, signal, 'Independent message-form recheck', url => domain(url.href) === domain(inquiry.url));
       addJourney(checkpoint, offer.url, destination, link.label);
-      const repeated = destination.url === inquiry.destination && bookingToInquiry(offer, link, destination);
+      const widget = inquiry.widget && destination.embeddedInquiry === inquiry.widget ?
+        await inspect(web, inquiry.widget, signal, 'Independent embedded form recheck', url => url.href === inquiry.widget) : undefined;
+      const repeated = destination.url === inquiry.destination && bookingToInquiry(offer, link, destination, widget);
       if (repeated && repeated.kind === (inquiry.kind ?? 'message')) {
         const proof = [...stored, ...repeated.evidence];
         if (browserEnabled && repeated.kind !== 'fee') {
           const budget = AbortSignal.any([signal, AbortSignal.timeout(23_000)]);
-          const browser = createFunnelBrowser((url, requestSignal) => web.asset(url, requestSignal, destination.url), budget,
+          const renderUrl = repeated.kind === 'embedded' ? widget!.url : destination.url;
+          const browser = createFunnelBrowser((url, requestSignal) => web.asset(url, requestSignal, renderUrl), budget,
             { inspectBookingDialogs: true, captureScreenshots: false });
           try {
-            const rendered = await browser.render(destination.url, job.id);
+            const rendered = await browser.render(renderUrl, job.id);
             const observed = parseBusinessPage(rendered.html, rendered.url);
             const confirmedPrompts = observed.consultationIntake?.filter(prompt => destination.consultationIntake?.includes(prompt)) ?? [];
-            const sameForm = repeated.kind === 'message' ? observed.genericInquiry : confirmedPrompts.length >= 8;
-            if (rendered.url === destination.url && !observed.challenged && sameForm && !observed.scheduling && !rendered.bookingDialogs?.length) {
+            const sameForm = repeated.kind === 'message' ? observed.genericInquiry : repeated.kind === 'embedded' ? observed.hostedInquiry : confirmedPrompts.length >= 8;
+            if (rendered.url === renderUrl && !observed.challenged && sameForm && !observed.scheduling && !rendered.bookingDialogs?.length) {
               const observation = repeated.kind === 'message' ? 'The rendered destination showed a general message form.' :
+                repeated.kind === 'embedded' ? 'The rendered public widget collected a general inquiry. It showed no appointment-time selector.' :
                 `The rendered destination showed ${confirmedPrompts.length} of the same required intake prompts before any choice of appointment time.`;
               proof.push(observe('browser', rendered.url, observation, 'Independent booking destination render', Buffer.from(rendered.html)));
             }
@@ -992,6 +1039,7 @@ export async function verifyOpportunity(web: PublicWeb, job: Job, signal: AbortS
         add(checkpoint, 'opportunity', independentlyVerified ? 'VERIFIED' : 'UNVERIFIED', independentlyVerified
           ? repeated.kind === 'fee' ? 'The offer advertises a complimentary call. Its linked destination lists a charge for an introductory call. Both descriptions reproduced. Align the advertised promise and booking terms.'
             : repeated.kind === 'intake' ? 'The call to action offers scheduling. The linked consultation form requires at least eight answers, including work and location details, before any time selection. The browser reproduced the route. Explain the intake and timing or move those questions after scheduling.'
+            : repeated.kind === 'embedded' ? 'The coaching page offers booking a strategy call. Its destination embeds a general inquiry form with no visible appointment selection. Both steps reproduced. Offer a calendar or state that a reply is needed to reserve a time.'
             : 'The offer promises booking a call. Its linked contact page only collects a general message and offers no scheduling option. Both steps reproduced. Add a scheduling step or explain the inquiry and response process at the call to action.'
           : 'The static pages suggest a booking-to-intake mismatch. The destination could not be corroborated in a browser.', proof);
         return checkpoint;

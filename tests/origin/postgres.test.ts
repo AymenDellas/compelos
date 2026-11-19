@@ -101,7 +101,7 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
       gates: checkpoint.gates.map(gate => gate.name === 'opportunity' ? finding('opportunity', 'UNVERIFIED', 'Intake evidence missing.') : gate) };
     await saveStage(pool, metered, secondJob, needsIntake, decide(needsIntake.gates, needsIntake.evidence));
     assert.equal((await revisit(pool, 2)).find(record => record.method === 'IGNITION')?.discoveryPriority, 9);
-    await pool.query("UPDATE origin_investigations SET checkpoint=jsonb_set(checkpoint,'{funnel,intakeVersion}','1') WHERE id=$1", [secondJob.id]);
+    await pool.query("UPDATE origin_investigations SET checkpoint=jsonb_set(checkpoint,'{funnel,intakeVersion}','2') WHERE id=$1", [secondJob.id]);
     assert.deepEqual(await revisit(pool, 2), []);
   } finally {
     await pool.end();

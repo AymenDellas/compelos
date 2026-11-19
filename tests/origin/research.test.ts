@@ -61,6 +61,23 @@ test('a general study cannot count as the provider’s own coaching program', as
   }
 });
 
+test('an unanswered FAQ heading cannot establish a market, but the official postal notice can', async () => {
+  const question = '<h2>Do you only work with UK businesses?</h2>';
+  const html = page.replace('<p>We serve executive teams in the United Kingdom.</p>', question)
+    .replace('</main>', '<a href="/privacy-policy/">Privacy Policy</a></main>');
+  const policy = '<main><p>To contact us by post at:</p><p>Cedar Leadership</p><p>Wilmington, NC 28409</p><p>United States</p></main>';
+  const job = candidate();
+  const base = fixture(html);
+  const { checkpoint } = await resolveBusiness(base.web, job, signal());
+  assert.equal(checkpoint.country, undefined);
+  const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
+    if (args[0] === `${official}privacy-policy/`) return { url: args[0], status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(policy) };
+    return base.web.document(...args);
+  } };
+  const researched = await investigate(web, { ...job, checkpoint }, settings, signal());
+  assert.equal(researched.checkpoint.country, 'US');
+});
+
 test('a published project price and an attributed coaching client account establish separate commercial facts', async () => {
   const client = '<p>“I used the coaching throughout a difficult leadership transition in my company.”</p><p>Alex Winters, Founder, Fir Works</p>';
   const { web } = fixture(page.replace('<p>Our business was founded in 2012.</p>', client));
@@ -246,6 +263,22 @@ test('conflicting monthly starting prices must reproduce with a live consultatio
     assert.equal(outcome?.state, changed ? 'UNVERIFIED' : 'VERIFIED');
     if (!changed) assert.match(outcome!.assertion, /£1,200 and £1,300/);
   }
+});
+
+test('an explicitly embedded general inquiry requires rendered confirmation before making a scheduling claim', async () => {
+  const widget = 'https://api.leadconnectorhq.com/widget/form/fixtureABC123';
+  const base = fixture(page, () => ({ status: 200, body: `<main><h1>Contact us</h1><iframe src="${widget}"></iframe></main>` }));
+  const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
+    if (args[0] === widget) return { url: widget, status: 200, headers: { 'content-type': 'text/html' },
+      body: Buffer.from('<main><input type="email"><input type="tel"><label>Your message</label><textarea></textarea></main>') };
+    return base.web.document(...args);
+  } };
+  const job = candidate();
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const researched = await investigate(web, { ...job, checkpoint }, settings, signal());
+  assert.equal(researched.checkpoint.inquiryMismatch?.kind, 'embedded');
+  await verifyOpportunity(web, { ...job, checkpoint }, signal());
+  assert.equal(researched.checkpoint.gates.find(gate => gate.name === 'opportunity')?.state, 'UNVERIFIED');
 });
 
 test('an AI coaching agent offered as software does not verify a coaching practice', async () => {
