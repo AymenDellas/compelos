@@ -90,7 +90,7 @@ export default function OriginWorkspace() {
         </div>
         <section className="origin-section">
           <div className="origin-heading"><h2>Investigation runs</h2>{active && <RunActions run={active} busy={busy} mutate={mutate} />}</div>
-          {!data.online && <p className="origin-note">Start the local agent from Engine or run <code>npm run worker</code>. Queued runs are saved in PostgreSQL.</p>}
+          {!data.online && <p className="origin-note">Compel OS handles manually started ORIGIN runs while the worker is offline. Keep Compel OS open during the run.</p>}
           {data.runs.length ? <div className="origin-scroll"><table><thead><tr><th>Queued at</th><th>Status</th><th>Investigations</th><th>Completed</th><th>Finished at</th></tr></thead>
             <tbody>{data.runs.map(run => <tr key={run.id} title={run.error ?? undefined}>
               <td>{stamp(run.created_at)}</td><td><State value={run.state} /></td><td>{Object.values(run.counts).reduce((sum, count) => sum + count, 0)}</td>

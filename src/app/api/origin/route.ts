@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { pool } from '@/lib/pg_setup';
 import { requireWorkerAdmin } from '@/lib/worker-admin';
+import { driveLocalRun, notifyAgent } from '@/lib/origin/operations';
 import { artifact, dossier, overview } from '@/lib/origin/read-model';
 import { settingsSchema } from '@/lib/origin/policy';
 import { control, migrate, saveSettings, start } from '@/lib/origin/store';
@@ -55,10 +56,15 @@ export async function POST(request: Request) {
   } catch { return respond({ error: 'Check the action and settings values.' }, 400); }
   try {
     if (input.action === 'start' || input.action === 'settings') await migrate(pool);
-    if (input.action === 'start' && !await start(pool)) return respond({ error: 'An ORIGIN run is already active.' }, 409);
+    if (input.action === 'start') {
+      const id = await start(pool);
+      if (!id) return respond({ error: 'An ORIGIN run is already active.' }, 409);
+      driveLocalRun(pool, id);
+    }
     if (input.action === 'settings') await saveSettings(pool, input.settings);
     if ('id' in input && !await control(pool, input.id, input.action)) return respond({ error: 'The run state changed. Refresh and try again.' }, 409);
-    await pool.query("SELECT pg_notify('compel_engine_wake','origin')");
+    if (input.action === 'resume') driveLocalRun(pool, input.id);
+    await notifyAgent(pool);
     return respond(await overview(pool));
   } catch { return respond({ error: 'Could not apply the ORIGIN action in PostgreSQL.' }, 503); }
 }

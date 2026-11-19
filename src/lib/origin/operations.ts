@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Pool } from 'pg';
 import { createLimiter } from '../bounded-work.cjs';
+import { MAX_RUN_MINUTES } from './policy';
 import { runSummary } from './read-model';
 import type { RunSummary } from './read-model';
 import { createOriginLane } from './worker';
@@ -18,11 +19,30 @@ export async function agentOnline(pool: Pool) {
     FROM compel_worker_config WHERE id=1`)).rows[0]?.online);
 }
 
+const localRuns = (globalThis as typeof globalThis & { compelOriginLocalRuns?: Map<string, { resumed: boolean }> })
+  .compelOriginLocalRuns ??= new Map();
+
+export function driveLocalRun(pool: Pool, id: string) {
+  const existing = localRuns.get(id);
+  if (existing) { existing.resumed = true; return; }
+  const running = { resumed: false };
+  localRuns.set(id, running);
+  const signal = AbortSignal.timeout((MAX_RUN_MINUTES + 3) * 60_000);
+  void followRun(pool, id, { drive: true, signal }).catch(() => {
+    // The PostgreSQL lease expires if the local host stops or loses its connection.
+    console.error(`ORIGIN local run ${id} stopped. Its checkpoints remain in PostgreSQL.`);
+  }).finally(() => {
+    localRuns.delete(id);
+    if (running.resumed) driveLocalRun(pool, id);
+  });
+}
+
 export async function followRun(pool: Pool, id: string, options: { signal: AbortSignal; drive?: boolean; web?: PublicWeb;
   progress?: (run: RunSummary) => void; replaceAfter?: number }) {
   const limit = createLimiter(3, 96);
   const createLane = () => createOriginLane(pool, limit, { runId: id, web: options.web });
   let lane = options.drive ? createLane() : undefined;
+  let nextAgentCheck = 0;
   const stop = () => lane?.stop();
   options.signal.addEventListener('abort', stop, { once: true });
   let last = '';
@@ -39,7 +59,12 @@ export async function followRun(pool: Pool, id: string, options: { signal: Abort
       }
       if (!['QUEUED', 'RUNNING'].includes(run.state)) return run;
       // Prefer the existing worker as soon as it owns the machine.
-      if (lane && await agentOnline(pool)) { lane.stop(); lane = undefined; }
+      if (options.drive && Date.now() >= nextAgentCheck) {
+        const online = await agentOnline(pool);
+        if (online) { lane?.stop(); lane = undefined; }
+        else lane ??= createLane();
+        nextAgentCheck = Date.now() + 3_000;
+      }
       if (!lane || !await lane.runOnce()) {
         await delay(1500, undefined, { signal: options.signal });
         lane?.wake();
