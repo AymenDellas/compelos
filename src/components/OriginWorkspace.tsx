@@ -79,6 +79,9 @@ export default function OriginWorkspace() {
     </div>
     {error && <p role="alert" className="origin-error">{error} <button onClick={() => void refresh()}>Refresh</button></p>}
     {!data && !error && <p className="origin-empty" role="status">Loading investigations…</p>}
+    {data && !data.acquisitionReady && !dossierId && <p className="origin-note" role="status">
+      <strong>Discovery only.</strong> Qualification requires two independent publisher feeds. Check setup with <code>node origin.cjs doctor</code>.
+    </p>}
     {data && dossierId && <DossierView key={dossierId} id={dossierId} close={() => setDossierId(null)} />}
     {data && !dossierId && <>
       {tab === 'Overview' && <>

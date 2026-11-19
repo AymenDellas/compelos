@@ -28,7 +28,7 @@ export function fixture(home = page, booking: (count: number) => { status: numbe
   let checked = 0;
   const web = createPublicWeb(async run => run(), async url => {
     read.push(url);
-    if (new URL(url).pathname === '/robots.txt') return { url, status: 404, headers: {}, body: Buffer.alloc(0) };
+    if (new URL(url).pathname === '/robots.txt') return { url, status: 404, headers: { 'content-type': 'text/plain' }, body: Buffer.alloc(0) };
     const response = url === book ? booking(++checked) : { status: 200, body: home };
     return { url, status: response.status, headers: { 'content-type': 'text/html' }, body: Buffer.from(response.body) };
   });
