@@ -4,6 +4,7 @@ import { Pool } from 'pg';
 import { z } from 'zod';
 import { createLimiter } from '../src/lib/bounded-work.cjs';
 import { discover, feed, niches, wikidata } from '../src/lib/origin/discovery';
+import { discoverPublicationPointers, gdeltCredits, publicationAdapter, verifyPublications } from '../src/lib/origin/auto-publishers';
 import { evaluate, evaluations } from '../src/lib/origin/evaluation';
 import { readModelConfig } from '../src/lib/origin/model';
 import { agentOnline, followRun, notifyAgent } from '../src/lib/origin/operations';
@@ -58,7 +59,7 @@ Usage: node origin.cjs <command> [arguments] [options]
 
 Start/run overrides: --limit 1..24 --minutes 2..30 --no-browser.
 Run/work/wait options: --timeout seconds --quiet --require-qualified.
---qualification requires two independent publisher sources before enqueueing.
+Every run discovers its sources automatically and applies the same qualification gates.
 Commands emit JSON. Run progress goes to stderr. Ctrl+C leaves saved checkpoints available.`;
 
 class CommandError extends Error {
@@ -97,8 +98,11 @@ async function inspectSources(pool: Pool, signal: AbortSignal) {
   const configured = await sourceReadiness(pool);
   const web = createPublicWeb(createLimiter(3, 96));
   const bounded = () => AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
+  const recent = (await sourceHistory(pool)).find(source => source.adapter === publicationAdapter && source.retryAt && Date.parse(source.retryAt) > Date.now());
   const found = await discover([
     ...configured.feeds.map(publisher => ({ name: publisher.title, run: () => feed(web, publisher, 12, bounded()) })),
+    { name: publicationAdapter, retryAt: recent?.retryAt, run: async () => verifyPublications(web,
+      await discoverPublicationPointers(web, niches[0], bounded()), defaults.activityDays, bounded()) },
     { name: 'Wikidata', run: () => wikidata(web, 3, niches[0], bounded()) },
   ], 24);
   const overlaps = new Map<string, Set<string>>();
@@ -108,7 +112,7 @@ async function inspectSources(pool: Pool, signal: AbortSignal) {
     owners.add(seed.publisher!);
     overlaps.set(host, owners);
   }
-  return { configured, results: found.results, candidateOverlap: [...overlaps].filter(([, owners]) => owners.size >= 2).map(([host]) => host),
+  return { configured, indexCredit: gdeltCredits, results: found.results, candidateOverlap: [...overlaps].filter(([, owners]) => owners.size >= 2).map(([host]) => host),
     observations: found.seeds.map(seed => ({ name: seed.name, website: seed.website, source: seed.source, occurredAt: seed.occurredAt ?? null })) };
 }
 
@@ -150,15 +154,13 @@ async function main(argv: string[]) {
       const sources = schema ? await sourceReadiness(pool) : null;
       const chrome = await browserAvailable();
       const config = schema ? await configuration(pool) : null;
-      const ready = Boolean(sources?.canVerifyAcquisition && (!config?.config.browser || chrome));
+      const ready = Boolean(schema && (!config?.config.browser || chrome));
       const agent = await agentOnline(pool);
       const workerNeedsReload = agent && config?.worker_policy_version !== POLICY_VERSION;
       print({ database: true, schema, agent, chrome, sources, activeWorkerPolicy: config?.worker_policy_version ?? null,
         expectedWorkerPolicy: POLICY_VERSION, workerNeedsReload,
-        mode: ready ? 'qualification-capable' : 'discovery-only', agentRouter: { configured: Boolean(readModelConfig()), requestsPerRun: config?.config.modelCalls ?? 0 },
-        remediation: !schema ? 'Run node origin.cjs migrate.' : sources?.error ?? (sources?.canVerifyAcquisition
-          ? chrome || !config?.config.browser ? null : 'Install the existing Puppeteer Chrome or disable captures in settings.'
-          : 'Register two independent publisher feeds with documented permission before running qualification.') });
+        mode: 'automatic-discovery', agentRouter: { configured: Boolean(readModelConfig()), requestsPerRun: config?.config.modelCalls ?? 0 },
+        remediation: !schema ? 'Run node origin.cjs migrate.' : chrome || !config?.config.browser ? null : 'Install the existing Puppeteer Chrome or disable captures in settings.' });
       return values.strict && (!ready || workerNeedsReload) ? 3 : 0;
     }
     if (command === 'benchmark' || command === 'acceptance') {
@@ -170,24 +172,18 @@ async function main(argv: string[]) {
     }
     if (command === 'start' || command === 'run') {
       await migrate(pool);
-      const sources = await sourceReadiness(pool);
-      if (sources.error) throw new CommandError(sources.error, 3);
-      if (values.qualification && !sources.canVerifyAcquisition) throw new CommandError('Qualification requires two independent approved publisher feeds. Run node origin.cjs doctor.', 3);
       const override: Partial<Settings> = {};
       if (values.limit !== undefined) override.candidateLimit = limit(8, 24);
       if (values.minutes !== undefined) override.runMinutes = parseNumber(values.minutes, 10, 2, 30, 'Run minutes');
       if (values['no-browser']) override.browser = false;
-      const id = await start(pool, override, values.qualification);
-      if (!id) {
-        if (values.qualification && !(await sourceReadiness(pool)).canVerifyAcquisition) throw new CommandError('Publisher readiness changed before enqueueing. Run node origin.cjs doctor.', 3);
-        throw new CommandError('An ORIGIN run is already active. Use work active, wait active, or cancel active.');
-      }
+      const id = await start(pool, override);
+      if (!id) throw new CommandError('An ORIGIN run is already active. Use work active, wait active, or cancel active.');
       await notifyAgent(pool);
       if (command === 'run') {
-        console.error(`Mode ${sources.canVerifyAcquisition ? 'qualification-capable' : 'discovery-only'}`);
+        if (!values.quiet) console.error('Mode automatic-discovery');
         return await complete(id, true);
       }
-      print({ id, state: 'QUEUED', mode: sources.canVerifyAcquisition ? 'qualification-capable' : 'discovery-only', agentOnline: await agentOnline(pool) });
+      print({ id, state: 'QUEUED', mode: 'automatic-discovery', agentOnline: await agentOnline(pool) });
       return 0;
     }
     if (!await hasSchema(pool)) throw new CommandError('Apply the ORIGIN schema with node origin.cjs migrate.', 3);

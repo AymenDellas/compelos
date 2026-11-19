@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { discoverPublicationPointers, gdeltCredits, publicationAdapter, verifyPublications } from './auto-publishers';
 import { discover, feed, niches, wikidata } from './discovery';
 import type { Adapter } from './discovery';
 import { modelAdvisory } from './model';
@@ -7,8 +8,8 @@ import type { SourceResult } from './policy';
 import { createPublicWeb } from './public-web';
 import type { PublicWeb } from './public-web';
 import { hasSchema } from './read-model';
-import { investigate, resolveBusiness, verifyOpportunity } from './research';
-import { approvedFeeds, independentFeedCount } from './sources';
+import { enrichAcquisition, investigate, resolveBusiness, verifyOpportunity } from './research';
+import { approvedFeeds } from './sources';
 import { claimRun, failStage, finish, nextJob, recentPublisherEvidence, recentWikiPointers, release, revisit, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
 import type { Run, SourceQuality } from './store';
 
@@ -46,7 +47,6 @@ export function createOriginLane(pool: Pool, limit: Limiter, options: { runId?: 
     let feeds: ReturnType<typeof approvedFeeds> = [];
     try {
       feeds = approvedFeeds(run.publisher_feeds);
-      if (independentFeedCount(feeds) < 2) adapters.push({ name: 'ECHO setup', deferred: 'REQUIRES_TWO_INDEPENDENT_PUBLISHERS', run: async () => [] });
       const preferred = chooseSource(history, quality, feeds.map(item => `ECHO · ${item.title}`), explore);
       // Rotate through publishers, retaining a second independent source where available.
       const first = feeds.find(item => `ECHO · ${item.title}` === preferred);
@@ -58,9 +58,18 @@ export function createOriginLane(pool: Pool, limit: Limiter, options: { runId?: 
         adapters.push({ name, retryAt: hold(name), run: () => feed(web, item, Math.min(24, limit * 2), perSource(signal, 8_000)) });
       }
     } catch {
-      adapters.push({ name: 'ECHO setup', deferred: 'INVALID_FEED_CONFIGURATION', run: async () => [] });
+      adapters.push({ name: 'ECHO supplemental feeds', deferred: 'INVALID_FEED_CONFIGURATION', run: async () => [] });
     }
+    adapters.push({ name: publicationAdapter, credit: gdeltCredits, retryAt: hold(publicationAdapter), run: async () => {
+      const indexSignal = perSource(signal, 11_000);
+      const pointers = await discoverPublicationPointers(web, strategy, indexSignal);
+      return verifyPublications(web, pointers, run.config.activityDays, perSource(signal, 12_000));
+    } });
     const publisherObservation = (seed: Awaited<ReturnType<typeof recentPublisherEvidence>>[number]) => {
+      if (seed.method === 'PUBLICATION') {
+        const age = Date.now() - Date.parse(seed.publication?.checkedAt ?? '');
+        return age >= 0 && age < 86_400_000 ? [seed] : [];
+      }
       const publisher = feeds.find(item => domain(item.url) === domain(seed.source) && item.permission === seed.permission);
       return publisher ? [{ ...seed, publisher: publisher.publisher ?? domain(publisher.url) }] : [];
     };
@@ -70,10 +79,10 @@ export function createOriginLane(pool: Pool, limit: Limiter, options: { runId?: 
     const recent = new Set(await recentWikiPointers(pool));
     adapters.push({ name: `Wikidata · ${strategy}`, retryAt: latestWikiHold,
       run: async () => (await wikidata(web, Math.min(24, limit * 3), strategy, perSource(signal, 18_000))).filter(seed => !recent.has(seed.source)) });
-    const historic = feeds.length > 0 ? (await recentPublisherEvidence(pool, run.config.activityDays)).flatMap(seed => {
+    const historic = (await recentPublisherEvidence(pool, run.config.activityDays)).flatMap(seed => {
       const occurred = Date.parse(seed.occurredAt ?? '');
       return occurred <= Date.now() && occurred >= Date.now() - run.config.activityDays * 86_400_000 ? publisherObservation(seed) : [];
-    }) : [];
+    });
     const found = await discover(adapters, limit, historic);
     signal.throwIfAborted();
     await saveDiscovery(pool, run, found.seeds, found.results);
@@ -105,9 +114,10 @@ export function createOriginLane(pool: Pool, limit: Limiter, options: { runId?: 
             await saveStage(pool, run, job, checkpoint, checkpoint.gates.some(gate => gate.state === 'CONTRADICTED')
               ? decide(checkpoint.gates, checkpoint.evidence) : 'VERIFYING', artifacts);
           } else {
+            const publications = await enrichAcquisition(web, job, run.config, signal);
             const checkpoint = await verifyOpportunity(web, job, signal);
             await modelAdvisory(pool, run, job, checkpoint, signal);
-            await saveStage(pool, run, job, checkpoint, decide(checkpoint.gates, checkpoint.evidence));
+            await saveStage(pool, run, job, checkpoint, decide(checkpoint.gates, checkpoint.evidence), [], publications);
           }
         } catch (error) {
           if (!signal.aborted) {

@@ -85,8 +85,8 @@ test('robots rules, unsupported addresses, redirect target checks, and Retry-Aft
   });
   await assert.rejects(() => web.document(official, signal(), () => true));
   assert.deepEqual(requests, [`${official}robots.txt`, official]);
-  await assert.rejects(() => web.api('https://wikidata.org/search', 'wikidata.org', signal()), { message: 'RATE_LIMITED' });
-  await assert.rejects(() => web.api('https://wikidata.org/search', 'wikidata.org', signal()), { message: 'RATE_LIMITED' });
+  await assert.rejects(() => web.api('https://www.wikidata.org/w/api.php', 'www.wikidata.org', signal()), { message: 'RATE_LIMITED' });
+  await assert.rejects(() => web.api('https://www.wikidata.org/w/api.php', 'www.wikidata.org', signal()), { message: 'RATE_LIMITED' });
   assert.equal(requests.length, 3);
 });
 

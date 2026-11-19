@@ -54,10 +54,10 @@ export async function sourceReadiness(db: DB) {
   try {
     const feeds = approvedFeeds((await configuration(db))?.publisher_feeds);
     const independent = independentFeedCount(feeds);
-    return { feeds, independent, canVerifyAcquisition: independent >= 2, error: null };
+    return { feeds, independent, automaticDiscovery: true, error: null };
   } catch (error) {
     if (!(error instanceof Error && error.message === 'INVALID_FEED_CONFIGURATION')) throw error;
-    return { feeds: [], independent: 0, canVerifyAcquisition: false, error: 'Invalid publisher feed configuration.' };
+    return { feeds: [], independent: 0, automaticDiscovery: true, error: 'Invalid supplemental publisher feed configuration.' };
   }
 }
 
@@ -94,7 +94,7 @@ export async function overview(pool: Pool) {
   const configured = Boolean(readModelConfig());
   if (!await hasSchema(pool)) return { ...empty, configured, ready: false, runs: [] as RunSummary[], opportunities: [] as Opportunity[],
     findings: [] as Finding[], sources: [] as SourceResult[], quality: [] as SourceQuality[], usage: noUsage,
-    acquisitionReady: false, independentPublishers: 0 };
+    independentPublishers: 0 };
   // A dashboard refresh should use one checked-out connection on the shared pooler.
   const db = await pool.connect();
   try {
@@ -112,7 +112,7 @@ export async function overview(pool: Pool) {
     const usage = await modelUsage(db);
     return { config: config.config, next_run_at: config.next_run_at?.toISOString() ?? null, worker_seen_at: config.worker_seen_at?.toISOString() ?? null,
       online: Boolean(config.worker_seen_at && Date.now() - config.worker_seen_at.getTime() < 115_000), configured, ready: true, runs,
-      opportunities, findings, sources, quality, usage, acquisitionReady: sourceConfig.canVerifyAcquisition, independentPublishers: sourceConfig.independent };
+      opportunities, findings, sources, quality, usage, independentPublishers: sourceConfig.independent };
   } finally { db.release(); }
 }
 export type Overview = Awaited<ReturnType<typeof overview>>;

@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
-export const POLICY_VERSION = 'origin-v2';
+export const POLICY_VERSION = 'origin-v3';
 export const gateNames = ['identity', 'niche', 'geography', 'substance', 'acquisition', 'opportunity', 'contact'] as const;
 export type GateName = typeof gateNames[number];
 export type Outcome = 'QUALIFIED' | 'UNRESOLVED' | 'REJECTED';
-export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION';
+export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLICATION';
 
 export const settingsSchema = z.object({
   intervalMinutes: z.number().int().min(60).max(43_200).nullable(),
@@ -36,6 +36,9 @@ export type Seed = {
   permission?: string;
   adapter?: string;
   publisher?: string;
+  publisherLinks?: string[];
+  discoveryPriority?: number;
+  publication?: { checkedAt: string; permissionPage: string; title: string; digest: string };
 };
 
 export function domain(url: string) { return new URL(url).hostname.toLowerCase().replace(/^www\./, '').replace(/\.$/, ''); }
@@ -89,7 +92,10 @@ export function decide(findings: Gate[], evidence: Evidence[], now = Date.now())
 }
 export type Decision = ReturnType<typeof decide>;
 
-export type SourceResult = { adapter: string; discovered: number; elapsedMs: number; status: 'OK' | 'FAILED' | 'DEFERRED'; code?: string; retryAt?: string };
+export type SourceResult = { adapter: string; discovered: number; elapsedMs: number; status: 'OK' | 'FAILED' | 'DEFERRED'; code?: string; retryAt?: string;
+  publisherAudit?: PublisherAudit[]; credit?: string };
+export type PublisherAudit = { url: string; code: string; records: number; license?: string; publisher?: string };
+export type PublisherPointer = { url: string; name?: string; website?: string };
 
 export type JourneyStep = { from: string; url: string; label: string; result: string; evidence: string };
 export type Checkpoint = {
@@ -106,5 +112,8 @@ export type Checkpoint = {
   advisory?: { assessment: string; evidence: string };
   breakage?: { url: string; from: string; label: string; status: number; evidence: string; alternatives: boolean };
   acquisitionSources?: number;
+  publisherPointers?: PublisherPointer[];
+  publisherAudit?: PublisherAudit[];
+  mediaPage?: string;
 };
 export const emptyCheckpoint = (): Checkpoint => ({ evidence: [], gates: [], journey: [] });

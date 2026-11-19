@@ -79,9 +79,6 @@ export default function OriginWorkspace() {
     </div>
     {error && <p role="alert" className="origin-error">{error} <button onClick={() => void refresh()}>Refresh</button></p>}
     {!data && !error && <p className="origin-empty" role="status">Loading investigations…</p>}
-    {data && !data.acquisitionReady && !dossierId && <p className="origin-note" role="status">
-      <strong>Discovery only.</strong> Qualification requires two independent publisher feeds. Check setup with <code>node origin.cjs doctor</code>.
-    </p>}
     {data && dossierId && <DossierView key={dossierId} id={dossierId} close={() => setDossierId(null)} />}
     {data && !dossierId && <>
       {tab === 'Overview' && <>
@@ -134,7 +131,7 @@ function RunActions({ run, busy, mutate }: { run: RunSummary; busy: boolean; mut
 function Discovery({ data }: { data: Overview }) {
   const names = [...new Set(data.sources.map(source => source.adapter))];
   const methods = [
-    ['ECHO', 'Find coaches explicitly linked in configured publisher feeds.'],
+    ['ECHO', 'Discover publisher records and verify their reuse permission, dates and official links.'],
     ['CONSTELLATION', 'Expand from named contributors on the same publisher record.'],
     ['IGNITION', 'Revisit businesses and compare saved offer and booking snapshots.'],
     ['VOID', 'Trace direct booking links and independently recheck reported failures.'],
@@ -146,7 +143,8 @@ function Discovery({ data }: { data: Overview }) {
         <tbody>{names.map(name => {
           const history = data.sources.filter(source => source.adapter === name);
           return <tr key={name}><td>{name}</td><td><State value={history[0].status} />{history[0].code && <small>{human(history[0].code)}</small>}
-            {history[0].retryAt && <small>Retry after {stamp(history[0].retryAt)}</small>}</td>
+            {history[0].retryAt && <small>Retry after {stamp(history[0].retryAt)}</small>}
+            {history[0].publisherAudit?.map(check => <small key={check.url}>{new URL(check.url).hostname} · {human(check.code)}</small>)}</td>
           <td>{history.reduce((sum, item) => sum + item.discovered, 0)}</td><td>{data.quality.find(item => item.adapter === name)?.identities ?? 0}</td><td>{history.filter(item => item.status === 'FAILED').length}</td></tr>;
         })}</tbody></table></div> : <p className="origin-empty">Source activity will appear after the first run. Wikidata is available by default.</p>}
     </section>
@@ -229,6 +227,11 @@ function DossierView({ id, close }: { id: string; close: () => void }) {
       </section>
       {!!checkpoint.journey.length && <section className="origin-section"><div className="origin-heading"><h3>Public journey</h3></div>
         <ol className="origin-journey">{checkpoint.journey.map(step => <li key={step.evidence}><External url={step.url}>{step.label}</External><State value={step.result} /></li>)}</ol>
+      </section>}
+      {!!checkpoint.publisherAudit?.length && <section className="origin-section"><div className="origin-heading"><h3>Publisher checks</h3></div>
+        <ol className="origin-journey">{checkpoint.publisherAudit.map(check => <li key={check.url}>
+          <External url={check.url}>{check.publisher ?? new URL(check.url).hostname}</External><State value={check.code} />
+        </li>)}</ol>
       </section>}
       {!!entry.artifacts.length && <section className="origin-section"><div className="origin-heading"><h3>Browser captures</h3></div>
         <div className="origin-captures">{entry.artifacts.map(item => <figure key={item.id}>

@@ -9,6 +9,13 @@ const excluded = /(?:^|\.)(?:linkedin\.com|licdn\.com|facebook\.com|instagram\.c
 const actionPath = /(?:^|\/)(?:wp-admin|wp-login\.php|login|sign-?in|logout|register|submit|api|admin|cart|pay|payment|checkout|unsubscribe|confirm|cancel|reschedule)(?:\/|$)/i;
 export const redirectCodes = [301, 302, 303, 307, 308];
 
+function indexUrl(value: string, host: string) {
+  const url = funnelUrl(value);
+  const path = host === 'api.gdeltproject.org' ? '/api/v2/doc/doc' : host === 'www.wikidata.org' ? '/w/api.php' : null;
+  if (!path || url.protocol !== 'https:' || url.host !== host || url.pathname !== path) throw new PublicFailure('UNVERIFIED_SOURCE');
+  return url;
+}
+
 export function websiteUrl(value: string) {
   const url = funnelUrl(value);
   const hostname = url.hostname.replace(/\.$/, '').replace(/^\[|\]$/g, '');
@@ -64,7 +71,7 @@ export function retryAt(header: string | undefined, fallbackMs: number) {
 
 type Resource = Awaited<ReturnType<typeof fetchResource>>;
 function fetchResource(url: string, signal: AbortSignal) {
-  return fetchPublicPage(websiteUrl(url).href, { resource: true, followRedirects: false, signal, userAgent });
+  return fetchPublicPage(url, { resource: true, followRedirects: false, signal, userAgent });
 }
 
 export function createPublicWeb(limit: <T>(run: () => Promise<T>) => Promise<T>, transport = fetchResource) {
@@ -115,9 +122,11 @@ export function createPublicWeb(limit: <T>(run: () => Promise<T>) => Promise<T>,
       if (!permit(url)) throw new PublicFailure('UNVERIFIED_REDIRECT');
       await admit(url, signal);
       const host = domain(url.href);
-      const gap = (lastDocument.get(host) ?? 0) + 750 - Date.now();
+      const now = Date.now();
+      const slot = Math.max(now, (lastDocument.get(host) ?? 0) + 750);
+      lastDocument.set(host, slot);
+      const gap = slot - now;
       if (gap > 0) await delay(gap, undefined, { signal });
-      lastDocument.set(host, Date.now());
       const response = await get(url, signal);
       if (!permit(websiteUrl(response.url))) throw new PublicFailure('UNVERIFIED_REDIRECT');
       if (!redirectCodes.includes(response.status)) return response;
@@ -139,8 +148,7 @@ export function createPublicWeb(limit: <T>(run: () => Promise<T>) => Promise<T>,
       return get(url, signal);
     },
     async api(value: string, host: string, signal: AbortSignal) {
-      const url = websiteUrl(value);
-      if (url.protocol !== 'https:' || url.hostname !== host) throw new PublicFailure('UNVERIFIED_SOURCE');
+      const url = indexUrl(value, host);
       const response = await get(url, signal);
       if (response.url !== url.href || response.status !== 200) throw new PublicFailure(`HTTP_${response.status}`);
       if (!/json/i.test(response.headers['content-type'] ?? '')) throw new PublicFailure('UNREADABLE_SOURCE');

@@ -1,4 +1,5 @@
 import { load } from 'cheerio';
+import { publisherPointer, verifyPublications } from './auto-publishers';
 import { createFunnelBrowser } from '../funnel-browser';
 import { relevantCoach } from './discovery';
 import { emptyCheckpoint, finding, hash, observe } from './policy';
@@ -13,15 +14,18 @@ const offerLink = /\b(?:coaching|program(?:me)?s?|services|work with (?:me|us))\
 const contactLink = /^(?:contact(?: us| me)?|get in touch|work with us)$/i;
 const aboutLink = /^(?:about(?: us| me)?|our story|company|meet (?:the )?(?:team|founder|coach))$/i;
 const caseLink = /^(?:case stud(?:y|ies)|client stories|client case studies|client results)\b/i;
+const mediaPage = /^(?:in the (?:press|media)|as (?:seen|featured) in|press(?: & media)?|media(?: appearances)?|speaking(?: & media)?|interviews|podcasts)$/i;
+const appearanceLink = /\b(?:interview|podcast|episode|guest appearance|conference|keynote|webinar|summit|speaker)\b/i;
 const challenge = /verify (?:that )?you are human|checking your (?:browser|connection)|enable javascript and cookies to continue|(?:just a moment|access denied|attention required)\b/i;
 const squash = (text: string) => text.trim().replace(/\s+/g, ' ');
 const normalized = (value: string) => squash(value.normalize('NFKD').replace(/\p{M}/gu, '').replace(/[^\p{L}\p{N}]+/gu, ' ')).toLowerCase();
 const containsName = (label: string, name: string) => ` ${normalized(label)} `.includes(` ${normalized(name)} `);
 
 type Link = { url: string; label: string; main: boolean };
+type MarketStatement = { country: NonNullable<Checkpoint['country']>; evidence: string };
 export type Page = { url: string; state: string; evidence: Evidence; identity: string; canonical: string | null;
   statements: string[]; headings: string[]; links: Link[]; contact: { address: string; context: string } | null;
-  contactProhibited: boolean; bookingControl: boolean };
+  contactProhibited: boolean; bookingControl: boolean; markets: MarketStatement[] };
 
 function linkedUrl(value: string, current: string) {
   try {
@@ -30,18 +34,53 @@ function linkedUrl(value: string, current: string) {
   } catch { return null; }
 }
 
+function markedMarkets(html: ReturnType<typeof load>, url: string): MarketStatement[] {
+  type Node = Record<string, unknown>;
+  const list = (value: unknown) => Array.isArray(value) ? value : [value];
+  const nodes = (value: unknown) => list(value).filter((item): item is Node => Boolean(item && typeof item === 'object' && !Array.isArray(item)));
+  const country = (value: string, typedCountry: boolean): MarketStatement['country'] | null => {
+    if (/^(?:Canada)$/i.test(value) || typedCountry && value === 'CA') return 'CA';
+    if (/^(?:United States(?: of America)?|USA|U\.S\.)$/i.test(value) || value === 'US') return 'US';
+    if (/^(?:United Kingdom|U\.K\.)$/i.test(value) || value === 'UK' || typedCountry && value === 'GB') return 'UK';
+    return null;
+  };
+  return html('script[type="application/ld+json"]').slice(0, 10).toArray().flatMap(script => {
+    const value = html(script).text();
+    if (value.length > 60_000) return [];
+    try {
+      return nodes(JSON.parse(value)).flatMap(item => [item, ...nodes(item['@graph']).slice(0, 30)]).flatMap(item => {
+        const service = [item.serviceType, item.name].find((label): label is string => typeof label === 'string' && relevantCoach.test(label));
+        if (!list(item['@type']).some(type => type === 'Service' || type === 'https://schema.org/Service') ||
+          !service) return [];
+        const provider = nodes(item.provider)[0];
+        const reference = (urlValue: unknown) => typeof urlValue === 'string' ? linkedUrl(urlValue, url) : null;
+        const subject = reference(item.provider ? provider?.url ?? provider?.['@id'] ?? item.provider : item.url);
+        if (!subject || domain(subject) !== domain(url)) return [];
+        return list(item.areaServed).flatMap(area => {
+          const node = nodes(area)[0];
+          const typed = Boolean(node && list(node['@type']).some(type => type === 'Country' || type === 'https://schema.org/Country'));
+          const label = typeof area === 'string' ? area.trim() : typed && typeof node.name === 'string' ? node.name.trim() : '';
+          const market = country(label, typed);
+          return market ? [{ country: market, evidence: `Service.areaServed: ${label} · ${service.slice(0, 140)}` }] : [];
+        });
+      });
+    } catch { return []; }
+  });
+}
+
 export function parseBusinessPage(html: string, url: string) {
   const $ = load(html);
   const title = squash($('title').first().text());
   const site = $('meta[property="og:site_name"]').attr('content') ?? '';
   const canonical = linkedUrl($('link[rel="canonical"]').attr('href') ?? '', url);
+  const markets = markedMarkets($, url);
   $('script,style,noscript,template,blockquote,[hidden],[aria-hidden="true"],.testimonial,.review').remove();
   const headings = $('h1,h2,h3').slice(0, 35).toArray().map(node => squash($(node).text()).slice(0, 240));
   const identity = [title, site, ...headings.slice(0, 5)].filter(Boolean).join(' · ').slice(0, 400);
   const statements = $('p,li,h1,h2,h3,address').slice(0, 180).toArray().map(node => squash($(node).text()).slice(0, 450)).filter(Boolean);
   const links = $('a[href]').slice(0, 240).toArray().flatMap(node => {
     const raw = $(node).attr('href') ?? '';
-    const label = squash($(node).text() || $(node).attr('aria-label') || '').slice(0, 100);
+    const label = squash($(node).text() || $(node).attr('aria-label') || $(node).find('img[alt]').first().attr('alt') || '').slice(0, 100);
     const target = linkedUrl(raw, url);
     return label && target && target !== url ? [{ label, url: target, main: !$(node).closest('header,footer,nav,aside').length }] : [];
   });
@@ -64,7 +103,7 @@ export function parseBusinessPage(html: string, url: string) {
     if (!forbidden.test(bodyText) && invitation.test(context) && /^(?:hello|info|contact|office|team|partnerships|business|vendors|enquiries|inquiries)@[a-z\d.-]+\.[a-z]{2,}$/i.test(address)
       && address.split('@')[1].replace(/^www\./, '') === domain(url)) contact = { address, context };
   });
-  return { identity, canonical, statements, headings, links, contact, bookingControl,
+  return { identity, canonical, statements, headings, links, contact, bookingControl, markets,
     contactProhibited: forbidden.test(bodyText), challenged: challenge.test(`${title} ${bodyText.slice(0, 850)}`) };
 }
 
@@ -88,7 +127,7 @@ export async function inspect(web: PublicWeb, value: string, signal: AbortSignal
   }
   const evidence = observe(state === 'READABLE' ? 'official' : 'http', url,
     state === 'READABLE' ? `HTTP 200 · ${extraction?.identity ?? ''}` : state.replaceAll('_', ' '), method, state === 'ACCESS_RESTRICTED' ? undefined : payload);
-  return { url, state, evidence, identity: '', canonical: null, statements: [], headings: [], links: [], contact: null, contactProhibited: false, bookingControl: false,
+  return { url, state, evidence, identity: '', canonical: null, statements: [], headings: [], links: [], contact: null, contactProhibited: false, bookingControl: false, markets: [],
     ...(state === 'READABLE' ? extraction : {}) };
 }
 
@@ -154,6 +193,8 @@ function recordMarket(checkpoint: Checkpoint, pages: Page[]) {
     const country = /Canada/i.test(match[1]) ? 'CA' as const : /Kingdom|U\.?K/i.test(match[1]) ? 'UK' as const : 'US' as const;
     return [{ country, evidence: quote(page, line, 'Explicit market or business base') }];
   }));
+  positive.push(...pages.flatMap(page => page.markets.map(market => ({ country: market.country,
+    evidence: quote(page, market.evidence, 'Official service area declaration') }))));
   const negative = pages.flatMap(page => page.statements.filter(line => outside.test(line)).map(line => quote(page, line, 'Exclusive market statement')));
   if (positive.length && negative.length) add(checkpoint, 'geography', 'UNVERIFIED', 'The site makes conflicting market statements.', [positive[0].evidence, negative[0]]);
   else if (negative.length) add(checkpoint, 'geography', 'CONTRADICTED', 'The business explicitly limits service to an ineligible market.', [negative[0]]);
@@ -173,7 +214,8 @@ function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: numbe
   for (const seed of job.seeds) {
     if (!seed.occurredAt || seed.method === 'IGNITION' || normalized(seed.name) !== normalized(checkpoint.identityName ?? job.name)) continue;
     const occurred = Date.parse(seed.occurredAt);
-    if (occurred > now || occurred < now - activityDays * 86_400_000) continue;
+    const permissionExpires = seed.method === 'PUBLICATION' ? Date.parse(seed.publication?.checkedAt ?? '') + 86_400_000 : Infinity;
+    if (!Number.isFinite(occurred) || occurred > now || occurred < now - activityDays * 86_400_000 || !(permissionExpires > now)) continue;
     const host = domain(seed.source);
     const organization = seed.publisher ?? host;
     const record = seed.sourceKey.split(':').slice(1).join(':');
@@ -181,8 +223,9 @@ function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: numbe
     organizations.add(organization);
     hosts.add(host);
     records.add(record);
-    validUntil.push(occurred + activityDays * 86_400_000);
-    evidence.push(observe('external', seed.source, `${seed.occurredAt.slice(0, 10)} · ${seed.excerpt}`, 'Publisher-linked exposure'));
+    validUntil.push(Math.min(occurred + activityDays * 86_400_000, permissionExpires));
+    const reference = seed.publication ? ` · Scoped permission checked at ${seed.publication.permissionPage} · SHA-256 ${seed.publication.digest}` : '';
+    evidence.push(observe('external', seed.source, `${seed.occurredAt.slice(0, 10)} · ${seed.excerpt}${reference}`, 'Publisher-linked exposure'));
   }
   checkpoint.acquisitionSources = evidence.length;
   add(checkpoint, 'acquisition', evidence.length >= 2 ? 'VERIFIED' : 'UNVERIFIED', evidence.length >= 2
@@ -190,6 +233,40 @@ function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: numbe
     : `Found ${evidence.length} of 2 required independent, recent publisher records.`, evidence);
   const gate = checkpoint.gates.at(-1)!;
   if (gate.expiresAt && validUntil.length) gate.expiresAt = new Date(Math.min(Date.parse(gate.expiresAt), ...validUntil)).toISOString();
+}
+
+function publicationLinks(pages: Page[], job: Job, checkpoint: Checkpoint, media = false) {
+  const name = checkpoint.identityName ?? job.name;
+  for (const page of pages) for (const link of page.links) {
+    if (domain(link.url) === job.domain) {
+      if (!checkpoint.mediaPage && mediaPage.test(link.label)) checkpoint.mediaPage = link.url;
+      continue;
+    }
+    const url = publisherPointer(link.url);
+    if (!url || (!media && !appearanceLink.test(`${link.label} ${new URL(url).pathname.replace(/[-_/]/g, ' ')}`))) continue;
+    const pointers = checkpoint.publisherPointers ??= [];
+    if (pointers.length < 10 && !pointers.some(item => item.url === url)) pointers.push({ url, name, website: job.website });
+  }
+}
+
+export async function enrichAcquisition(web: PublicWeb, job: Job, settings: Settings, signal: AbortSignal) {
+  const checkpoint = job.checkpoint;
+  if (checkpoint.gates.find(gate => gate.name === 'acquisition')?.state === 'VERIFIED' ||
+      checkpoint.gates.find(gate => gate.name === 'identity')?.state !== 'VERIFIED') return [];
+  if (checkpoint.mediaPage) {
+    const page = await inspect(web, checkpoint.mediaPage, signal,
+      'Official media links', url => domain(url.href) === job.domain);
+    // A timed out source should leave the job resumable under its owner fence.
+    addJourney(checkpoint, job.website, page, 'Media appearances');
+    if (page.state === 'READABLE') publicationLinks([page], job, checkpoint, true);
+  }
+  const name = checkpoint.identityName ?? job.name;
+  const references = job.seeds.filter(seed => normalized(seed.name) === normalized(name) && domain(seed.website) === job.domain)
+    .flatMap(seed => (seed.publisherLinks ?? []).map(url => ({ url, name, website: job.website })));
+  const discovered = await verifyPublications(web, [...(checkpoint.publisherPointers ?? []), ...references], settings.activityDays, signal);
+  checkpoint.publisherAudit = discovered.audit;
+  recordAcquisition({ ...job, seeds: [...job.seeds, ...discovered.seeds] }, checkpoint, settings.activityDays);
+  return discovered.seeds;
 }
 
 function routeHost(value: string, official: string) {
@@ -229,6 +306,7 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   }
   recordMarket(checkpoint, pages);
   recordAcquisition(job, checkpoint, settings.activityDays);
+  publicationLinks(pages, job, checkpoint);
   const offer = [...pages].reverse().find(item => item.headings.some(line => relevantCoach.test(line)));
   const line = offer?.headings.find(item => relevantCoach.test(item));
   const scope = offer?.statements.find(item => /\b(?:one.on.one|1:1|coaching sessions?|coaching (?:program|programme|engagement)|coaching for (?:executives|leaders|founders|managers)|(?:3|6|12).month)\b/i.test(item));

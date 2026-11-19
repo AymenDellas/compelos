@@ -20,7 +20,7 @@ export async function runBenchmark(admin: Pool, connection: PoolConfig, kind: 'f
   const fixture = kind === 'fixture' ? endToEndFixture() : null;
   try {
     await migrate(pool);
-    await editPublishers(pool, () => fixture?.feeds ?? configuredFeeds);
+    await editPublishers(pool, () => fixture ? [] : configuredFeeds);
     await saveSettings(pool, { ...defaults, candidateLimit: fixture ? Object.keys(fixture.expected).length : limit });
     if (fixture) {
       await pool.query('CREATE TABLE leads (website text, do_not_contact boolean)');
@@ -50,7 +50,7 @@ export async function runBenchmark(admin: Pool, connection: PoolConfig, kind: 'f
     }
     const report = { kind, run: id, state: run.state, counts: run.counts, investigated: evaluation.investigated,
       published: ready.length, captures: evaluation.captures, verifiedCaptures, usage: evaluation.usage, sources: run.sources,
-      gates: evaluation.gates, seconds: Math.round((Date.now() - clock) / 1000), score, directory,
+      gates: evaluation.gates, publisherChecks: evaluation.publisherChecks, seconds: Math.round((Date.now() - clock) / 1000), score, directory,
       passed: run.state === 'COMPLETED' && evaluation.investigated > 0 && evaluation.captures === verifiedCaptures &&
         (!score || (score.total === score.passed && score.unexpected.length === 0 && ready.length === 2 && verifiedCaptures >= 4)) };
     await writeFile(resolve(directory, 'report.json'), JSON.stringify({ report, evaluation, stages, evidence }, null, 2), { flag: 'wx' });

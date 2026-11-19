@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { domain } from './policy';
 import { documentUrl, PublicFailure } from './public-web';
 import type { PublicWeb } from './public-web';
-import type { Seed, SourceResult } from './policy';
+import type { PublisherAudit, Seed, SourceResult } from './policy';
 import type { PublisherFeed } from './sources';
 
 export const niches = ['executive coach', 'leadership coach', 'business coach', 'career coach'];
@@ -12,11 +12,13 @@ const wikidataHost = 'www.wikidata.org';
 const wikiUrl = (parameters: Record<string, string>) => `https://${wikidataHost}/w/api.php?${new URLSearchParams({ format: 'json', maxlag: '5', ...parameters })}`;
 const qid = z.string().regex(/^Q[1-9]\d{0,14}$/);
 const responseSchema = z.object({ query: z.object({ search: z.array(z.object({ title: qid })) }) });
+const urlSnak = z.object({ datavalue: z.object({ value: z.string() }).optional() });
+const urlClaim = z.object({ rank: z.string(), mainsnak: urlSnak,
+  references: z.array(z.object({ snaks: z.object({ P854: z.array(urlSnak).optional() }) })).optional() });
 const wikiEntities = z.object({ entities: z.record(z.object({
   labels: z.record(z.object({ value: z.string() })).optional(),
-  claims: z.object({ P856: z.array(z.object({
-    rank: z.string(), mainsnak: z.object({ datavalue: z.object({ value: z.string() }).optional() }),
-  })).optional() }).optional(),
+  descriptions: z.record(z.object({ value: z.string() })).optional(),
+  claims: z.object({ P856: z.array(urlClaim).optional(), P973: z.array(urlClaim).optional() }).optional(),
   lastrevid: z.number().int().optional(),
 })) });
 
@@ -36,17 +38,27 @@ export async function wikidata(web: PublicWeb, limit: number, strategy: string, 
   wikiError(search);
   const ids = responseSchema.parse(search).query.search.map(row => row.title);
   if (!ids.length) return [];
-  const details = await web.api(wikiUrl({ action: 'wbgetentities', ids: ids.join('|'), props: 'labels|claims|info', languages: 'en' }), wikidataHost, signal);
+  const details = await web.api(wikiUrl({ action: 'wbgetentities', ids: ids.join('|'), props: 'labels|descriptions|claims|info', languages: 'en' }), wikidataHost, signal);
   wikiError(details);
   const { entities } = wikiEntities.parse(details);
   return ids.flatMap(id => {
     const entity = entities[id];
     const name = entity?.labels?.en?.value.trim().slice(0, 120);
-    const urls = entity?.claims?.P856?.filter(item => item.rank !== 'deprecated').map(item => normalizedSite(item.mainsnak.datavalue?.value ?? '')).filter((url): url is string => Boolean(url)) ?? [];
+    const description = entity?.descriptions?.en?.value ?? '';
+    // Search prioritization only. Neither occupation nor demonyms establish a coaching offer or service market.
+    const match = Number(relevantCoach.test(description)) * 2 + Number(/\b(?:American|British|Canadian|United States|United Kingdom|Canada)\b/i.test(description));
+    const websites = entity?.claims?.P856?.filter(item => item.rank !== 'deprecated') ?? [];
+    const urls = websites.map(item => normalizedSite(item.mainsnak.datavalue?.value ?? '')).filter((url): url is string => Boolean(url));
     if (!name || name.length < 3 || !urls.length) return [];
     const unique = [...new Map(urls.map(url => [domain(url), url])).values()].slice(0, 3);
-    return unique.map(website => ({ method: 'Wikidata' as const, name, website, sourceKey: `wikidata:${id}`,
+    const references = [...(entity?.claims?.P973?.filter(item => item.rank !== 'deprecated').map(item => item.mainsnak.datavalue?.value) ?? []),
+      ...websites.flatMap(item => item.references?.flatMap(reference => reference.snaks.P854?.map(snak => snak.datavalue?.value) ?? []) ?? [])];
+    return unique.map(website => ({ method: 'Wikidata' as const, name, website, sourceKey: `wikidata:${id}`, discoveryPriority: match,
       source: entity.lastrevid ? `https://${wikidataHost}/w/index.php?title=${id}&oldid=${entity.lastrevid}` : `https://${wikidataHost}/wiki/${id}`,
+      publisherLinks: [...new Set(references.flatMap(value => {
+        const url = value && normalizedSite(value);
+        return url && domain(url) !== domain(website) ? [url] : [];
+      }))].slice(0, 5),
       excerpt: `${name} lists ${website} as an official site (P856).` }));
   }).slice(0, limit);
 }
@@ -79,7 +91,7 @@ export async function feed(web: PublicWeb, publisher: PublisherFeed, limit: numb
   }).slice(0, limit);
 }
 
-export type Adapter = { name: string; run: () => Promise<Seed[]>; retryAt?: string; deferred?: string };
+export type Adapter = { name: string; run: () => Promise<Seed[] | { seeds: Seed[]; audit: PublisherAudit[] }>; retryAt?: string; deferred?: string; credit?: string };
 
 export async function discover(adapters: Adapter[], limit: number, historical: Seed[] = []) {
   const results: SourceResult[] = [];
@@ -87,17 +99,19 @@ export async function discover(adapters: Adapter[], limit: number, historical: S
   for (const adapter of adapters) {
     const before = Date.now();
     if (adapter.deferred || adapter.retryAt && Date.parse(adapter.retryAt) > before) {
-      results.push({ adapter: adapter.name, status: 'DEFERRED', discovered: 0, elapsedMs: 0, retryAt: adapter.retryAt, code: adapter.deferred });
+      results.push({ adapter: adapter.name, status: 'DEFERRED', discovered: 0, elapsedMs: 0, retryAt: adapter.retryAt, code: adapter.deferred, credit: adapter.credit });
       continue;
     }
     try {
-      const found = await adapter.run();
+      const content = await adapter.run();
+      const found = Array.isArray(content) ? content : content.seeds;
       seeds.push(...found.map(seed => ({ ...seed, adapter: seed.adapter ?? adapter.name })));
-      results.push({ adapter: adapter.name, status: 'OK', discovered: found.length, elapsedMs: Date.now() - before });
+      results.push({ adapter: adapter.name, status: 'OK', discovered: found.length, elapsedMs: Date.now() - before,
+        publisherAudit: Array.isArray(content) ? undefined : content.audit, credit: adapter.credit });
     } catch (error) {
       const code = error instanceof PublicFailure ? error.code : error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name) ? 'TIMEOUT' : 'SOURCE_UNAVAILABLE';
       results.push({ adapter: adapter.name, status: 'FAILED', discovered: 0, elapsedMs: Date.now() - before,
-        code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined });
+        code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined, credit: adapter.credit });
     }
   }
   const groups = new Map<string, Map<string, Seed>>();
@@ -109,7 +123,11 @@ export async function discover(adapters: Adapter[], limit: number, historical: S
     if (!group.has(seed.sourceKey)) group.set(seed.sourceKey, seed);
     groups.set(host, group);
   }
-  const priority = (records: Map<string, Seed>) => new Set([...records.values()].filter(seed => seed.occurredAt).map(seed => seed.publisher ?? domain(seed.source))).size;
+  const priority = (records: Map<string, Seed>) => {
+    const seeds = [...records.values()];
+    const publishers = new Set(seeds.filter(seed => seed.occurredAt).map(seed => seed.publisher ?? domain(seed.source))).size;
+    return publishers * 10 + Math.max(0, ...seeds.map(seed => seed.discoveryPriority ?? 0));
+  };
   const selected = [...groups.values()].sort((a, b) => priority(b) - priority(a)).slice(0, limit);
   return { results, seeds: selected.flatMap(group => [...group.values()].slice(0, 30)) };
 }

@@ -39,15 +39,17 @@ test('the actual CLI manages saved settings, readiness, sources, run controls an
     }
     assert.equal((await call(['doctor'])).schema, false);
     assert.equal((await call(['migrate'])).ready, true);
-    assert.equal((await call(['doctor', '--strict'], 3)).mode, 'discovery-only');
-    assert.equal(await call(['start', '--qualification'], 3), null);
+    assert.equal((await call(['doctor'])).mode, 'automatic-discovery');
+    const automatic = await call(['start', '--qualification']);
+    assert.equal(automatic.mode, 'automatic-discovery');
+    await call(['cancel', automatic.id]);
     assert.equal((await call(['settings', 'set', 'candidateLimit', '3'])).candidateLimit, 3);
     assert.equal((await call(['schedule', 'every', '90'])).intervalMinutes, 90);
     assert.equal((await call(['schedule', 'off'])).nextRunAt, null);
     await call(['sources', 'add', 'Training Journal', 'https://journal.test/feed', 'https://journal.test/terms', '--publisher', 'journal-press']);
     assert.equal((await call(['sources', 'add', 'Executive Forum', 'https://forum.test/feed', 'https://forum.test/terms', '--publisher', 'forum-press'])).independent, 2);
     const queued = await call(['start', '--qualification']);
-    assert.equal(queued.mode, 'qualification-capable');
+    assert.equal(queued.mode, 'automatic-discovery');
     assert.equal((await call(['pause', queued.id])).state, 'PAUSED');
     assert.equal((await call(['resume', 'active'])).state, 'QUEUED');
     assert.equal((await call(['cancel', 'active'])).state, 'CANCELLED');

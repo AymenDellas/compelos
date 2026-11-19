@@ -1,13 +1,14 @@
 import type { Pool } from 'pg';
 import { gateNames, POLICY_VERSION } from './policy';
-import type { Decision, Gate, Outcome } from './policy';
+import type { Decision, Gate, Outcome, PublisherAudit } from './policy';
 import { modelUsage, runSummary } from './read-model';
 
 export async function evaluate(pool: Pool, runId: string) {
   const run = await runSummary(pool, runId);
   if (!run) return null;
-  const { rows } = await pool.query<{ id: string; name: string; domain: string; decision: Decision | null; stage: string; artifacts: number }>(`
-    SELECT j.id,b.name,b.domain,j.decision,j.stage,(SELECT count(*)::int FROM origin_artifacts a WHERE a.investigation_id=j.id AND a.image IS NOT NULL) AS artifacts
+  const { rows } = await pool.query<{ id: string; name: string; domain: string; decision: Decision | null; stage: string; artifacts: number; publisher_audit: PublisherAudit[] | null }>(`
+    SELECT j.id,b.name,b.domain,j.decision,j.stage,j.checkpoint->'publisherAudit' AS publisher_audit,
+    (SELECT count(*)::int FROM origin_artifacts a WHERE a.investigation_id=j.id AND a.image IS NOT NULL) AS artifacts
     FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id WHERE run_id=$1 ORDER BY b.domain`, [runId]);
   const gates = Object.fromEntries(gateNames.map(name => [name, { VERIFIED: 0, UNVERIFIED: 0, CONTRADICTED: 0, STALE: 0 } as Record<Gate['state'], number>]));
   const blockers = new Map<string, { gate: string; state: Gate['state']; reason: string; count: number }>();
@@ -19,8 +20,10 @@ export async function evaluate(pool: Pool, runId: string) {
     group.count++;
     blockers.set(key, group);
   }
+  const publisherChecks = [...new Map([...(run.sources ?? []).flatMap(source => source.publisherAudit ?? []), ...rows.flatMap(row => row.publisher_audit ?? [])]
+    .map(check => [`${check.url}:${check.code}`, check])).values()];
   return {
-    run, gates, blockers: [...blockers.values()].sort((a, b) => b.count - a.count || a.gate.localeCompare(b.gate)),
+    run, gates, publisherChecks, blockers: [...blockers.values()].sort((a, b) => b.count - a.count || a.gate.localeCompare(b.gate)),
     investigated: rows.length, captures: rows.reduce((sum, row) => sum + row.artifacts, 0), usage: await modelUsage(pool, runId),
     results: rows.map(row => ({ id: row.id, name: row.name, domain: row.domain, stage: row.stage, outcome: row.decision?.outcome ?? null,
       policy: row.decision?.version ?? null, blockers: row.decision?.gates.filter(gate => gate.state !== 'VERIFIED') ?? [] })),

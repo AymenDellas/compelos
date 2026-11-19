@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import { decide, defaults, domain, emptyCheckpoint, finding, observe, POLICY_VERSION, settingsSchema } from './policy';
 import type { Checkpoint, Decision, Seed, Settings, SourceResult } from './policy';
 import { schema } from './schema';
-import { approvedFeeds, independentFeedCount, parseFeeds } from './sources';
+import { approvedFeeds, parseFeeds } from './sources';
 import type { PublisherFeed } from './sources';
 
 type DB = Pool | PoolClient;
@@ -55,15 +55,15 @@ export function editPublishers(pool: Pool, change: (feeds: PublisherFeed[]) => P
 }
 
 function createRun(db: DB, settings: Settings, feeds: unknown) {
+  let supplemental: PublisherFeed[] | null = null;
+  try { supplemental = approvedFeeds(feeds); } catch { /* The automatic sources are available even if supplemental input is invalid. */ }
   return db.query<{ id: string }>(`INSERT INTO origin_runs(id,state,config,publisher_feeds) VALUES($1,'QUEUED',$2,$3) ON CONFLICT DO NOTHING RETURNING id`,
-    [randomUUID(), json(settings), json(approvedFeeds(feeds))]);
+    [randomUUID(), json(settings), supplemental === null ? null : json(supplemental)]);
 }
-export async function start(pool: Pool, override: Partial<Settings> = {}, requireAcquisitionSources = false) {
+export async function start(pool: Pool, override: Partial<Settings> = {}) {
   return transaction(pool, async db => {
     const { rows: [row] } = await db.query<Configuration>('SELECT config,publisher_feeds FROM origin_settings WHERE id=1 FOR UPDATE');
-    const feeds = approvedFeeds(row.publisher_feeds);
-    if (requireAcquisitionSources && independentFeedCount(feeds) < 2) return null;
-    return (await createRun(db, readConfig({ ...row.config, ...override }), feeds)).rows[0]?.id ?? null;
+    return (await createRun(db, readConfig({ ...row.config, ...override }), row.publisher_feeds)).rows[0]?.id ?? null;
   });
 }
 export async function saveSettings(db: DB, config: Settings) {
@@ -158,7 +158,7 @@ export async function nextJob(db: DB, run: Run) {
 }
 
 export async function saveStage(pool: Pool, run: Run, job: Job, checkpoint: Checkpoint,
-  next: Job['stage'] | Decision, artifacts: Artifact[] = []) {
+  next: Job['stage'] | Decision, artifacts: Artifact[] = [], newSeeds: Seed[] = []) {
   return fenced(pool, run, async db => {
     for (const artifact of artifacts) {
       await db.query(`INSERT INTO origin_artifacts(investigation_id,id,digest,url,device,image) VALUES($1,$2,$3,$4,$5,$6)
@@ -176,9 +176,10 @@ export async function saveStage(pool: Pool, run: Run, job: Job, checkpoint: Chec
         Object.assign(decision, decide(checkpoint.gates, checkpoint.evidence));
       }
     }
-    await db.query(`UPDATE origin_investigations SET stage=$2,checkpoint=$3,decision=$4,outcome=$5,expires_at=$6,
+    await db.query(`UPDATE origin_investigations SET stage=$2,checkpoint=$3,decision=$4,outcome=$5,expires_at=$6,seeds=seeds || $7::jsonb,
       updated_at=now(),error=NULL,attempts=0 WHERE id=$1`,
-    [job.id, typeof next === 'string' ? next : 'COMPLETED', json(checkpoint), decision ? json(decision) : null, decision?.outcome, decision?.expiresAt]);
+    [job.id, typeof next === 'string' ? next : 'COMPLETED', json(checkpoint), decision ? json(decision) : null, decision?.outcome, decision?.expiresAt,
+      json(newSeeds.filter(seed => !job.seeds.some(item => item.sourceKey === seed.sourceKey)))]);
     if (decision) {
       await db.query(`UPDATE origin_businesses SET investigated_at=now(),signature=COALESCE($2,signature) WHERE id=$1`,
         [job.business_id, checkpoint.signature ? json(checkpoint.signature) : null]);
@@ -207,9 +208,9 @@ export async function recentPublisherEvidence(db: DB, activityDays: number) {
 
 export async function recentWikiPointers(db: DB) {
   return (await db.query<{ source: string }>(`SELECT DISTINCT seed->>'source' AS source FROM
-    (SELECT seeds FROM origin_investigations WHERE stage='COMPLETED' AND updated_at>=now()-interval '72 hours'
+    (SELECT seeds FROM origin_investigations WHERE stage='COMPLETED' AND decision->>'version'=$1 AND updated_at>=now()-interval '72 hours'
       ORDER BY updated_at DESC LIMIT 300) j CROSS JOIN LATERAL jsonb_array_elements(j.seeds) seed
-    WHERE seed->>'method'='Wikidata'`)).rows.map(row => row.source);
+    WHERE seed->>'method'='Wikidata'`, [POLICY_VERSION])).rows.map(row => row.source);
 }
 
 export type SourceQuality = { adapter: string; investigated: number; identities: number };
