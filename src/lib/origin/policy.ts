@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
-export const POLICY_VERSION = 'origin-v4';
+export const POLICY_VERSION = 'origin-v5';
 export const gateNames = ['identity', 'niche', 'geography', 'substance', 'acquisition', 'opportunity', 'contact'] as const;
 export type GateName = typeof gateNames[number];
 export type Outcome = 'QUALIFIED' | 'UNRESOLVED' | 'REJECTED';
-export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLICATION' | 'PROCUREMENT';
+export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLICATION' | 'PROCUREMENT' | 'BUSINESS_SEARCH';
 
 export const settingsSchema = z.object({
   intervalMinutes: z.number().int().min(60).max(43_200).nullable(),
@@ -94,7 +94,7 @@ export function decide(findings: Gate[], evidence: Evidence[], now = Date.now())
 export type Decision = ReturnType<typeof decide>;
 
 export type SourceResult = { adapter: string; discovered: number; elapsedMs: number; status: 'OK' | 'FAILED' | 'DEFERRED'; code?: string; retryAt?: string;
-  publisherAudit?: PublisherAudit[]; credit?: string };
+  publisherAudit?: PublisherAudit[]; credit?: string; queryIndex?: number };
 export type PublisherAudit = { url: string; code: string; records: number; license?: string; publisher?: string; use?: 'FACTS_ONLY'; checkedTerms?: string[] };
 export type PublisherPointer = { url: string; name?: string; website?: string; viaOfficial?: boolean };
 
@@ -112,8 +112,10 @@ export type Checkpoint = {
   changes?: string[];
   advisory?: { assessment: string; evidence: string };
   breakage?: { url: string; from: string; label: string; status: number; evidence: string; alternatives: boolean; soft?: boolean };
+  bookingMismatch?: { url: string; destination: string; from: string; promised: number; listed: number; evidence: string[] };
   funnel?: { found: number; tested: number; interactive: boolean };
   acquisitionSources?: number;
+  ownedActivities?: { date: string; evidence: Evidence }[];
   publisherPointers?: PublisherPointer[];
   publisherAudit?: PublisherAudit[];
   mediaPage?: string;

@@ -91,7 +91,7 @@ export async function feed(web: PublicWeb, publisher: PublisherFeed, limit: numb
   }).slice(0, limit);
 }
 
-export type Adapter = { name: string; run: () => Promise<Seed[] | { seeds: Seed[]; audit: PublisherAudit[] }>; retryAt?: string; deferred?: string; credit?: string };
+export type Adapter = { name: string; run: () => Promise<Seed[] | { seeds: Seed[]; audit: PublisherAudit[] }>; retryAt?: string; deferred?: string; credit?: string; queryIndex?: number };
 
 export async function discover(adapters: Adapter[], limit: number, historical: Seed[] = []) {
   const observations = await Promise.all(adapters.map(async (adapter): Promise<{ seeds: Seed[]; status: SourceResult }> => {
@@ -105,12 +105,12 @@ export async function discover(adapters: Adapter[], limit: number, historical: S
       const found = Array.isArray(content) ? content : content.seeds;
       return { seeds: found.map(seed => ({ ...seed, adapter: seed.adapter ?? adapter.name })), status: {
         adapter: adapter.name, status: 'OK', discovered: found.length, elapsedMs: Date.now() - before,
-        publisherAudit: Array.isArray(content) ? undefined : content.audit, credit: adapter.credit,
+        publisherAudit: Array.isArray(content) ? undefined : content.audit, credit: adapter.credit, queryIndex: adapter.queryIndex,
       } };
     } catch (error) {
       const code = error instanceof PublicFailure ? error.code : error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name) ? 'TIMEOUT' : 'SOURCE_UNAVAILABLE';
       return { seeds: [], status: { adapter: adapter.name, status: 'FAILED', discovered: 0, elapsedMs: Date.now() - before,
-        code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined, credit: adapter.credit } };
+        code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined, credit: adapter.credit, queryIndex: adapter.queryIndex } };
     }
   }));
   const results = observations.map(observation => observation.status);

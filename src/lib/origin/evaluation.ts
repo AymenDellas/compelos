@@ -27,14 +27,15 @@ export async function evaluate(pool: Pool, runId: string) {
     const journey = row.checkpoint.journey;
     const testedGates = new Set(row.checkpoint.gates.map(gate => gate.name));
     const bookingUrls = new Set(evidence.filter(item => item.method === 'Initial direct booking GET').map(item => item.id));
-    return { id: row.id, name: row.name, domain: row.domain, stage: row.stage, outcome: row.decision?.outcome ?? null,
+    return { id: row.id, name: row.checkpoint.identityName ?? row.name, domain: row.domain, stage: row.stage, outcome: row.decision?.outcome ?? null,
       policy: row.decision?.version ?? null, discovery: row.seeds.map(seed => ({ adapter: seed.adapter ?? seed.method, url: seed.source })),
       gates: row.decision?.gates.map(gate => ({ name: gate.name, state: testedGates.has(gate.name) ? gate.state : 'NOT_REACHED', reason: gate.assertion,
         sources: [...new Set(evidence.filter(item => gate.evidence.includes(item.id)).map(item => item.url))] })) ?? [],
       identityRead: evidence.filter(item => ['Official entry point', 'Official About page'].includes(item.method)).map(item => ({ url: item.url, status: item.excerpt.split(' · ')[0] })),
       pages: journey.filter(step => !bookingUrls.has(step.evidence)),
-      booking: { observations: journey.filter(step => bookingUrls.has(step.evidence)), rechecked: evidence.some(item => item.method === 'Independent direct booking GET'), observed: row.checkpoint.funnel },
+      booking: { observations: journey.filter(step => bookingUrls.has(step.evidence)), rechecked: evidence.some(item => /^Independent (?:direct booking GET|booking duration recheck)$/.test(item.method)), observed: row.checkpoint.funnel },
       publicationChecks: row.checkpoint.publisherAudit ?? [], acquisitionRecords: row.checkpoint.acquisitionSources ?? 0,
+      ownedCampaigns: row.checkpoint.ownedActivities?.length ?? 0,
       artifacts: row.artifacts,
       blockers: row.decision?.gates.filter(gate => gate.state !== 'VERIFIED') ?? [] };
   });

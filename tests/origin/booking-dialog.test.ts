@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createFunnelBrowser } from '../../src/lib/funnel-browser';
+
+test('ORIGIN opens a declared booking dialog without dispatching any new request', { timeout: 30_000 }, async () => {
+  const url = 'https://coach.test/';
+  const reads: string[] = [];
+  const html = `<main><h1>Executive coaching</h1>
+    <button type="button" aria-controls="booking" onclick="document.getElementById('booking').showModal();fetch('/fixture-read').catch(()=>{});">Book a call</button>
+    <dialog id="booking"><h2>Schedule a discovery call</h2><form action="/fixture-submission"><input type="email"></form></dialog>
+  </main>`;
+  const browser = createFunnelBrowser(async requested => {
+    reads.push(requested);
+    return { url: requested, status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(html) };
+  }, AbortSignal.timeout(20_000), { inspectBookingDialogs: true });
+  try {
+    const result = await browser.render(url, 'fixture');
+    assert.equal(result.bookingDialogs?.length, 2);
+    assert.ok(result.bookingDialogs.every(dialog => dialog.label === 'Book a call' && dialog.heading === 'Schedule a discovery call' && dialog.hasForm));
+    assert.equal(reads.filter(request => request.includes('fixture-')).length, 0);
+  } finally {
+    await browser.close();
+  }
+});

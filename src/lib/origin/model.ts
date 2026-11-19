@@ -13,10 +13,18 @@ import type { Job, Run } from './store';
 
 const outputTokens = 512;
 const maxInputBytes = 4096;
-const advisorySchema = z.object({ assessment: z.enum(['REPAIR_BOOKING_LINK', 'CHECK_FOR_ALTERNATE_FLOW', 'INSUFFICIENT_CONTEXT']) }).strict();
+const nextChecks = {
+  VERIFY_MARKET: 'geography',
+  VERIFY_COMMERCIAL_EVIDENCE: 'substance',
+  VERIFY_ACQUISITION_ACTIVITY: 'acquisition',
+  VERIFY_BOOKING_JOURNEY: 'opportunity',
+  VERIFY_INQUIRY_ROUTE: 'contact',
+} as const;
+const advisorySchema = z.object({ assessment: z.enum(['REPAIR_BOOKING_LINK', 'CHECK_FOR_ALTERNATE_FLOW', 'INSUFFICIENT_CONTEXT',
+  'VERIFY_MARKET', 'VERIFY_COMMERCIAL_EVIDENCE', 'VERIFY_ACQUISITION_ACTIVITY', 'VERIFY_BOOKING_JOURNEY', 'VERIFY_INQUIRY_ROUTE']) }).strict();
 const tokenSchema = z.object({ usage: z.object({ total_tokens: z.number().int().nonnegative().max(1_000_000) }) });
 type Advisory = z.infer<typeof advisorySchema>;
-const promptRevision = 'origin-cta-advisory-v1';
+const promptRevision = 'origin-evidence-review-v2';
 
 export function readModelConfig() {
   const model = process.env.AGENTROUTER_MODEL?.trim();
@@ -27,7 +35,7 @@ export function readModelConfig() {
     const url = new URL(baseUrl);
     if (url.protocol !== 'https:' || url.username || url.password || !['agentrouter.org', 'www.agentrouter.org'].includes(url.hostname)) return null;
     if (model && apiKey && Number.isInteger(ceiling) && ceiling > 0 && ceiling <= 200) {
-      return { config: { apiKey, baseUrl: url.href, model, timeoutMs: 12_000 }, ceiling };
+      return { config: { apiKey, baseUrl: url.href, model, timeoutMs: 30_000 }, ceiling };
     }
   } catch { /* unavailable provider configuration */ }
   return null;
@@ -70,11 +78,21 @@ export async function readOrReserve(pool: Pool, run: Run, job: Job, model: strin
 
 export async function modelAdvisory(pool: Pool, run: Run, job: Job, checkpoint: Checkpoint, signal: AbortSignal,
   make = createAgentRouterCompletion, setup: { config: ProviderConfig; ceiling: number } | null = readModelConfig()) {
-  // Model output is advisory. Send only structured observations derived by code, with no page text or addresses.
+  if (!run.config.modelCalls || !setup || checkpoint.gates.some(item => item.state === 'CONTRADICTED')) return;
+  const identity = checkpoint.gates.find(item => item.name === 'identity' && item.state === 'VERIFIED');
+  const niche = checkpoint.gates.find(item => item.name === 'niche' && item.state === 'VERIFIED');
+  if (!identity || !niche) return;
+  // Send code-derived evidence types and coverage, avoiding page copy and contact data.
   const gate = checkpoint.gates.find(item => item.name === 'opportunity' && item.state === 'VERIFIED');
-  if (!run.config.modelCalls || !setup || !gate || !checkpoint.breakage) return;
-  const facts = { ctaType: 'direct booking link', observedStatus: checkpoint.breakage.status,
-    observations: 2, alternateRouteObserved: false, service: 'coaching' };
+  const broken = gate && checkpoint.breakage;
+  const options = Object.entries(nextChecks).filter(([, name]) => checkpoint.gates.find(item => item.name === name)?.state !== 'VERIFIED')
+    .map(([check]) => check);
+  if (!broken && !options.length) return;
+  const facts = { service: 'coaching', booking: checkpoint.funnel, contradictionReproduced: Boolean(gate && checkpoint.bookingMismatch),
+    ...(broken ? { observedStatus: broken.status, observations: 2, alternateRouteObserved: false } : {}),
+    recentIndependentPublications: checkpoint.acquisitionSources ?? 0,
+    scope: checkpoint.gates.map(item => ({ gate: item.name, state: item.state, supportingObservations: item.evidence.length })),
+    permittedAssessments: [...options, ...(broken ? ['REPAIR_BOOKING_LINK', 'CHECK_FOR_ALTERNATE_FLOW'] : []), 'INSUFFICIENT_CONTEXT'] };
   const input = JSON.stringify(facts);
   const { config, ceiling } = setup;
   const reservation = await readOrReserve(pool, run, job, config.model, ceiling, hash(`${promptRevision}:${input}`), Buffer.byteLength(input));
@@ -96,9 +114,13 @@ export async function modelAdvisory(pool: Pool, run: Run, job: Job, checkpoint: 
     try {
       signal.throwIfAborted();
       const response = await make(config, hooks)(
-        'Review structured facts for a coaching booking journey. Return a JSON object containing only assessment, with one of REPAIR_BOOKING_LINK, CHECK_FOR_ALTERNATE_FLOW, INSUFFICIENT_CONTEXT. Do not infer traffic, results, or causality.',
+        'Independently review the evidence coverage for a verified coaching business. Choose the follow-up with the most bearing on eligibility or a reproducible booking issue. Mark insufficient context when nothing is actionable. Use only supplied structured observations. Return a JSON object with only assessment, one value from permittedAssessments. Do not infer traffic, commercial performance, or facts about unseen pages.',
         input, signal, outputTokens);
       result = advisorySchema.parse(JSON.parse(response));
+      if (!facts.permittedAssessments.includes(result.assessment)) {
+        result = undefined;
+        throw new SyntaxError('Assessment outside the permitted verification options.');
+      }
     } catch (error) { failure = classifyModelError(error, status); }
     finally {
       await pool.query(`UPDATE origin_model_usage SET status=$2,result=$3,provider_tokens=$4,retry_at=$5 WHERE id=$1 AND status='RESERVED'`,
@@ -106,5 +128,9 @@ export async function modelAdvisory(pool: Pool, run: Run, job: Job, checkpoint: 
           failure ? retryAt(header ?? undefined, failure.cooldownMs + Math.floor(Math.random() * 5_000)) : null]);
     }
   }
-  if (result) checkpoint.advisory = { ...result, evidence: gate.evidence[0] };
+  if (result && result.assessment !== 'INSUFFICIENT_CONTEXT') {
+    const target = nextChecks[result.assessment as keyof typeof nextChecks];
+    const proof = checkpoint.gates.find(item => item.name === target)?.evidence[0] ?? gate?.evidence[0] ?? niche.evidence[0];
+    if (proof) checkpoint.advisory = { ...result, evidence: proof };
+  }
 }

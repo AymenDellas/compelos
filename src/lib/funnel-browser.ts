@@ -64,7 +64,10 @@ export type RenderedPage = {
   unavailable: Array<FunnelScreenshot["device"]>;
   incompleteAssets: boolean;
   elementCaptures: Record<string, string>;
+  bookingDialogs?: BookingDialog[];
 };
+
+type BookingDialog = { device: FunnelScreenshot['device']; label: string; heading: string; hasForm: boolean };
 
 type CaptureTarget = { index: number; top: number; section: NonNullable<FunnelScreenshot["section"]>; priority: number };
 
@@ -88,7 +91,7 @@ async function visibleElements(page: Page, nodes: JSHandle<NodeListOf<Element>>,
   }, nodes, indices, scrollTop);
 }
 
-export function createFunnelBrowser(read: ReadResource = readFunnelResource, scanSignal?: AbortSignal) {
+export function createFunnelBrowser(read: ReadResource = readFunnelResource, scanSignal?: AbortSignal, options: { inspectBookingDialogs?: boolean } = {}) {
   let browser: Promise<Browser> | undefined;
   // Leave response space for the original desktop and mobile screenshots.
   let sectionBytesRemaining = 900_000;
@@ -145,13 +148,14 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
       let bytes = 0;
       let documentFailure: Error | undefined;
       let incompleteAssets = false;
+      let networkDisabled = false;
 
       async function fulfill(request: HTTPRequest) {
         const mainDocument = request.isNavigationRequest() && request.frame() === page.mainFrame();
         try {
           const target = funnelUrl(request.url()).href;
           if (
-            request.method() !== "GET" || !readTypes.has(request.resourceType()) || ++requests > 72 ||
+            networkDisabled || request.method() !== "GET" || !readTypes.has(request.resourceType()) || ++requests > 72 ||
             (mainDocument && !navigations.delete(target))
           ) throw new Error("The browser blocked an unsupported public request.");
           signal.throwIfAborted();
@@ -224,7 +228,31 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
           }
         }
       }
-      return { url: finalUrl, html, screenshots, elementCaptures, incompleteAssets };
+      // Inspect at most one declared in-page dialog per viewport with every new
+      // request blocked. Keep the original viewport captures for the dossier.
+      let bookingDialog: BookingDialog | undefined;
+      if (options.inspectBookingDialogs && signal.aborted === false) {
+        networkDisabled = true;
+        const result = await page.evaluate(async () => {
+          const control = [...document.querySelectorAll<HTMLButtonElement>('button[type="button"][aria-controls]')].slice(0, 80).find(button => {
+            const label = (button.getAttribute('aria-label') || button.innerText).trim();
+            const target = document.getElementById(button.getAttribute('aria-controls') ?? '');
+            const bookingLabel = /^(?:book|schedule|request)\b.{0,45}\b(?:call|consultation|session)\b/i.test(label);
+            return bookingLabel && !button.disabled && !button.closest('form') && button.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
+              target?.matches('dialog,[role="dialog"]') && !target.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+          });
+          if (!control) return null;
+          const target = document.getElementById(control.getAttribute('aria-controls')!)!;
+          const label = (control.getAttribute('aria-label') || control.innerText).trim().slice(0, 100);
+          control.click();
+          await new Promise(resolve => setTimeout(resolve, 180));
+          if (!target.isConnected || !target.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return null;
+          const heading = (target.querySelector<HTMLElement>('h1,h2,h3')?.innerText || target.getAttribute('aria-label') || '').trim().slice(0, 140);
+          return { label, heading, hasForm: Boolean(target.querySelector('form')?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) };
+        }).catch(() => null);
+        if (result && page.url() === documentUrl) bookingDialog = { ...result, device };
+      }
+      return { url: finalUrl, html, screenshots, elementCaptures, incompleteAssets, bookingDialog };
     } finally {
       signal.removeEventListener("abort", close);
       await context.close().catch(() => {});
@@ -244,6 +272,7 @@ export function createFunnelBrowser(read: ReadResource = readFunnelResource, sca
       return {
         url: page.url, html: page.html, screenshots,
         elementCaptures: page.elementCaptures,
+        bookingDialogs: views.flatMap(view => view.url === page.url && view.bookingDialog ? [view.bookingDialog] : []),
         unavailable: (["desktop", "mobile"] as const).filter((device) => !screenshots.some((shot) => shot.device === device && !shot.section)),
         incompleteAssets: views.some((view) => view.incompleteAssets),
       };

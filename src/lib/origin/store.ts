@@ -222,14 +222,24 @@ export async function recentWikiPointers(db: DB) {
     WHERE seed->>'method'='Wikidata'`, [POLICY_VERSION])).rows.map(row => row.source);
 }
 
-export type SourceQuality = { adapter: string; investigated: number; identities: number };
+export async function recentSearchDomains(db: DB) {
+  return (await db.query<{ domain: string }>(`SELECT DISTINCT b.domain FROM origin_investigations j
+    JOIN origin_businesses b ON b.id=j.business_id
+    WHERE j.stage='COMPLETED' AND j.decision->>'version'=$1 AND j.updated_at>=now()-interval '72 hours'`,
+    [POLICY_VERSION])).rows.map(row => row.domain);
+}
+
+export type SourceQuality = { adapter: string; investigated: number; identities: number; offers: number; qualified: number };
 export async function sourceQuality(db: DB) {
   return (await db.query<SourceQuality>(`SELECT seed->>'adapter' AS adapter, count(DISTINCT j.id)::int AS investigated,
     count(DISTINCT j.id) FILTER (WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(j.decision->'gates') g
-      WHERE g->>'name'='identity' AND g->>'state'='VERIFIED'))::int AS identities
+      WHERE g->>'name'='identity' AND g->>'state'='VERIFIED'))::int AS identities,
+    count(DISTINCT j.id) FILTER (WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(j.decision->'gates') g
+      WHERE g->>'name'='niche' AND g->>'state'='VERIFIED'))::int AS offers,
+    count(DISTINCT j.id) FILTER (WHERE j.outcome='QUALIFIED' AND j.decision->>'version'=$1)::int AS qualified
     FROM origin_investigations j CROSS JOIN LATERAL jsonb_array_elements(j.seeds) seed
     WHERE j.run_id IN (SELECT id FROM origin_runs ORDER BY created_at DESC LIMIT 50)
-      AND j.decision IS NOT NULL AND seed->>'adapter' IS NOT NULL AND seed->>'method'<>'IGNITION' GROUP BY 1`)).rows;
+      AND j.decision IS NOT NULL AND seed->>'adapter' IS NOT NULL AND seed->>'method'<>'IGNITION' GROUP BY 1`, [POLICY_VERSION])).rows;
 }
 
 export async function revisit(db: DB, limit: number) {

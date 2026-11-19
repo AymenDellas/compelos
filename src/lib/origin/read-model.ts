@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import { readModelConfig } from './model';
-import { defaults } from './policy';
+import { defaults, POLICY_VERSION } from './policy';
 import type { Checkpoint, Decision, Outcome, Settings, SourceResult } from './policy';
 import { configuration, sourceHistory, sourceQuality } from './store';
 import type { SourceQuality } from './store';
@@ -36,14 +36,14 @@ async function suppressionFilter(pool: DB) {
 
 export async function readyOpportunities(pool: DB, limit = 100, run: string | null = null) {
   const suppressed = await suppressionFilter(pool);
-  return (await pool.query<Opportunity>(`SELECT j.id,b.id AS business_id,b.name,b.website,j.updated_at,j.expires_at,
+  return (await pool.query<Opportunity>(`SELECT j.id,b.id AS business_id,COALESCE(j.checkpoint->>'identityName',b.name) AS name,b.website,j.updated_at,j.expires_at,
     j.checkpoint->>'offer' AS offer,j.checkpoint->>'country' AS country,j.checkpoint->>'contact' AS contact,
     (j.checkpoint->>'acquisitionSources')::int AS acquisition_sources,
     (SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='opportunity') AS opportunity
     FROM origin_businesses b JOIN LATERAL (SELECT * FROM origin_investigations WHERE business_id=b.id
       ORDER BY created_at DESC,id DESC LIMIT 1) j ON true
-    WHERE j.outcome='QUALIFIED' AND j.expires_at>now() AND NOT (${suppressed}) AND ($2::uuid IS NULL OR j.run_id=$2)
-    ORDER BY acquisition_sources DESC,j.updated_at DESC,b.name,b.id LIMIT $1`, [limit, run])).rows;
+    WHERE j.outcome='QUALIFIED' AND j.decision->>'version'=$3 AND j.expires_at>now() AND NOT (${suppressed}) AND ($2::uuid IS NULL OR j.run_id=$2)
+    ORDER BY acquisition_sources DESC,j.updated_at DESC,b.name,b.id LIMIT $1`, [limit, run, POLICY_VERSION])).rows;
 }
 
 const empty = { config: defaults, next_run_at: null, worker_seen_at: null, online: false };
@@ -74,7 +74,7 @@ export async function listRuns(db: DB, limit = 12) {
 }
 
 export async function investigations(db: DB, run: string | null, outcome: string | null, limit: number) {
-  return (await db.query<Finding & { business_id: string; run_id: string; website: string }>(`SELECT j.id,b.id AS business_id,j.run_id,b.name,b.website,j.stage,j.outcome,j.updated_at,
+  return (await db.query<Finding & { business_id: string; run_id: string; website: string }>(`SELECT j.id,b.id AS business_id,j.run_id,COALESCE(j.checkpoint->>'identityName',b.name) AS name,b.website,j.stage,j.outcome,j.updated_at,
     COALESCE(j.error,(SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'state'<>'VERIFIED'
       ORDER BY (g->>'state'='CONTRADICTED') DESC LIMIT 1)) AS reason
     FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
@@ -102,7 +102,7 @@ export async function overview(pool: Pool) {
     const sourceConfig = await sourceReadiness(db);
     const runs = await listRuns(db);
     const opportunities = await readyOpportunities(db);
-    const findings = (await db.query<Finding>(`SELECT j.id,b.name,j.stage,j.outcome,j.updated_at,
+    const findings = (await db.query<Finding>(`SELECT j.id,COALESCE(j.checkpoint->>'identityName',b.name) AS name,j.stage,j.outcome,j.updated_at,
       COALESCE(j.error,(SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'state'<>'VERIFIED'
         ORDER BY (g->>'state'='CONTRADICTED') DESC LIMIT 1)) AS reason
       FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id WHERE j.outcome IS DISTINCT FROM 'QUALIFIED'
@@ -119,7 +119,7 @@ export type Overview = Awaited<ReturnType<typeof overview>>;
 
 export async function dossier(pool: Pool, id: string) {
   const suppressed = await suppressionFilter(pool);
-  const { rows: [record] } = await pool.query<Omit<Dossier, 'artifacts'>>(`SELECT j.id,j.business_id,b.name,b.website,j.stage,j.updated_at,j.checkpoint,j.decision,j.error,${suppressed} AS suppressed
+  const { rows: [record] } = await pool.query<Omit<Dossier, 'artifacts'>>(`SELECT j.id,j.business_id,COALESCE(j.checkpoint->>'identityName',b.name) AS name,b.website,j.stage,j.updated_at,j.checkpoint,j.decision,j.error,${suppressed} AS suppressed
     FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id WHERE j.id=$1`, [id]);
   if (!record) return null;
   const images = await pool.query<Dossier['artifacts'][number]>(`SELECT id,device,url,digest,image IS NOT NULL AS available FROM origin_artifacts

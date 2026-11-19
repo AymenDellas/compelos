@@ -1,5 +1,6 @@
 import type { Pool } from 'pg';
 import { discoverPublicationPointers, gdeltCredits, publicationAdapter, verifyPublications } from './auto-publishers';
+import { activitySearchName, businessSearchCredit, businessSearchName, createActivitySearch, createBusinessSearch } from './business-search';
 import { discover, feed, niches, wikidata } from './discovery';
 import type { Adapter } from './discovery';
 import { modelAdvisory } from './model';
@@ -11,7 +12,7 @@ import { hasSchema } from './read-model';
 import { coachingContracts, procurementAdapter, procurementCredit, tenderAdapter } from './procurement';
 import { enrichAcquisition, investigate, resolveBusiness, verifyOpportunity } from './research';
 import { approvedFeeds } from './sources';
-import { claimRun, failStage, finish, newPublishedBusinesses, nextJob, recentPublisherEvidence, recentWikiPointers, release, revisit, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
+import { claimRun, failStage, finish, newPublishedBusinesses, nextJob, recentPublisherEvidence, recentSearchDomains, recentWikiPointers, release, revisit, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
 import type { Run, SourceQuality } from './store';
 
 type Limiter = <T>(run: () => Promise<T>) => Promise<T>;
@@ -20,16 +21,19 @@ function chooseSource(history: SourceResult[], quality: SourceQuality[], names: 
   const cutoff = 50;
   return names.map(name => {
     const observations = history.filter(item => item.adapter === name).slice(0, cutoff);
-    // Prefer independently corroborated official identities per second of source work.
-    const yieldPerSecond = (quality.find(item => item.adapter === name)?.identities ?? 0) /
+    const verified = quality.find(item => item.adapter === name);
+    // Reward qualified dossiers and confirmed offers ahead of identity-only matches.
+    const yieldPerSecond = ((verified?.qualified ?? 0) * 8 + (verified?.offers ?? 0) * 3 + (verified?.identities ?? 0)) /
       Math.max(1, observations.reduce((sum, item) => sum + Math.max(500, item.elapsedMs), 0) / 1000);
     return { name, attempts: observations.filter(item => item.status !== 'DEFERRED').length, yieldPerSecond };
   }).sort((a, b) => explore ? a.attempts - b.attempts : b.yieldPerSecond - a.yieldPerSecond || a.attempts - b.attempts)[0]?.name;
 }
 
-export function createOriginLane(pool: Pool, limit: Limiter, options: { runId?: string; web?: PublicWeb } = {}) {
+export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { runId?: string; web?: PublicWeb } = {}) {
   const shutdown = new AbortController();
-  const web = options.web ?? createPublicWeb(limit);
+  const web = options.web ?? createPublicWeb(limitRequest);
+  const search = options.web ? undefined : createBusinessSearch();
+  const activitySearch = options.web ? undefined : createActivitySearch();
   let nextProbe = 0;
   let ready = false;
   let probeCount = 0;
@@ -45,6 +49,23 @@ export function createOriginLane(pool: Pool, limit: Limiter, options: { runId?: 
     const limit = run.config.candidateLimit;
     const hold = (name: string) => history.find(item => item.adapter === name && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
     const adapters: Adapter[] = [];
+    if (search) {
+      const previousQuery = history.find(item => item.adapter === businessSearchName && item.queryIndex !== undefined)?.queryIndex;
+      const queryIndex = (previousQuery ?? -1) + 1;
+      adapters.push({ name: businessSearchName, credit: businessSearchCredit, queryIndex, retryAt: hold(businessSearchName), run: async () => {
+        const recent = new Set(await recentSearchDomains(pool));
+        const ranked = await limitRequest(() => search(queryIndex, 10, perSource(signal, 15_000)));
+        return ranked.filter(seed => !recent.has(domain(seed.website))).slice(0, Math.ceil(run.config.candidateLimit / 2));
+      } });
+    }
+    if (activitySearch) {
+      const previousQuery = history.find(item => item.adapter === activitySearchName && item.queryIndex !== undefined)?.queryIndex;
+      const queryIndex = (previousQuery ?? -1) + 1;
+      adapters.push({ name: activitySearchName, credit: businessSearchCredit, queryIndex, retryAt: hold(activitySearchName), run: async () => {
+        const pointers = await limitRequest(() => activitySearch(queryIndex, run.config.activityDays, perSource(signal, 15_000)));
+        return verifyPublications(web, pointers, run.config.activityDays, perSource(signal, 16_000), 5);
+      } });
+    }
     for (const [index, name] of [['contracts', procurementAdapter], ['tender', tenderAdapter]] as const) {
       const probes = history.filter(item => item.adapter === name && item.status === 'OK').length;
       adapters.push({ name, credit: procurementCredit, retryAt: hold(name),

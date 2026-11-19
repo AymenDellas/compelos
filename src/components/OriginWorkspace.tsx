@@ -132,20 +132,22 @@ function Discovery({ data }: { data: Overview }) {
   const names = [...new Set(data.sources.map(source => source.adapter))];
   const methods = [
     ['ECHO', 'Discover publisher records and verify their reuse permission, dates and official links.'],
+    ['Business search', 'Find coaching offers across eligible markets and verify each business on its own website.'],
     ['CONSTELLATION', 'Expand from named contributors on the same publisher record.'],
     ['IGNITION', 'Revisit businesses and compare saved offer and booking snapshots.'],
-    ['VOID', 'Trace direct booking links and independently recheck reported failures.'],
-    ['FRONTIER', 'Allocate discovery by corroborated identities and elapsed time, with exploration of underused sources.'],
+    ['VOID', 'Trace public booking links and independently recheck failures and conflicting information.'],
+    ['FRONTIER', 'Prioritize sources by verified offers and qualified opportunities, with exploration of underused sources.'],
   ];
   return <div className="origin-operations">
     <section className="origin-section"><div className="origin-heading"><h2>Discovery sources</h2></div>
-      {names.length ? <div className="origin-scroll"><table><thead><tr><th>Adapter</th><th>Latest status</th><th>Records returned</th><th>Identities verified</th><th>Failures</th></tr></thead>
+      {names.length ? <div className="origin-scroll"><table><thead><tr><th>Adapter</th><th>Latest status</th><th>Records returned</th><th>Offers verified</th><th>Qualified</th><th>Failures</th></tr></thead>
         <tbody>{names.map(name => {
           const history = data.sources.filter(source => source.adapter === name);
+          const quality = data.quality.find(item => item.adapter === name);
           return <tr key={name}><td>{name}</td><td><State value={history[0].status} />{history[0].code && <small>{human(history[0].code)}</small>}
             {history[0].retryAt && <small>Retry after {stamp(history[0].retryAt)}</small>}
             {history[0].publisherAudit?.map(check => <small key={check.url}>{new URL(check.url).hostname} · {human(check.code)}</small>)}</td>
-          <td>{history.reduce((sum, item) => sum + item.discovered, 0)}</td><td>{data.quality.find(item => item.adapter === name)?.identities ?? 0}</td><td>{history.filter(item => item.status === 'FAILED').length}</td></tr>;
+          <td>{history.reduce((sum, item) => sum + item.discovered, 0)}</td><td>{quality?.offers ?? 0}</td><td>{quality?.qualified ?? 0}</td><td>{history.filter(item => item.status === 'FAILED').length}</td></tr>;
         })}</tbody></table></div> : <p className="origin-empty">Source activity will appear after the first run. Wikidata is available by default.</p>}
     </section>
     <section className="origin-section"><div className="origin-heading"><h2>Research methods</h2></div>
@@ -219,6 +221,7 @@ function DossierView({ id, close }: { id: string; close: () => void }) {
       <dl className="origin-detail"><dt>Offer</dt><dd>{checkpoint.offer ?? 'Unverified'}</dd><dt>Market</dt><dd>{checkpoint.country ?? 'Unverified'}</dd>
         <dt>Business contact</dt><dd>{entry.suppressed ? 'Suppressed in Compel OS' : checkpoint.contact ?? 'Unverified'}</dd><dt>Last investigated</dt><dd>{stamp(entry.updated_at)}</dd>
         <dt>Qualification policy</dt><dd>{entry.decision?.version ?? 'No decision yet'}</dd></dl>
+      {checkpoint.advisory && <p><strong>AI review</strong> {human(checkpoint.advisory.assessment)} · <a href={`#evidence-${checkpoint.advisory.evidence}`}>Supporting evidence</a></p>}
       <section className="origin-section"><div className="origin-heading"><h3>Qualification evidence</h3></div>
         {(entry.decision?.gates ?? checkpoint.gates).map(gate => <div className="origin-gate" key={gate.name}>
           <div><strong>{human(gate.name)}</strong><State value={gate.state} /></div><p>{gate.assertion}</p>

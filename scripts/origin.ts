@@ -172,7 +172,9 @@ async function main(argv: string[]) {
       if (kind !== 'fixture' && kind !== 'live') throw new CommandError('Select benchmark fixture or benchmark live.');
       const report = await runBenchmark(pool, connection, kind, limit(12, 24), signal);
       print(report);
-      return !report.passed ? 4 : values['require-qualified'] && !report.published ? 5 : 0;
+      if (!report.operational || (kind === 'fixture' && !report.passed)) return 4;
+      if ((command === 'acceptance' && !report.deliveryTargetMet) || (values['require-qualified'] && !report.published)) return 5;
+      return 0;
     }
     if (command === 'start' || command === 'run') {
       await migrate(pool);

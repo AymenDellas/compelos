@@ -48,11 +48,14 @@ export async function runBenchmark(admin: Pool, connection: PoolConfig, kind: 'f
         verifiedCaptures++;
       }
     }
+    const operational = run.state === 'COMPLETED' && evaluation.investigated > 0 && evaluation.captures === verifiedCaptures;
+    const deliveryTargetMet = kind === 'live' ? ready.length >= 3 : null;
     const report = { kind, run: id, state: run.state, counts: run.counts, investigated: evaluation.investigated,
       published: ready.length, captures: evaluation.captures, verifiedCaptures, usage: evaluation.usage, sources: run.sources,
       gates: evaluation.gates, publisherChecks: evaluation.publisherChecks, seconds: Math.round((Date.now() - clock) / 1000), score, directory,
-      passed: run.state === 'COMPLETED' && evaluation.investigated > 0 && evaluation.captures === verifiedCaptures &&
-        (!score || (score.total === score.passed && score.unexpected.length === 0 && ready.length === 2 && verifiedCaptures >= 4)) };
+      operational, deliveryTargetMet,
+      passed: operational && (score ? score.total === score.passed && score.unexpected.length === 0 && ready.length === 2 && verifiedCaptures >= 4
+        : deliveryTargetMet === true) };
     await writeFile(resolve(directory, 'report.json'), JSON.stringify({ report, evaluation, stages, evidence }, null, 2), { flag: 'wx' });
     await saveEvaluation(admin, id, kind === 'fixture' ? 'FIXTURE' : 'LIVE', report);
     return report;
