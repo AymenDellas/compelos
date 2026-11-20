@@ -42,6 +42,7 @@ export async function readyOpportunities(pool: DB, limit = 100, run: string | nu
     (SELECT jsonb_array_length(g->'evidence') FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='acquisition') AS acquisition_sources,
     (SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='opportunity') AS opportunity
     FROM origin_businesses b JOIN LATERAL (SELECT * FROM origin_investigations WHERE business_id=b.id
+      AND checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
       ORDER BY created_at DESC,id DESC LIMIT 1) j ON true
     WHERE j.outcome='QUALIFIED' AND j.decision->>'version'=$3 AND j.expires_at>now() AND NOT (${suppressed}) AND ($2::uuid IS NULL OR j.run_id=$2)
     ORDER BY acquisition_sources DESC,j.updated_at DESC,b.name,b.id LIMIT $1`, [limit, run, POLICY_VERSION])).rows;
@@ -63,7 +64,7 @@ export async function sourceReadiness(db: DB) {
 }
 
 const summarySql = `SELECT r.id,r.state,r.created_at,r.started_at,r.finished_at,r.error,r.sources,
-  COALESCE((SELECT jsonb_object_agg(key,n) FROM (SELECT COALESCE(outcome,stage) AS key,count(*)::int AS n
+  COALESCE((SELECT jsonb_object_agg(key,n) FROM (SELECT CASE WHEN checkpoint->>'skippedAsDuplicate'='true' THEN 'SKIPPED' ELSE COALESCE(outcome,stage) END AS key,count(*)::int AS n
     FROM origin_investigations WHERE run_id=r.id GROUP BY 1) c),'{}') AS counts FROM origin_runs r`;
 
 export async function runSummary(db: DB, id: string) {
@@ -79,7 +80,7 @@ export async function investigations(db: DB, run: string | null, outcome: string
     COALESCE(j.error,(SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'state'<>'VERIFIED'
       ORDER BY (g->>'state'='CONTRADICTED') DESC LIMIT 1)) AS reason
     FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
-    WHERE ($1::uuid IS NULL OR j.run_id=$1) AND ($2::text IS NULL OR COALESCE(j.outcome,j.stage)=$2)
+    WHERE j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true' AND ($1::uuid IS NULL OR j.run_id=$1) AND ($2::text IS NULL OR COALESCE(j.outcome,j.stage)=$2)
     ORDER BY j.updated_at DESC,j.id LIMIT $3`, [run, outcome, limit])).rows;
 }
 
@@ -107,12 +108,13 @@ export async function overview(pool: Pool) {
       count(*) FILTER (WHERE g->>'state' IN ('UNVERIFIED','STALE'))::int AS held,
       count(*) FILTER (WHERE g->>'state'='CONTRADICTED')::int AS contradicted
       FROM origin_investigations j CROSS JOIN LATERAL jsonb_array_elements(j.checkpoint->'gates') g
-      WHERE j.run_id=$1 GROUP BY 1 ORDER BY 1`, [runs[0].id])).rows : [];
+      WHERE j.run_id=$1 AND j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true' GROUP BY 1 ORDER BY 1`, [runs[0].id])).rows : [];
     const opportunities = await readyOpportunities(db);
     const findings = (await db.query<Finding>(`SELECT j.id,COALESCE(j.checkpoint->>'identityName',b.name) AS name,j.stage,j.outcome,j.updated_at,
       COALESCE(j.error,(SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'state'<>'VERIFIED'
         ORDER BY (g->>'state'='CONTRADICTED') DESC LIMIT 1)) AS reason
       FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id WHERE j.outcome IS DISTINCT FROM 'QUALIFIED'
+      AND j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
       ORDER BY j.updated_at DESC LIMIT 75`)).rows;
     const sources = await sourceHistory(db);
     const quality = await sourceQuality(db);

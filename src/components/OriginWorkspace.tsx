@@ -140,7 +140,6 @@ function Discovery({ data }: { data: Overview }) {
     ['ECHO', 'Discover publisher records and verify their reuse permission, dates and official links.'],
     ['Business search', 'Find coaching offers across eligible markets and verify each business on its own website.'],
     ['CONSTELLATION', 'Expand from named contributors on the same publisher record.'],
-    ['IGNITION', 'Revisit businesses and compare saved offer and booking snapshots.'],
     ['VOID', 'Trace public booking links and independently recheck failures and conflicting information.'],
     ['FRONTIER', 'Prioritize sources by verified offers and qualified opportunities, with exploration of underused sources.'],
   ];

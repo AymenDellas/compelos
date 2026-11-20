@@ -16,7 +16,8 @@ export async function evaluate(pool: Pool, runId: string) {
   const { rows } = await pool.query<{ id: string; name: string; domain: string; decision: Decision | null; stage: string; artifacts: number; checkpoint: Checkpoint; seeds: Seed[] }>(`
     SELECT j.id,b.name,b.domain,j.decision,j.stage,j.checkpoint,j.seeds,
     (SELECT count(*)::int FROM origin_artifacts a WHERE a.investigation_id=j.id AND a.image IS NOT NULL) AS artifacts
-    FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id WHERE run_id=$1 ORDER BY b.domain`, [runId]);
+    FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
+    WHERE run_id=$1 AND j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true' ORDER BY b.domain`, [runId]);
   const gates = Object.fromEntries(gateNames.map(name => [name, { VERIFIED: 0, UNVERIFIED: 0, CONTRADICTED: 0, STALE: 0 } as Record<Gate['state'], number>]));
   const blockers = new Map<string, { gate: string; state: Gate['state']; reason: string; count: number }>();
   for (const row of rows) for (const gate of row.decision?.gates ?? []) {

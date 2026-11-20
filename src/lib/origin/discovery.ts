@@ -93,7 +93,7 @@ export async function feed(web: PublicWeb, publisher: PublisherFeed, limit: numb
 
 export type Adapter = { name: string; run: () => Promise<Seed[] | { seeds: Seed[]; audit: PublisherAudit[] }>; retryAt?: string; deferred?: string; credit?: string; queryIndex?: number; searches?: number };
 
-export async function discover(adapters: Adapter[], limit: number, historical: Seed[] = []) {
+export async function discover(adapters: Adapter[], limit?: number, historical: Seed[] = []) {
   const observations = await Promise.all(adapters.map(async (adapter): Promise<{ seeds: Seed[]; status: SourceResult }> => {
     const before = Date.now();
     if (adapter.deferred || adapter.retryAt && Date.parse(adapter.retryAt) > before) {

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { Pool } from 'pg';
 import { modelAdvisory, readOrReserve } from '../../src/lib/origin/model';
 import { decide, defaults, emptyCheckpoint, finding, gateNames, observe } from '../../src/lib/origin/policy';
-import { artifact, dossier, overview, readyOpportunities } from '../../src/lib/origin/read-model';
-import { claimRun, control, finish, migrate, nextJob, recentPublisherEvidence, release, revisit, runSearch, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
+import { artifact, dossier, overview, readyOpportunities, runSummary } from '../../src/lib/origin/read-model';
+import { claimRun, control, finish, migrate, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
 import { official, seed, source } from './fixtures';
 
 test('PostgreSQL fences interrupted stages, deduplicates identities, enforces budgets and serves only current qualified opportunities', {
@@ -40,6 +40,7 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     await saveDiscovery(pool, run, [wikidata, publisher,
       { ...wikidata, website: 'https://new-cedar.test/' }], [{ adapter: 'fixture', status: 'OK', elapsedMs: 1, discovered: 3 }]);
     const job = await nextJob(pool, run);
+    assert.ok(job);
     assert.equal(job.seeds.length, 3);
     assert.deepEqual(await recentPublisherEvidence(pool, 90), [publisher]);
     assert.equal((await pool.query('SELECT 1 FROM origin_businesses')).rowCount, 1);
@@ -52,7 +53,7 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     assert.notEqual(recovered.lease, run.lease);
     await release(pool, run);
     assert.equal(await claimRun(pool), null);
-    assert.equal((await nextJob(pool, recovered)).stage, 'RESOLVING');
+    assert.equal((await nextJob(pool, recovered))?.stage, 'RESOLVING');
     assert.ok(await readOrReserve(pool, recovered, job, 'fixture-model', 2, 'keyA', 30));
     assert.equal(await readOrReserve(pool, recovered, job, 'fixture-model', 1, 'keyB', 30), null);
     await pool.query("UPDATE origin_model_usage SET status='OK', created_at=now()-interval '2 minutes'");
@@ -81,11 +82,27 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     await finish(pool, recovered);
     assert.equal((await overview(pool)).runs[0].state, 'COMPLETED');
 
+    // Simulate an older decision with no explicit start marker and a stored identity key.
+    await pool.query(`UPDATE origin_investigations SET processing_started_at=NULL, updated_at=now()-interval '90 days',
+      expires_at=now()+interval '1 hour' WHERE id=$1`, [job.id]);
+
     await saveSettings(pool, { ...defaults, modelCalls: 3, runBudgetCents: 5 });
-    await start(pool);
+    await start(pool, { candidateLimit: 2 });
     const metered = (await claimRun(pool))!;
-    await saveDiscovery(pool, metered, [seed], []);
+    const repeat = { ...seed, website: 'https://www.cedar-leadership.test./coaching', sourceKey: 'new-publisher:cedar' };
+    const changedSite = { ...wikidata, website: 'https://moved-cedar.test/', source: 'https://www.wikidata.org/wiki/Q12345?oldid=2' };
+    const discovered = (host: string) => ({ ...seed, method: 'BUSINESS_SEARCH' as const, website: `https://${host}/`, sourceKey: `search:${host}` });
+    const started = discovered('fern-leadership.test');
+    const untouched = discovered('maple-leadership.test');
+    await saveDiscovery(pool, metered, [repeat, discovered('moved-cedar.test'), changedSite, started, untouched, discovered('overflow.test')], []);
+    assert.deepEqual((await runSummary(pool, metered.id)).counts, { RESOLVING: 2 });
+    await pool.query(`INSERT INTO origin_investigations(id,run_id,business_id,seeds,stage,checkpoint)
+      VALUES($1,$2,$3,'[]','RESOLVING',$4)`, [randomUUID(), metered.id, job.business_id, JSON.stringify(emptyCheckpoint())]);
     const secondJob = await nextJob(pool, metered);
+    assert.ok(secondJob);
+    assert.equal(secondJob.domain, 'fern-leadership.test');
+    assert.deepEqual((await runSummary(pool, metered.id)).counts, { RESOLVING: 2, SKIPPED: 1 });
+    assert.equal((await readyOpportunities(pool))[0].id, job.id);
     const advisory = { ...checkpoint, breakage: { url: `${official}booking`, from: official, label: 'Book a call', status: 404, evidence: evidence.id, alternatives: false } };
     const fixtureModel = { config: { apiKey: 'fixture', model: 'fixture-model', baseUrl: 'https://example.test/v1', timeoutMs: 100 }, ceiling: 1 };
     await modelAdvisory(pool, metered, secondJob, advisory, AbortSignal.timeout(3_000), (_, hooks) => async (_system, input) => {
@@ -97,12 +114,12 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     assert.equal(await readOrReserve(pool, metered, secondJob, 'fixture-model', 1, 'different', 30), null);
     assert.equal(decide(advisory.gates, advisory.evidence).outcome, 'QUALIFIED');
 
-    const needsIntake = { ...checkpoint, funnel: { found: 1, tested: 1, interactive: true },
-      gates: checkpoint.gates.map(gate => gate.name === 'opportunity' ? finding('opportunity', 'UNVERIFIED', 'Intake evidence missing.') : gate) };
-    await saveStage(pool, metered, secondJob, needsIntake, decide(needsIntake.gates, needsIntake.evidence));
-    assert.equal((await revisit(pool, 2)).find(record => record.method === 'IGNITION')?.discoveryPriority, 9);
-    await pool.query("UPDATE origin_investigations SET checkpoint=jsonb_set(checkpoint,'{funnel,intakeVersion}','2') WHERE id=$1", [secondJob.id]);
-    assert.deepEqual(await revisit(pool, 2), []);
+    assert.ok(await control(pool, metered.id, 'cancel'));
+    await start(pool, { candidateLimit: 1 });
+    const later = (await claimRun(pool))!;
+    await saveDiscovery(pool, later, [started, untouched], []);
+    assert.deepEqual((await runSummary(pool, later.id)).counts, { RESOLVING: 1 });
+    assert.equal((await nextJob(pool, later))?.domain, 'maple-leadership.test');
   } finally {
     await pool.end();
     if (created) await admin.query(`DROP SCHEMA ${name} CASCADE`);

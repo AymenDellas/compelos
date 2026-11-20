@@ -130,10 +130,24 @@ export async function finish(pool: Pool, run: Run, error?: string) {
     [run.id, error ? 'FAILED' : 'COMPLETED', error ?? null]));
 }
 
+// Earlier schema versions recorded progress through the stage or an attempt count.
+const processedEarlier = `EXISTS (SELECT 1 FROM origin_investigations prior
+  WHERE prior.business_id=business.id AND prior.run_id<>$1 AND prior.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
+    AND (prior.processing_started_at IS NOT NULL OR prior.stage<>'RESOLVING' OR prior.attempts>0))`;
+
 export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources: SourceResult[]) {
   return fenced(pool, run, async db => {
+    const candidates = seeds.map(seed => domain(seed.website));
+    const { rows } = await db.query<{ domain: string }>(`SELECT DISTINCT candidate.domain
+      FROM unnest($2::text[], $3::text[]) candidate(domain,key)
+      LEFT JOIN origin_identity_keys identity ON identity.key=candidate.key
+      JOIN origin_businesses business ON business.domain=candidate.domain OR business.id=identity.business_id
+      WHERE ${processedEarlier}`, [run.id, candidates, seeds.map(seed => seed.sourceKey)]);
+    const processed = new Set(rows.map(row => row.domain));
+    const selected = new Set([...new Set(candidates.filter(host => !processed.has(host)))].slice(0, run.config.candidateLimit));
     for (const [position, seed] of seeds.entries()) {
-      const host = domain(seed.website);
+      const host = candidates[position];
+      if (!selected.has(host)) continue;
       const { rows: [known] } = await db.query<{ business_id: string }>('SELECT business_id FROM origin_identity_keys WHERE key=$1', [seed.sourceKey]);
       // An external record changing its official domain is evidence for re-investigation, never an automatic rename or merge.
       const businessId = known?.business_id ?? (await db.query<{ id: string }>(`INSERT INTO origin_businesses(id,domain,name,website,seed)
@@ -152,15 +166,25 @@ export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources
   });
 }
 
-export async function nextJob(db: DB, run: Run) {
-  const job = (await db.query<Job>(`SELECT j.*, b.domain,b.name,b.website,b.signature FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
-    WHERE j.run_id=$1 AND j.stage NOT IN ('COMPLETED','FAILED') ORDER BY
-    CASE j.stage WHEN 'VERIFYING' THEN 0 WHEN 'RESOLVING' THEN 1 ELSE 2 END,j.discovery_order,j.created_at,j.id LIMIT 1`, [run.id])).rows[0];
+export async function nextJob(pool: Pool, run: Run) {
+  const job = await fenced(pool, run, async db => {
+    // A run queued before this change can still contain duplicates.
+    await db.query(`UPDATE origin_investigations j SET checkpoint=jsonb_set(j.checkpoint,'{skippedAsDuplicate}','true')
+      FROM origin_businesses business WHERE j.business_id=business.id AND j.run_id=$1
+      AND j.stage NOT IN ('COMPLETED','FAILED') AND j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true' AND ${processedEarlier}`, [run.id]);
+    return (await db.query<Job>(`WITH selected AS (
+      SELECT id FROM origin_investigations WHERE run_id=$1 AND stage NOT IN ('COMPLETED','FAILED') AND checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
+      ORDER BY CASE stage WHEN 'VERIFYING' THEN 0 WHEN 'RESOLVING' THEN 1 ELSE 2 END,discovery_order,created_at,id LIMIT 1
+    ), started AS (
+      UPDATE origin_investigations j SET processing_started_at=COALESCE(j.processing_started_at,now())
+      FROM selected WHERE j.id=selected.id RETURNING j.*
+    ) SELECT j.*,b.domain,b.name,b.website,b.signature FROM started j JOIN origin_businesses b ON b.id=j.business_id`, [run.id])).rows[0];
+  });
   if (job) {
     const target = job.seeds.find(seed => seed.method === 'BUSINESS_SEARCH' && domain(seed.website) === job.domain && new URL(seed.website).pathname !== '/');
     if (target) job.website = target.website;
   }
-  return job;
+  return job ?? undefined;
 }
 
 /** Reserve before contacting the prepaid search service. A lost reply never incurs a second charge. */
@@ -244,20 +268,6 @@ export async function newPublishedBusinesses(db: DB, limit: number) {
     LIMIT $1`, [limit])).rows.map(row => row.seed);
 }
 
-export async function recentWikiPointers(db: DB) {
-  return (await db.query<{ source: string }>(`SELECT DISTINCT seed->>'source' AS source FROM
-    (SELECT seeds FROM origin_investigations WHERE stage='COMPLETED' AND decision->>'version'=$1 AND updated_at>=now()-interval '72 hours'
-      ORDER BY updated_at DESC LIMIT 300) j CROSS JOIN LATERAL jsonb_array_elements(j.seeds) seed
-    WHERE seed->>'method'='Wikidata'`, [POLICY_VERSION])).rows.map(row => row.source);
-}
-
-export async function recentSearchDomains(db: DB) {
-  return (await db.query<{ domain: string }>(`SELECT DISTINCT b.domain FROM origin_investigations j
-    JOIN origin_businesses b ON b.id=j.business_id
-    WHERE j.stage='COMPLETED' AND j.decision->>'version'=$1 AND j.updated_at>=now()-interval '72 hours'`,
-    [POLICY_VERSION])).rows.map(row => row.domain);
-}
-
 export type SourceQuality = { adapter: string; investigated: number; identities: number; offers: number; qualified: number };
 export async function sourceQuality(db: DB) {
   return (await db.query<SourceQuality>(`SELECT seed->>'adapter' AS adapter, count(DISTINCT j.id)::int AS investigated,
@@ -269,27 +279,4 @@ export async function sourceQuality(db: DB) {
     FROM origin_investigations j CROSS JOIN LATERAL jsonb_array_elements(j.seeds) seed
     WHERE j.run_id IN (SELECT id FROM origin_runs ORDER BY created_at DESC LIMIT 50)
       AND j.decision IS NOT NULL AND seed->>'adapter' IS NOT NULL AND seed->>'method'<>'IGNITION' GROUP BY 1`, [POLICY_VERSION])).rows;
-}
-
-export async function revisit(db: DB, limit: number) {
-  return (await db.query<{ seed: Seed; seeds: Seed[]; review_recent: boolean }>(`SELECT seed,seeds,review_recent FROM (
-    SELECT b.seed,b.investigated_at,j.seeds,j.outcome,j.expires_at,
-      COALESCE(j.outcome='UNRESOLVED' AND j.checkpoint->'funnel'->>'intakeVersion' IS DISTINCT FROM '2'
-        AND (j.checkpoint->'funnel'->>'tested')::int>0 AND checks.niche_verified AND checks.opportunity_unverified, false)
-      OR (j.outcome='QUALIFIED' AND NOT (j.checkpoint ?& ARRAY['attributedProgramScope','marketEvidenceChecked'])) AS review_recent
-    FROM origin_businesses b JOIN LATERAL (
-      SELECT seeds,outcome,expires_at,checkpoint,decision FROM origin_investigations WHERE business_id=b.id
-      ORDER BY created_at DESC LIMIT 1
-    ) j ON true CROSS JOIN LATERAL (
-      SELECT bool_or(gate->>'name'='niche' AND gate->>'state'='VERIFIED') AS niche_verified,
-        bool_or(gate->>'name'='opportunity' AND gate->>'state'='UNVERIFIED') AS opportunity_unverified
-      FROM jsonb_array_elements(j.decision->'gates') gate
-    ) checks
-  ) prospects WHERE review_recent OR (outcome='QUALIFIED' AND expires_at<=now()+interval '4 hours')
-      OR (outcome='UNRESOLVED' AND investigated_at<now()-interval '7 days')
-    ORDER BY expires_at ASC NULLS LAST,review_recent DESC,CASE WHEN review_recent THEN investigated_at END DESC,investigated_at LIMIT $1`, [limit])).rows.flatMap(({ seed, seeds, review_recent }) => {
-    const visit: Seed = { ...seed, method: 'IGNITION', sourceKey: `revisit:${seed.sourceKey}`, occurredAt: undefined,
-      ...(review_recent ? { discoveryPriority: 9 } : {}) };
-    return [...seeds.filter(item => item.method !== 'IGNITION'), visit];
-  });
 }

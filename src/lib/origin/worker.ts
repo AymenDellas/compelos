@@ -12,7 +12,7 @@ import { hasSchema } from './read-model';
 import { coachingContracts, procurementAdapter, procurementCredit, tenderAdapter } from './procurement';
 import { enrichAcquisition, enrichCommercial, investigate, resolveBusiness, verifyOpportunity } from './research';
 import { approvedFeeds } from './sources';
-import { claimRun, failStage, finish, newPublishedBusinesses, nextJob, recentPublisherEvidence, recentSearchDomains, recentWikiPointers, release, revisit, runSearch, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
+import { claimRun, failStage, finish, migrate, newPublishedBusinesses, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
 import type { Run, SourceQuality } from './store';
 
 type Limiter = <T>(run: () => Promise<T>) => Promise<T>;
@@ -51,7 +51,6 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
     const limit = run.config.candidateLimit;
     const hold = (name: string) => history.find(item => item.adapter === name && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
     const adapters: Adapter[] = [];
-    const recentDomains = new Set(search ? await recentSearchDomains(pool) : []);
     const batch = <T,>(name: string, count: number, lookup: (index: number, signal: AbortSignal) => Promise<T[]>,
       reduce: (results: T[][]) => ReturnType<Adapter['run']>) => {
       const previous = history.find(item => item.adapter === name && item.queryIndex !== undefined)?.queryIndex ?? -1;
@@ -74,7 +73,7 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
       adapters.push(adapter);
     };
     const ranked = async (groups: Seed[][]) => Array.from({ length: 10 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : []))
-      .flat().filter(seed => !recentDomains.has(domain(seed.website)));
+      .flat();
     if (search) {
       batch(businessSearchName, Math.max(3, Math.ceil(limit / 5)), (index, requestSignal) => search(index, 10, requestSignal), ranked);
     }
@@ -124,17 +123,15 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
       return date <= Date.now() && date > Date.now() - run.config.activityDays * 86_400_000
         ? publisherObservation(seed).map(item => ({ ...item, adapter: 'Publisher relationships' })) : [];
     }) });
-    if (limit >= 3) adapters.push({ name: 'IGNITION', run: async () => (await revisit(pool, Math.floor(limit / 3)))
-      .flatMap(seed => seed.occurredAt ? publisherObservation(seed) : [seed]) });
     const latestWikiHold = history.find(item => item.adapter.startsWith('Wikidata') && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
-    const recent = new Set(await recentWikiPointers(pool));
     adapters.push({ name: `Wikidata · ${strategy}`, retryAt: latestWikiHold,
-      run: async () => (await wikidata(web, Math.min(24, limit * 3), strategy, perSource(signal, 18_000))).filter(seed => !recent.has(seed.source)) });
+      run: () => wikidata(web, Math.min(24, limit * 3), strategy, perSource(signal, 18_000)) });
     const historic = (await recentPublisherEvidence(pool, run.config.activityDays)).flatMap(seed => {
       const occurred = Date.parse(seed.occurredAt ?? '');
       return occurred <= Date.now() && occurred >= Date.now() - run.config.activityDays * 86_400_000 ? publisherObservation(seed) : [];
     });
-    const found = await discover(adapters, limit, historic);
+    // PostgreSQL applies the candidate cap after excluding previously processed businesses.
+    const found = await discover(adapters, undefined, historic);
     signal.throwIfAborted();
     await saveDiscovery(pool, run, found.seeds, found.results);
   }
@@ -142,8 +139,9 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
   async function runOnce() {
     if (shutdown.signal.aborted || Date.now() < nextProbe) return false;
     if (!ready) {
-      ready = await hasSchema(pool);
-      if (!ready) { nextProbe = Date.now() + 30_000; return false; }
+      if (!await hasSchema(pool)) { nextProbe = Date.now() + 30_000; return false; }
+      await migrate(pool);
+      ready = true;
     }
     const run = await claimRun(pool, options.runId);
     if (++probeCount % 120 === 1) await pool.query(`UPDATE origin_artifacts SET image=NULL WHERE image IS NOT NULL
