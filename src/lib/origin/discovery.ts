@@ -7,6 +7,7 @@ import type { PublisherAudit, Seed, SourceResult } from './policy';
 import type { PublisherFeed } from './sources';
 
 export const niches = ['executive coach', 'leadership coach', 'business coach', 'career coach'];
+export const coachingEditorial = /\b(?:best|top|leading)\s+(?:\d+\s+)?(?:[a-z-]+\s+){0,3}coach(?:es|ing (?:companies|firms|providers))\b|\b(?:executive|leadership|business|career|CEO) coaching (?:cost(?:s)?|rates?)\s+20\d{2}\b/i;
 export const relevantCoach = /\b(?:executive(?: team)?|leadership(?: team)?|business|career|CEO|founder|professional development)(?: (?:and|&) (?:executive|leadership|business|career))?\s+coach(?:es|ing)?\b|\bcoach(?:es|ing)?\s+for (?:[\w-]+ ){0,2}(?:executives|founders|leaders|business owners)\b/i;
 const wikidataHost = 'www.wikidata.org';
 const wikiUrl = (parameters: Record<string, string>) => `https://${wikidataHost}/w/api.php?${new URLSearchParams({ format: 'json', maxlag: '5', ...parameters })}`;

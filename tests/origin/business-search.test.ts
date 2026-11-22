@@ -83,3 +83,15 @@ test('search favors indexed offers with commercial clues and keeps cases as supp
     link: 'https://purchasing.test/closed-bids/business-coaching-program/' }], 10), []);
   assert.equal(new Set(Array.from({ length: 120 }, (_, index) => businessSearchQuery(index))).size, 120);
 });
+
+test('business queries rotate distinct commercial signals and filter editorial lists', () => {
+  const queries = Array.from({ length: 15 }, (_, index) => businessSearchQuery(index));
+  assert.ok(queries.some(query => query.includes('"program fee"')));
+  assert.ok(queries.some(query => query.includes('"client testimonials"')));
+  assert.ok(queries.some(query => query.includes('"12 coaching sessions"')));
+  assert.ok(queries.some(query => query.includes('"discovery call"') && query.includes('"client stories"')));
+  assert.deepEqual(businessSearchSeeds([
+    { title: 'Best CEO Coaches to Hire | Advisory Firm', link: 'https://example.com/best-ceo-coaches' },
+    { title: 'Executive Coaching Cost 2026: $200 to $3,000/Hour', link: 'https://example.com/executive-coaching-cost' },
+  ], 10), []);
+});

@@ -1,5 +1,6 @@
 import { createSerperSearcher } from '../dorkEngine';
 import { publisherPointer } from './auto-publishers';
+import { coachingEditorial } from './discovery';
 import { domain, hash } from './policy';
 import type { Seed } from './policy';
 import { documentUrl, PublicFailure, retryAt } from './public-web';
@@ -35,19 +36,24 @@ const directory = /\b(?:top \d+|best \d+|find a coach|coach(?:es|ing) directory|
 const genericName = /^(?:(?:home|services|programs?|offerings|work with us|about us)$|(?:executive|leadership|career|business|CEO|founder|corporate|team) (?:coaches?|coaching)(?:\s+(?:in|services|programs?)\b.*)?$)/i;
 
 const offer = /\b(?:coaching (?:program(?:me)?s?|services?|packages?|engagements?)|one[- ]on[- ]one|1:1|private coaching|coaching sessions)\b/i;
-const commercial = /\b(?:case stud(?:y|ies)|client (?:results|stories|success)|published fee|pricing|\d+[- ]month|\d+ sessions)\b/i;
+const clientProof = /\b(?:case stud(?:y|ies)|client (?:results|stories|success|testimonials?))\b/i;
+const programProof = /\b(?:investment|program(?:me)? (?:fee|pricing)|package pric(?:e|ing)|(?:three|six|twelve|[3-9]|1[0-2])[- ]month|\d+ (?:coaching )?sessions)\b/i;
 const action = /\b(?:(?:schedule|book|request) (?:a |your )?(?:discovery |introductory |strategy )?(?:call|consultation)|work with (?:me|us))\b/i;
 const promotion = /\b(?:webinars?|workshops?|cohorts?|newsletter|podcast episodes?|masterclasses|register|applications open)\b/i;
 
 export function businessSearchQuery(attempt: number) {
   const marketIndex = attempt % markets.length;
-  const specialty = specialties[Math.floor(attempt / markets.length) % specialties.length];
-  const intents = ['("book a discovery call" OR "schedule a consultation" OR "book a call")',
-    '("client results" OR "case study" OR "leadership coaching program")', '("executive briefing" OR "coaching program" OR "coaching enquiry")',
-    '("book a call" OR "schedule a consultation" OR "discovery call") ("client results" OR "case studies" OR "client stories" OR "coaching engagement")'];
+  const specialtyIndex = Math.floor(attempt / markets.length) % specialties.length;
+  const specialty = specialties[specialtyIndex];
+  const intents = [
+    '("coaching package" OR "coaching investment" OR "program fee") ("coaching sessions" OR "book a call" OR "schedule a consultation")',
+    '("client results" OR "client testimonials" OR "case study") ("coaching program" OR "coaching engagement")',
+    '("6-month coaching" OR "six-month coaching" OR "12 coaching sessions") ("book a call" OR "apply for coaching" OR "discovery call")',
+    '("book a call" OR "schedule a consultation" OR "discovery call") ("client results" OR "case studies" OR "client stories" OR "coaching engagement")',
+  ];
   const batch = Math.floor(attempt / (markets.length * specialties.length));
   const regions = regionalQueries[Math.floor(batch / intents.length) % regionalQueries.length];
-  const rotation = batch % intents.length;
+  const rotation = (batch + specialtyIndex) % intents.length;
   const market = batch >= intents.length || rotation === 3 ? regions[marketIndex] : '"' + markets[marketIndex] + '"';
   return `${specialty} ${market} ${intents[rotation]} -jobs -certification -directory -site:linkedin.com -site:indeed.com`;
 }
@@ -57,7 +63,8 @@ export function businessSearchSeeds(rows: unknown[], limit: number, campaign = f
   for (const row of rows.slice(0, 10)) {
     if (!row || typeof row !== 'object') continue;
     const { link, title, snippet } = row as Record<string, unknown>;
-    if (typeof link !== 'string' || typeof title !== 'string' || directory.test(title) || /\b(?:frequently asked questions|what it is and when|request for proposals|contract for)\b/i.test(title)) continue;
+    if (typeof link !== 'string' || typeof title !== 'string' || directory.test(title) || coachingEditorial.test(title) ||
+        /\b(?:frequently asked questions|what it is and when|request for proposals|contract for)\b/i.test(title)) continue;
     const description = typeof snippet === 'string' ? snippet.slice(0, 500) : '';
     const text = `${title} ${description}`;
     if (!service.test(text)) continue;
@@ -76,7 +83,7 @@ export function businessSearchSeeds(rows: unknown[], limit: number, campaign = f
       ?? parts.find(item => item.length >= 3 && item.length <= 90 && !genericName.test(item));
     if (!name) continue;
     const score = (campaign ? 6 : supportingCase ? 4 : 5) + Number(offer.test(text)) * 3 +
-      Number(commercial.test(text)) * 2 + Number(action.test(text)) * 3;
+      Number(clientProof.test(text)) * 3 + Number(programProof.test(text)) * 3 + Number(action.test(text)) * 3;
     if ((results.get(key)?.discoveryPriority ?? 0) >= score) continue;
     results.set(key, { method: 'BUSINESS_SEARCH', name, website: campaign || supportingCase ? new URL('/', url).href : url.href, source: url.href,
       sourceKey: campaign ? `campaign:${hash(url.href)}` : supportingCase ? `case:${hash(url.href)}` : `business-search:${host}`, discoveryPriority: score,

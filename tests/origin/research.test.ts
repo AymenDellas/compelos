@@ -4,7 +4,7 @@ import { discover, feed } from '../../src/lib/origin/discovery';
 import { classifyModelError, reserveCents } from '../../src/lib/origin/model';
 import { decide, defaults, finding, gateNames, observe } from '../../src/lib/origin/policy';
 import { createPublicWeb, documentUrl, robotsAllows } from '../../src/lib/origin/public-web';
-import { enrichAcquisition, investigate, resolveBusiness, verifyOpportunity } from '../../src/lib/origin/research';
+import { enrichAcquisition, enrichCommercial, investigate, resolveBusiness, verifyOpportunity } from '../../src/lib/origin/research';
 import { book, candidate, fixture, official, page, seed, source } from './fixtures';
 
 const signal = () => AbortSignal.timeout(30_000);
@@ -77,6 +77,66 @@ test('an indexed, unlinked case is read to verify commercial evidence on the off
   const commercial = researched.checkpoint.gates.find(item => item.name === 'substance');
   assert.equal(commercial?.state, 'VERIFIED');
   assert.ok(researched.checkpoint.evidence.some(item => item.url === caseUrl && commercial?.evidence.includes(item.id)));
+});
+
+test('a targeted named client engagement complements the published price of a coaching package', async () => {
+  const home = page.replace('<p>Our business was founded in 2012.</p>', '')
+    .replace('Coaching engagement pricing is $5,000.', '12 executive coaching sessions — $5,000 total.');
+  const caseUrl = official + 'case-studies/tern';
+  const base = fixture(home);
+  const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
+    if (args[0] === caseUrl) return { url: caseUrl, status: 200, headers: { 'content-type': 'text/html' },
+      body: Buffer.from('<main><h1>Case study: Tern Manufacturing</h1><p>Tern Manufacturing engaged us to deliver executive coaching for its directors.</p></main>') };
+    return base.web.document(...args);
+  } };
+  const job = candidate();
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const researched = (await investigate(web, { ...job, checkpoint }, settings, signal())).checkpoint;
+  assert.equal(researched.gates.find(gate => gate.name === 'substance')?.state, 'UNVERIFIED');
+  assert.ok(researched.evidence.some(item => item.method === 'Published offer price'));
+  await enrichCommercial(web, { ...job, checkpoint: researched }, [caseUrl], signal());
+  assert.equal(researched.gates.find(gate => gate.name === 'substance')?.state, 'VERIFIED');
+});
+
+test('case indexes lead to named coaching engagements and linked public scheduler pages are read', async () => {
+  const caseIndex = official + 'case-studies';
+  const caseUrl = caseIndex + '/leadership-team-development';
+  const scheduler = 'https://cedar-leadership.youcanbook.me/';
+  const home = page.replace('<p>Coaching engagement pricing is $5,000.</p>', '<a href="/case-studies">Case studies</a>')
+    .replace('href="/booking"', `href="${scheduler}"`);
+  const base = fixture(home);
+  const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
+    const html = args[0] === caseIndex ? '<main><h1>Case Studies</h1><a href="/case-studies/leadership-team-development">Read more</a></main>' :
+      args[0] === caseUrl ? '<main><h1>Supporting a growing leadership team</h1><p>Tern Manufacturing engaged Cedar Leadership to provide executive coaching.</p><h2>The Coaching Engagement</h2><p>The coaching engagement included one to one coaching sessions with the directors.</p></main>' :
+      args[0] === scheduler ? '<main><h1>Select a time</h1><input type="date"></main>' : null;
+    if (html) {
+      assert.equal(args[2]?.(new URL(args[0])), true);
+      return { url: args[0], status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(html) };
+    }
+    return base.web.document(...args);
+  } };
+  const job = candidate();
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const researched = (await investigate(web, { ...job, checkpoint }, settings, signal())).checkpoint;
+  assert.equal(researched.gates.find(gate => gate.name === 'substance')?.state, 'VERIFIED');
+  assert.ok(researched.evidence.some(item => item.url === caseUrl && item.method === 'Named business engagement case study'));
+  assert.equal(researched.funnel?.tested, 1);
+  assert.ok(researched.evidence.some(item => item.url === scheduler && item.method === 'Initial direct booking GET'));
+  const verified = await verifyOpportunity(web, { ...job, checkpoint: researched }, signal());
+  assert.equal(verified.gates.find(gate => gate.name === 'opportunity')?.state, 'UNVERIFIED');
+});
+
+test('third-party coaching history and coaching-cost articles do not count as the provider’s own offer', async () => {
+  const home = page.replace('Our business was founded in 2012.', 'The competing Spruce Group was founded in 2012.');
+  for (const html of [home, home.replace(/\bCedar Leadership executive coaching\b/, 'Executive Coaching Cost 2026: $200 to $3,000/Hour')]) {
+    const { web } = fixture(html);
+    const job = candidate();
+    const { checkpoint } = await resolveBusiness(web, job, signal());
+    const researched = (await investigate(web, { ...job, checkpoint }, settings, signal())).checkpoint;
+    assert.equal(researched.gates.find(gate => gate.name === 'substance')?.state, 'UNVERIFIED');
+    assert.ok(!researched.evidence.some(item => item.method === 'First-party operating history'));
+    assert.equal(researched.gates.find(gate => gate.name === 'niche')?.state, html === home ? 'VERIFIED' : 'UNVERIFIED');
+  }
 });
 
 test('a deep search landing page uses corroborated homepage evidence for the business market and operating history', async () => {

@@ -1,7 +1,7 @@
 import { load } from 'cheerio';
 import { normalizedName, publisherPointer, relatedPublisherHosts, verifyPublications } from './auto-publishers';
 import { createFunnelBrowser, type RenderedPage } from '../funnel-browser';
-import { relevantCoach } from './discovery';
+import { coachingEditorial, relevantCoach } from './discovery';
 import { emptyCheckpoint, finding, hash, observe } from './policy';
 import type { Checkpoint, Evidence, Settings } from './policy';
 import { documentUrl, PublicFailure } from './public-web';
@@ -14,6 +14,7 @@ const offerLink = /\b(?:coach(?:ing)?|program(?:me)?s?|services|work with (?:me|
 const contactLink = /^(?:contact(?: us| me)?|get in touch|connect|inquir(?:e|ies)|enquir(?:e|ies))\b/i;
 const aboutLink = /^(?:about\b|our story|company|meet (?:the )?(?:team|founder|coach)|the team)/i;
 const caseLink = /^(?:case stud(?:y|ies)|(?:client|customer) (?:stories|case studies|results|success stories)|our clients)\b/i;
+const caseDetailPath = /\/(?:case-study|case-studies|client-results|client-stories)\/[^/]+/i;
 const mediaPage = /^(?:in the (?:press|media)|as (?:seen|featured) in|press(?: (?:&|and) media)?|media(?: (?:coverage|appearances))?|speaking(?: (?:&|and) media)?|interviews|podcasts)$/i;
 const mediaPath = /^(?:press|media|media-appearances|media-coverage|appearances|interviews|podcast-appearances|press-and-media)$/i;
 const appearanceLink = /\b(?:interview|podcast|episode|guest appearance|conference|keynote|webinar|summit|speaker)\b/i;
@@ -342,13 +343,18 @@ function quote(page: Page, value: string, method: string) {
   return { ...page.evidence, id: hash(`${page.evidence.id}:${method}:${value}`), excerpt: value.slice(0, 450), method };
 }
 
-function caseEvidence(item: Page) {
+function caseEvidence(item: Page, provider: string) {
   const client = item.headings.map(text => text.match(/^case study\s*[:–-]\s*([\p{L}\d][\p{L}\d& .'-]{3,80})$/iu)).find(Boolean);
   const engagement = client && item.statements.find(text => containsName(text, client[1]) && /\b(?:hired|retained|commissioned|engaged|contracted)\b.{0,90}\b(?:executive|leadership|business) coaching\b/i.test(text));
   if (client && engagement) return quote(item, `${client[0]} · ${engagement}`, 'Named business engagement case study');
-  if (!/\/(?:case-study|case-studies|client-results|client-stories)\/[^/]+/i.test(new URL(item.url).pathname)) return;
+  if (!caseDetailPath.test(new URL(item.url).pathname)) return;
   const recordedWork = item.statements.find(text => scope.test(text) && /\b(?:one[- ]to[- ]one|1\s*[:\-]\s*1|sessions|engagement)\b/i.test(text));
-  const delivery = item.headings.find(text => /^(?:what (?:we delivered|the client asked for)|the solution|engagement|client perspective)$/i.test(text));
+  const delivery = item.headings.find(text => /^(?:what (?:we delivered|the client asked for)|the solution|(?:the )?(?:coaching )?engagement|client perspective)$/i.test(text));
+  const namedEngagement = item.statements.find(text => {
+    const match = text.match(/\b(?:engaged|retained|hired|commissioned|contracted)\s+([^.!?]{3,95}?)\s+(?:to (?:provide|deliver|lead|run)|for)\s+[^.!?]{0,80}\bcoach(?:ing)?\b/i);
+    return match && normalized(match[1]) === normalized(provider);
+  });
+  if (recordedWork && delivery && namedEngagement) return quote(item, `${namedEngagement} · ${recordedWork}`, 'Named business engagement case study');
   const implementation = item.statements.find(text => /\b(?:we|our team)\b.{0,32}\b(?:provided|designed|delivered|coached|worked with)\b/i.test(text));
   if (recordedWork && delivery && implementation) return quote(item, `${item.headings[0] ?? item.title} · ${recordedWork}`, 'Documented coaching engagement case study');
 }
@@ -358,13 +364,13 @@ export async function enrichCommercial(web: PublicWeb, job: Job, urls: string[],
   const gate = checkpoint.gates.find(item => item.name === 'substance');
   if (gate?.state !== 'UNVERIFIED' || !checkpoint.gates.some(item => item.name === 'niche' && item.state === 'VERIFIED')) return;
   const earlier = checkpoint.evidence.filter(item => gate.evidence.includes(item.id));
-  if (earlier.some(item => /case study|contract award|client account|offer price/i.test(item.method))) return;
+  if (earlier.some(item => /case study|contract award|client account/i.test(item.method))) return;
   const pending = [...new Set(urls)].filter(url => domain(url) === job.domain && !checkpoint.journey.some(step => step.url === url)).slice(0, 3);
   const pages = await Promise.all(pending.map(url => inspect(web, url, signal, 'Targeted coaching case recheck', address => domain(address.href) === job.domain)));
   for (const page of pages) addJourney(checkpoint, job.website, page, 'Targeted coaching case');
-  const record = pages.map(caseEvidence).find(Boolean);
+  const record = pages.map(page => caseEvidence(page, checkpoint.identityName ?? job.name)).find(Boolean);
   if (!record) return;
-  const supportsFit = earlier.some(item => ['First-party operating history', 'Published coaching program scope'].includes(item.method));
+  const supportsFit = earlier.some(item => ['First-party operating history', 'Published coaching program scope', 'Published offer price'].includes(item.method));
   add(checkpoint, 'substance', supportsFit ? 'VERIFIED' : 'UNVERIFIED', supportsFit
     ? 'The official site documents a delivered client engagement and a separate measure of commercial substance.'
     : 'A client engagement was documented. One additional commercial signal remains unresolved.', [...earlier, record]);
@@ -623,7 +629,7 @@ export async function enrichAcquisition(web: PublicWeb, job: Job, settings: Sett
 function routeHost(value: string, official: string) {
   const host = domain(value);
   return host === official || ['book.', 'booking.', 'schedule.'].some(prefix => host === `${prefix}${official}`) ||
-    /^(?:calendly\.com|cal\.com|app\.acuityscheduling\.com|[a-z\d-]+\.as\.me|savvycal\.com)$/i.test(host);
+    /^(?:calendly\.com|cal\.com|app\.acuityscheduling\.com|[a-z\d-]+\.(?:as\.me|youcanbook\.me)|savvycal\.com)$/i.test(host);
 }
 
 function addJourney(checkpoint: Checkpoint, from: string, page: Page, label: string) {
@@ -711,6 +717,7 @@ function monthlyPriceMismatch(page: Page) {
 function offerOn(page: Page) {
   const softwareCoach = /\b(?:AI (?:teammate|(?:powered )?(?:executive |CEO |leadership |business )?coach(?:ing)? (?:agent|tool|software))|(?:executive |CEO |leadership |business )?coach(?:ing)? AI agent)\b/i;
   if ([page.title, ...page.headings.slice(0, 4)].some(text => softwareCoach.test(text))) return;
+  if ([page.title, page.headings[0] ?? ''].some(text => coachingEditorial.test(text))) return;
   const specialty = /\b(?:(?:strategic )?leadership advis(?:ory|er|or)|CEO mentor(?:ing|ship)?|founder advis(?:ory|er|or)|executive development)\b/i;
   const training = /\b(?:coach(?:ing)? (?:skills |credential )?(?:training|education|certification|accreditation)|(?:become|qualify as) (?:an? )?(?:certified |professional |executive )?coach|leader as coach)\b/i;
   const servicesForCoaches = /\b(?:lead generation|digital marketing|seo|paid ads?|web design|appointment setting|branding|lead magnet)\b/i;
@@ -778,7 +785,7 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     if (detail.state === 'READABLE') pages.push(detail);
   }
   const deeper = [...new Map(pages.flatMap(item => item.links).filter(link => link.main && own(new URL(link.url)) && !pages.some(item => item.url === link.url) &&
-    (activityLink.test(`${link.label} ${new URL(link.url).pathname.replace(/[-_/]/g, ' ')}`) || caseLink.test(link.label)) &&
+    (activityLink.test(`${link.label} ${new URL(link.url).pathname.replace(/[-_/]/g, ' ')}`) || caseLink.test(link.label) || caseDetailPath.test(new URL(link.url).pathname)) &&
     !/\b(?:personal use|directory|privacy|login|view all|archives?)\b/i.test(link.label)).map(link => [link.url, link])).values()]
     .sort((a, b) => Number(/\/(?:case-stud(?:y|ies)|webinars?|episodes?)\/[^/]+/i.test(new URL(b.url).pathname)) -
       Number(/\/(?:case-stud(?:y|ies)|webinars?|episodes?)\/[^/]+/i.test(new URL(a.url).pathname))).slice(0, 3);
@@ -800,17 +807,24 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   if (offer && line && engagement) {
     checkpoint.offer = line;
     add(checkpoint, 'niche', 'VERIFIED', 'The official page describes a specialized coaching engagement.', [quote(offer, line, 'Offer heading'), quote(offer, engagement, 'Engagement scope')]);
-    const price = offer.statements.find(item => !/\b(?:revenue|sales|per (?:hour|session|month)|\/hour)\b/i.test(item) &&
-      /\b(?:investment|pricing|package|engagement|program(?:me)? fee)\b[^.!?]{0,55}(?:USD|CAD|GBP|[$£])\s*(?:[3-9],?\d{3}|[1-9]\d,?\d{3})\b/i.test(item));
-    const substance = pages.flatMap(item => item.statements.map(statement => ({ page: item, statement })))
+    const price = offer.statements.find(item => !/\b(?:revenue|sales|per (?:hour|session|month)|\/hour|estimated|industry average)\b|\/(?:hour|hr|month|mo|session)\b/i.test(item) &&
+      /\b(?:investment|pricing|package|engagement|program(?:me)? fee|\d{1,2} (?:private |executive |leadership |business )?coaching sessions)\b[^.!?]{0,55}(?:USD|CAD|GBP|[$£])\s*(?:[3-9],?\d{3}|[1-9]\d,?\d{3})\b/i.test(item));
+    const substance = pages.filter(item => ![item.title, item.headings[0] ?? ''].some(text => coachingEditorial.test(text)))
+      .flatMap(item => item.statements.map(statement => ({ page: item, statement })))
       .find(item => {
-        const since = item.statement.match(/\b(?:founded|established|in business|(?:providing|offering|delivering) (?:executive |leadership |business )?coaching)\s+(?:in\s+|since\s+)?(19\d{2}|20\d{2})\b|\bcoached\b[^.!?]{0,100}\bsince (19\d{2}|20\d{2})\b/i);
+        const since = item.statement.match(/\b(?:founded|established|in business|(?:providing|offering|delivering) (?:executive |leadership |business )?coaching)\s+(?:in\s+|since\s+)?(19\d{2}|20\d{2})\b/i);
+        const practiceStarted = item.statement.match(/^since (19\d{2}|20\d{2}),?\s+(?:we|I|our (?:practice|firm|business))\b.{0,70}\b(?:coach(?:ed|ing)?|coaching)\b/i);
         const founding = item.statement.match(/\bin (19\d{2}|20\d{2}),\s*(?:we|I|she|he|[\p{L}]+ [\p{L}]+)\s+founded\b/iu);
-        return Boolean(since && Number(since[1] ?? since[2]) <= new Date().getUTCFullYear() - 3) ||
+        return Boolean(since && Number(since[1]) <= new Date().getUTCFullYear() - 3 &&
+            (/\b(?:our (?:business|firm|practice|company|team)|we (?:have|were|started|began)|I (?:have|started|began))\b/i.test(item.statement) ||
+              containsName(item.statement, checkpoint.identityName ?? job.name))) ||
+          Boolean(practiceStarted && Number(practiceStarted[1]) <= new Date().getUTCFullYear() - 3) ||
           Boolean(founding && Number(founding[1]) <= new Date().getUTCFullYear() - 3 && containsName(item.statement, checkpoint.identityName ?? job.name)) ||
-          /\b(?:[5-9]|[1-9]\d)\+? years of (?:executive |career |leadership |business )?coaching experience\b/i.test(item.statement);
+          /\b(?:[5-9]|[1-9]\d)\+? years of (?:executive |career |leadership |business )?coaching experience\b/i.test(item.statement) &&
+          (/\b(?:the practice|our (?:team|practice|firm)|we (?:bring|have)|I (?:bring|have))\b/i.test(item.statement) ||
+            containsName(item.statement, checkpoint.identityName ?? job.name));
       });
-    const clientCase = pages.map(caseEvidence).find(Boolean);
+    const clientCase = pages.map(item => caseEvidence(item, checkpoint.identityName ?? job.name)).find(Boolean);
     const procurement = job.seeds.find(seed => seed.method === 'PROCUREMENT' && seed.contract &&
       normalized(seed.name) === normalized(checkpoint.identityName ?? job.name) && domain(seed.website) === job.domain);
     const testimonial = (offer.testimonials ?? [])[0];

@@ -205,8 +205,10 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
             await modelAdvisory(pool, run, job, checkpoint, signal);
             const passed = new Set(checkpoint.gates.filter(item => item.state === 'VERIFIED').map(item => item.name));
             const suggestion = checkpoint.advisory?.assessment;
-            const purpose = !passed.has('substance') && (suggestion === 'VERIFY_COMMERCIAL_EVIDENCE' || passed.has('opportunity')) ? 'case' :
-              !passed.has('acquisition') && (suggestion === 'VERIFY_ACQUISITION_ACTIVITY' || passed.has('substance') || passed.has('contact')) ? 'campaign' : null;
+            const commercialEvidence = checkpoint.gates.find(item => item.name === 'substance')?.evidence.length ?? 0;
+            const purpose = !passed.has('substance') && (passed.has('opportunity') ||
+              passed.has('contact') && (commercialEvidence > 0 || passed.has('acquisition') || suggestion === 'VERIFY_COMMERCIAL_EVIDENCE')) ? 'case' :
+              !passed.has('acquisition') && (passed.has('substance') || passed.has('opportunity')) ? 'campaign' : null;
             if (followUp && purpose && !signal.aborted && passed.has('niche') && passed.has('geography')) {
               try {
                 const evidenceBudget = perSource(signal, 16_000);
