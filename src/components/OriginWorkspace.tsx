@@ -84,7 +84,7 @@ export default function OriginWorkspace() {
     {data && !dossierId && <>
       {tab === 'Overview' && <>
         <div className="origin-metrics">
-          <Metric label="Candidates in latest run" value={latest ? `${latestCount} / ${latest.candidate_target}` : 0} />
+          <Metric label="New businesses in latest run" value={latest ? `${latestCount} / ${latest.candidate_target}` : 0} />
           <Metric label="Rejected" value={latest?.counts.REJECTED ?? 0} />
           <Metric label="Unresolved" value={latest?.counts.UNRESOLVED ?? 0} />
           <Metric label="Ready opportunities" value={data.opportunities.length} accent />
@@ -92,7 +92,7 @@ export default function OriginWorkspace() {
         <section className="origin-section">
           <div className="origin-heading"><h2>Investigation runs</h2>{active && <RunActions run={active} busy={busy} mutate={mutate} />}</div>
           {!data.online && <p className="origin-note">Compel OS handles manually started ORIGIN runs while the worker is offline. Keep Compel OS open during the run.</p>}
-          {latest?.state === 'RUNNING' && latest.discovery_pending && <p className="origin-note">Searching for up to {latest.candidate_target} new businesses. Previously investigated businesses are skipped.</p>}
+          {latest?.state === 'RUNNING' && latest.discovery_pending && <p className="origin-note">Searching for {latest.candidate_target} new businesses. Repeats do not count toward the target.</p>}
           {latest?.state === 'COMPLETED' && latestCount < latest.candidate_target && <p className="origin-note">Discovery found {latestCount} of the {latest.candidate_target} requested new businesses within the run’s search limits.</p>}
           {data.runs.length ? <div className="origin-scroll"><table><thead><tr><th>Queued at</th><th>Status</th><th>Investigations</th><th>Completed</th><th>Qualified</th><th>Finished at</th></tr></thead>
             <tbody>{data.runs.map(run => <tr key={run.id} title={run.error ?? undefined}>
@@ -280,7 +280,7 @@ function SettingsForm({ config, busy, save }: { config: Settings; busy: boolean;
   return <form className="origin-section" onSubmit={submit}><div className="origin-heading"><h2>Research settings</h2></div>
     <div className="origin-fields">
       <label>Schedule interval (minutes)<input name="intervalMinutes" type="number" min="60" max="43200" placeholder="Off" defaultValue={config.intervalMinutes ?? ''} /></label>
-      <label>Candidates per run<input required name="candidateLimit" type="number" min="1" max="72" defaultValue={config.candidateLimit} /></label>
+      <label>New businesses per run<input required name="candidateLimit" type="number" min="1" max="72" defaultValue={config.candidateLimit} /></label>
       <label>Time budget (minutes)<input required name="runMinutes" type="number" min="2" max="75" defaultValue={config.runMinutes} /></label>
       <label>Acquisition lookback (days)<input required name="activityDays" type="number" min="30" max="180" defaultValue={config.activityDays} /></label>
       <label>Model requests per run<input required name="modelCalls" type="number" min="0" max="5" defaultValue={config.modelCalls} /></label>

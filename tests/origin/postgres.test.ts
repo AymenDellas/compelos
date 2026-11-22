@@ -12,7 +12,7 @@ import { createOriginLane } from '../../src/lib/origin/worker';
 import { official, seed, source } from './fixtures';
 
 test('PostgreSQL fences interrupted stages, deduplicates identities, enforces budgets and serves only current qualified opportunities', {
-  skip: process.env.ORIGIN_TEST_POSTGRES !== '1', timeout: 75_000,
+  skip: process.env.ORIGIN_TEST_POSTGRES !== '1', timeout: 120_000,
 }, async () => {
   const connection = { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10_000 };
   const admin = new Pool(connection);
@@ -134,38 +134,65 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     assert.equal((await nextJob(pool, later))?.domain, 'maple-leadership.test');
     assert.ok(await control(pool, later.id, 'cancel'));
 
-    // Initial searches only find three new businesses. A restarted lane fills the shortfall
-    // with fresh query indexes and preserves the previously processed exclusions across rounds.
-    const refillId = (await start(pool, { candidateLimit: 8 }))!;
+    // Two duplicate-only refill batches leave the queue at 66. A later batch
+    // must still fill all 72 slots with distinct businesses after a restart.
+    const refillId = (await start(pool, { candidateLimit: 72 }))!;
     const limit = async <T>(fn: () => Promise<T>) => fn();
     const requested: number[] = [];
     const web = createPublicWeb(limit, async () => { throw new PublicFailure('FIXTURE_UNAVAILABLE'); });
+    const initialHosts = Array.from({ length: 15 }, (_, index) => Array.from({ length: index < 6 ? 5 : 4 },
+      (_, position) => `refill-${index}-${position}.test`));
+    const finalHosts = Array.from({ length: 3 }, (_, index) => [`last-${index}-one.test`, `last-${index}-two.test`]);
     const laneOptions = { runId: refillId, web, businessSearch: async (index: number) => {
       requested.push(index);
-      return [repeat, started, untouched, discovered(`refill-${index}.test`),
-        ...(index >= 6 ? [discovered('refill-last.test'), discovered('refill-overflow.test')] : [])];
+      const fresh = initialHosts[index] ?? finalHosts[index - 21] ?? [];
+      return [repeat, started, untouched, ...fresh.map(discovered),
+        ...(index >= 15 ? [discovered(initialHosts[0][0])] : []),
+        ...(index === 23 ? [discovered('refill-overflow.test')] : [])];
     } };
     const initialLane = createOriginLane(pool, limit, laneOptions);
     assert.equal(await initialLane.runOnce(), true);
     initialLane.stop();
     assert.equal((await runSummary(pool, refillId)).discovery_pending, true);
-    assert.deepEqual((await runSummary(pool, refillId)).counts, { RESOLVING: 3 });
+    assert.deepEqual((await runSummary(pool, refillId)).counts, { RESOLVING: 66 });
     assert.ok(await control(pool, refillId, 'pause'));
     assert.ok(await control(pool, refillId, 'resume'));
     const refillLane = createOriginLane(pool, limit, laneOptions);
-    assert.equal(await refillLane.runOnce(), true);
-    assert.deepEqual((await runSummary(pool, refillId)).counts, { RESOLVING: 6 });
+    for (let round = 0; round < 2; round++) {
+      assert.equal(await refillLane.runOnce(), true);
+      const partial = await runSummary(pool, refillId);
+      assert.equal(partial.discovery_pending, true);
+      assert.deepEqual(partial.counts, { RESOLVING: 66 });
+    }
+    const interruptedRefill = (await claimRun(pool, refillId))!;
+    await runSearch(pool, interruptedRefill, `${businessSearchName}:21`, () => laneOptions.businessSearch(21));
+    await release(pool, interruptedRefill);
     assert.equal(await refillLane.runOnce(), true);
     refillLane.stop();
     const refilled = await runSummary(pool, refillId);
-    assert.equal(refilled.candidate_target, 8);
+    assert.equal(refilled.candidate_target, 72);
     assert.equal(refilled.discovery_pending, false);
-    assert.deepEqual(refilled.counts, { RESOLVING: 8 });
-    assert.deepEqual(requested.sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6]);
-    assert.equal(refilled.sources?.find(item => item.adapter === businessSearchName)?.searches, 7);
+    assert.deepEqual(refilled.counts, { RESOLVING: 72 });
+    assert.deepEqual(requested.sort((a, b) => a - b), Array.from({ length: 24 }, (_, index) => index));
+    assert.equal(refilled.sources?.find(item => item.adapter === businessSearchName)?.searchAttempts, 24);
     const { rows } = await pool.query(`SELECT domain FROM origin_businesses b JOIN origin_investigations j ON b.id=j.business_id
       WHERE j.run_id=$1 ORDER BY j.discovery_order`, [refillId]);
-    assert.deepEqual(rows.map(row => row.domain), [...Array.from({ length: 7 }, (_, index) => `refill-${index}.test`), 'refill-last.test']);
+    assert.deepEqual(rows.map(row => row.domain).sort(), [...initialHosts.flat(), ...finalHosts.flat()].sort());
+    assert.ok(await control(pool, refillId, 'cancel'));
+
+    // A source with only previous hits uses the bounded allowance and then
+    // reports a shortfall without queueing any previously investigated business.
+    const exhaustedId = (await start(pool, { candidateLimit: 36 }))!;
+    const exhaustedLane = createOriginLane(pool, limit, {
+      runId: exhaustedId, web, businessSearch: async () => [repeat, started, untouched],
+    });
+    for (let round = 0; round < 5; round++) assert.equal(await exhaustedLane.runOnce(), true);
+    exhaustedLane.stop();
+    const exhausted = await runSummary(pool, exhaustedId);
+    assert.equal(exhausted.state, 'COMPLETED');
+    assert.equal(exhausted.discovery_pending, false);
+    assert.deepEqual(exhausted.counts, {});
+    assert.equal(exhausted.sources?.find(item => item.adapter === businessSearchName)?.searchAttempts, 26);
   } finally {
     await pool.end();
     if (created) await admin.query(`DROP SCHEMA ${name} CASCADE`);

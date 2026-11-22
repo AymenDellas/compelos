@@ -183,6 +183,7 @@ export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources
         ...source, status: earlier.status === 'OK' ? 'OK' : source.status,
         discovered: earlier.discovered + source.discovered, elapsedMs: earlier.elapsedMs + source.elapsedMs,
         searches: (earlier.searches ?? 0) + (source.searches ?? 0), queryIndex: source.queryIndex ?? earlier.queryIndex,
+        searchAttempts: (earlier.searchAttempts ?? earlier.searches ?? 0) + (source.searchAttempts ?? source.searches ?? 0),
       } : source);
     }
     const nextRound = refill && businessIds.size < run.config.candidateLimit ? (run.discovery_round ?? 0) + 1 : null;

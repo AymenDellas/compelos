@@ -16,6 +16,12 @@ import { claimRun, failStage, finish, migrate, newPublishedBusinesses, nextJob, 
 import type { Run, SourceQuality } from './store';
 
 type Limiter = <T>(run: () => Promise<T>) => Promise<T>;
+const REFILL_SEARCH_ALLOWANCE = 18;
+
+function targetSearchAttempts(sources: SourceResult[]) {
+  return sources.filter(source => source.adapter === businessSearchName || source.adapter === campaignSearchName)
+    .reduce((total, source) => total + (source.searchAttempts ?? source.searches ?? 0), 0);
+}
 
 function chooseSource(history: SourceResult[], quality: SourceQuality[], names: string[], explore: boolean) {
   const cutoff = 50;
@@ -46,6 +52,9 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
   async function discovery(run: Run, signal: AbortSignal) {
     const history = await sourceHistory(pool);
     const limit = run.config.candidateLimit;
+    const initialBusiness = search ? Math.max(3, Math.ceil(limit / 5)) : 0;
+    const initialCampaign = campaignSearch ? Math.max(2, Math.ceil(limit / 12)) : 0;
+    const searchAllowance = initialBusiness + initialCampaign + REFILL_SEARCH_ALLOWANCE;
     const hold = (name: string) => history.find(item => item.adapter === name && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
     const adapters: Adapter[] = [];
     const batch = <T,>(name: string, count: number, lookup: (index: number, signal: AbortSignal) => Promise<T[]>,
@@ -58,6 +67,7 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
           const queries = await Promise.allSettled(keys.map(index => limitRequest(() => runSearch(pool, run, `${name}:${index}`,
             () => lookup(index, perSource(signal, 14_000))))));
           adapter.queryIndex = keys[keys.length - 1];
+          adapter.searchAttempts = (adapter.searchAttempts ?? 0) + keys.length;
           for (const outcome of queries) if (outcome.status === 'fulfilled' && outcome.value) results.push(outcome.value);
           const failure = queries.find(outcome => outcome.status === 'rejected');
           if (failure) {
@@ -77,19 +87,17 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
     if (run.discovery_round !== null) {
       const { rows: [{ queued }] } = await pool.query<{ queued: number }>(
         "SELECT count(*)::int AS queued FROM origin_investigations WHERE run_id=$1 AND checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'", [run.id]);
-      const gap = limit - queued;
-      if (gap > 0) {
-        if (search && !hold(businessSearchName)) {
-          batch(businessSearchName, Math.min(6, Math.ceil(gap / 2)), (index, requestSignal) => search(index, 10, requestSignal), ranked);
-        }
-        if (campaignSearch && !hold(campaignSearchName)) {
-          batch(campaignSearchName, Math.min(3, Math.ceil(gap / 8)),
-            (index, requestSignal) => campaignSearch(index, run.config.activityDays, requestSignal), ranked);
-        }
-      }
+      const gap = Math.max(0, limit - queued);
+      // Count saved batches so a restarted batch can recover its receipts at the same indexes.
+      const remaining = Math.max(0, searchAllowance - targetSearchAttempts(run.sources ?? []));
+      const business = search && !hold(businessSearchName) ? Math.min(6, Math.ceil(gap / 2), remaining) : 0;
+      const campaign = campaignSearch && !hold(campaignSearchName) ? Math.min(3, Math.ceil(gap / 8), remaining - business) : 0;
+      if (search && business) batch(businessSearchName, business, (index, requestSignal) => search(index, 10, requestSignal), ranked);
+      if (campaignSearch && campaign) batch(campaignSearchName, campaign,
+        (index, requestSignal) => campaignSearch(index, run.config.activityDays, requestSignal), ranked);
       const found = await discover(adapters);
       signal.throwIfAborted();
-      await saveDiscovery(pool, run, found.seeds, found.results, adapters.length > 0 && run.discovery_round < 2);
+      await saveDiscovery(pool, run, found.seeds, found.results, adapters.length > 0 && targetSearchAttempts(found.results) < remaining);
       return;
     }
     const quality = await sourceQuality(pool);
@@ -98,9 +106,9 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
     const selection = chooseSource(history, quality, niches.map(niche => `Wikidata · ${niche}`).filter(name => name !== previous), explore);
     const strategy = selection?.split(' · ')[1] ?? niches[0];
     if (search) {
-      batch(businessSearchName, Math.max(3, Math.ceil(limit / 5)), (index, requestSignal) => search(index, 10, requestSignal), ranked);
+      batch(businessSearchName, initialBusiness, (index, requestSignal) => search(index, 10, requestSignal), ranked);
     }
-    if (campaignSearch) batch(campaignSearchName, Math.max(2, Math.ceil(limit / 12)),
+    if (campaignSearch) batch(campaignSearchName, initialCampaign,
       (index, requestSignal) => campaignSearch(index, run.config.activityDays, requestSignal), ranked);
     if (activitySearch) {
       batch<PublisherPointer>(activitySearchName, 2, (index, requestSignal) => activitySearch(index, run.config.activityDays, requestSignal),

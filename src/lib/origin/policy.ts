@@ -98,7 +98,7 @@ export function decide(findings: Gate[], evidence: Evidence[], now = Date.now())
 export type Decision = ReturnType<typeof decide>;
 
 export type SourceResult = { adapter: string; discovered: number; elapsedMs: number; status: 'OK' | 'FAILED' | 'DEFERRED'; code?: string; retryAt?: string;
-  publisherAudit?: PublisherAudit[]; credit?: string; queryIndex?: number; searches?: number };
+  publisherAudit?: PublisherAudit[]; credit?: string; queryIndex?: number; searches?: number; searchAttempts?: number };
 export type PublisherAudit = { url: string; code: string; records: number; license?: string; publisher?: string; use?: 'FACTS_ONLY'; checkedTerms?: string[] };
 export type PublisherPointer = { url: string; name?: string; website?: string; viaOfficial?: boolean };
 

@@ -91,7 +91,7 @@ export async function feed(web: PublicWeb, publisher: PublisherFeed, limit: numb
   }).slice(0, limit);
 }
 
-export type Adapter = { name: string; run: () => Promise<Seed[] | { seeds: Seed[]; audit: PublisherAudit[] }>; retryAt?: string; deferred?: string; credit?: string; queryIndex?: number; searches?: number };
+export type Adapter = { name: string; run: () => Promise<Seed[] | { seeds: Seed[]; audit: PublisherAudit[] }>; retryAt?: string; deferred?: string; credit?: string; queryIndex?: number; searches?: number; searchAttempts?: number };
 
 export async function discover(adapters: Adapter[], limit?: number, historical: Seed[] = []) {
   const observations = await Promise.all(adapters.map(async (adapter): Promise<{ seeds: Seed[]; status: SourceResult }> => {
@@ -106,12 +106,13 @@ export async function discover(adapters: Adapter[], limit?: number, historical: 
       return { seeds: found.map(seed => ({ ...seed, adapter: seed.adapter ?? adapter.name })), status: {
         adapter: adapter.name, status: 'OK', discovered: found.length, elapsedMs: Date.now() - before,
         publisherAudit: Array.isArray(content) ? undefined : content.audit, credit: adapter.credit, queryIndex: adapter.queryIndex, searches: adapter.searches,
-        retryAt: adapter.retryAt,
+        retryAt: adapter.retryAt, searchAttempts: adapter.searchAttempts,
       } };
     } catch (error) {
       const code = error instanceof PublicFailure ? error.code : error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name) ? 'TIMEOUT' : 'SOURCE_UNAVAILABLE';
       return { seeds: [], status: { adapter: adapter.name, status: 'FAILED', discovered: 0, elapsedMs: Date.now() - before,
-        code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined, credit: adapter.credit, queryIndex: adapter.queryIndex, searches: adapter.searches } };
+        code, retryAt: error instanceof PublicFailure ? error.retryAt : undefined, credit: adapter.credit,
+        queryIndex: adapter.queryIndex, searches: adapter.searches, searchAttempts: adapter.searchAttempts } };
     }
   }));
   const results = observations.map(observation => observation.status);
