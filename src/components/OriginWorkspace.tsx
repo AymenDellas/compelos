@@ -165,19 +165,24 @@ function Opportunities({ data, open }: { data: Overview; open: (id: string) => v
   const [search, setSearch] = useState('');
   const [country, setCountry] = useState('');
   const [sort, setSort] = useState('sources');
-  const rows = data.opportunities.filter(item => (!country || item.country === country) &&
+  const opportunities = [...data.opportunities.map(item => ({ ...item, status: 'READY' })),
+    ...data.savedOpportunities.map(item => ({ ...item, status: 'NEEDS_RECHECK' }))];
+  const rows = opportunities.filter(item => (!country || item.country === country) &&
     `${item.name} ${item.offer}`.toLowerCase().includes(search.trim().toLowerCase()));
   if (sort === 'recent') rows.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   return <section className="origin-section">
-    <div className="origin-heading"><h2>Qualified opportunities</h2><span>{rows.length} shown</span></div>
+    <div className="origin-heading"><h2>Saved opportunities</h2><span>{rows.length} shown</span></div>
     <div className="origin-filters">
       <label>Business or offer<input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search opportunities" /></label>
       <label>Market<select value={country} onChange={event => setCountry(event.target.value)}><option value="">All markets</option><option value="US">United States</option><option value="UK">United Kingdom</option><option value="CA">Canada</option></select></label>
       <label>Sort by<select value={sort} onChange={event => setSort(event.target.value)}><option value="sources">Acquisition evidence</option><option value="recent">Latest investigation</option></select></label>
     </div>
-    {rows.length ? <div className="origin-scroll"><table><thead><tr><th>Business</th><th>Market</th><th>Opportunity</th><th>Evidence valid until</th></tr></thead>
-      <tbody>{rows.map(row => <tr key={row.id}><td><button className="origin-text-action" onClick={() => open(row.id)}>{row.name}</button><small>{row.offer}</small></td><td>{row.country}</td><td>{row.opportunity}</td><td>{stamp(row.expires_at)}</td></tr>)}</tbody></table></div>
-      : <p className="origin-empty">{data.opportunities.length ? 'No opportunities match these filters.' : 'No opportunities currently pass all seven gates.'}</p>}
+    {rows.length ? <div className="origin-scroll origin-opportunities-table"><table><thead><tr><th>Business</th><th>Market</th><th>Opportunity</th><th>Evidence expires</th></tr></thead>
+      <tbody>{rows.map(row => <tr key={row.id}>
+        <td><button className="origin-text-action" onClick={() => open(row.id)}>{row.name}</button><small>{row.offer}</small><State value={row.status} /></td>
+        <td>{row.country}</td><td>{row.opportunity}</td><td>{stamp(row.expires_at)}</td>
+      </tr>)}</tbody></table></div>
+      : <p className="origin-empty">{opportunities.length ? 'No opportunities match these filters.' : 'No saved opportunities yet.'}</p>}
   </section>;
 }
 
@@ -200,14 +205,12 @@ function Findings({ data, open }: { data: Overview; open: (id: string) => void }
 
 function DossierView({ id, close }: { id: string; close: () => void }) {
   const [entry, setEntry] = useState<Dossier>();
-  const [viewedAt, setViewedAt] = useState(() => Date.now());
   const [error, setError] = useState('');
   useEffect(() => {
     const controller = new AbortController();
     const refresh = () => void request<Dossier>(`?id=${id}`, undefined, controller.signal).then(record => {
       if (controller.signal.aborted) return;
       setEntry(record);
-      setViewedAt(Date.now());
       setError('');
     }).catch((err: Error) => { if (!controller.signal.aborted) setError(err.message); });
     refresh();
@@ -215,14 +218,13 @@ function DossierView({ id, close }: { id: string; close: () => void }) {
     return () => { controller.abort(); clearInterval(interval); };
   }, [id]);
   const checkpoint = entry?.checkpoint;
-  const fresh = entry?.decision?.expiresAt && Date.parse(entry.decision.expiresAt) > viewedAt;
   return <article className="origin-dossier">
     <button className="origin-text-action" onClick={close}><ArrowLeft size={15} aria-hidden /> Back to results</button>
     {error && <p className="origin-error" role="alert">{error}</p>}
     {!entry && !error && <p className="origin-empty" role="status">Loading evidence…</p>}
     {entry && checkpoint && <>
       <div className="origin-dossier-header"><div><h2>{entry.name}</h2><External url={entry.website}>{new URL(entry.website).hostname}</External></div>
-        <State value={entry.suppressed ? 'SUPPRESSED' : entry.decision?.outcome === 'QUALIFIED' && !fresh ? 'STALE' : entry.decision?.outcome ?? entry.stage} /></div>
+        <State value={entry.suppressed ? 'SUPPRESSED' : entry.decision?.outcome === 'QUALIFIED' && !entry.evidence_current ? 'NEEDS_RECHECK' : entry.decision?.outcome ?? entry.stage} /></div>
       <dl className="origin-detail"><dt>Offer</dt><dd>{checkpoint.offer ?? 'Unverified'}</dd><dt>Market</dt><dd>{checkpoint.country ?? 'Unverified'}</dd>
         <dt>Business contact</dt><dd>{entry.suppressed ? 'Suppressed in Compel OS' : checkpoint.contact ?? 'Unverified'}</dd><dt>Last investigated</dt><dd>{stamp(entry.updated_at)}</dd>
         <dt>Qualification policy</dt><dd>{entry.decision?.version ?? 'No decision yet'}</dd></dl>

@@ -68,17 +68,26 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     assert.equal((await readyOpportunities(pool))[0].business_id, job.business_id);
     assert.equal((await dossier(pool, job.id))?.decision?.outcome, 'QUALIFIED');
     assert.deepEqual(await artifact(pool, job.id, evidence.id), image);
-    const { usage, sources, runs } = await overview(pool);
+    const { usage, sources, runs, savedOpportunities } = await overview(pool);
     assert.equal(usage.reserved_cents, 2);
     assert.equal(usage.provider_cents, null);
     assert.equal(sources[0].discovered, 3);
     assert.equal(runs[0].counts.QUALIFIED, 1);
+    assert.deepEqual(savedOpportunities, []);
+    assert.equal((await dossier(pool, job.id))?.evidence_current, true);
     await pool.query('INSERT INTO leads VALUES ($1,$2,TRUE)', ['existing', official]);
     assert.equal((await readyOpportunities(pool)).length, 0);
     assert.equal((await dossier(pool, job.id))?.suppressed, true);
     await pool.query('UPDATE leads SET do_not_contact=false');
     await pool.query("UPDATE origin_investigations SET expires_at=now()-interval '1 second'");
     assert.equal((await readyOpportunities(pool)).length, 0);
+    const expired = await overview(pool);
+    assert.deepEqual(expired.opportunities, []);
+    assert.deepEqual(expired.savedOpportunities.map(item => item.id), [job.id]);
+    assert.equal((await dossier(pool, job.id))?.evidence_current, false);
+    await pool.query('UPDATE leads SET do_not_contact=true');
+    assert.deepEqual((await overview(pool)).savedOpportunities, []);
+    await pool.query('UPDATE leads SET do_not_contact=false');
     await finish(pool, recovered);
     assert.equal((await overview(pool)).runs[0].state, 'COMPLETED');
 
