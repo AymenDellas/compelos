@@ -66,7 +66,7 @@ export function businessSearchSeeds(rows: unknown[], limit: number, campaign = f
     const host = domain(url.href);
     const path = url.pathname.replace(/[-_/]/g, ' ');
     if (/\.(?:gov|gov\.uk|edu|university)$/.test(host) || excludedDomains.some(blocked => host === blocked || host.endsWith(`.${blocked}`))) continue;
-    if (/\/(?:directory|jobs?|certification|terms(?:[-_]of[-_]use)?|privacy(?:[-_]policy)?|cookies?)(?:\/|$)/i.test(url.pathname)) continue;
+    if (/\/(?:directory|jobs?|certification|terms(?:[-_]of[-_]use)?|privacy(?:[-_]policy)?|cookies?|solicitations|closed-bids)(?:\/|$)/i.test(url.pathname)) continue;
     const supportingCase = !campaign && /\b(?:case stud(?:y|ies)|client (?:results|stories|success))\b/i.test(path);
     if (campaign && !promotion.test(`${text} ${path}`)) continue;
     if (!campaign && !supportingCase && /\/(?:blog|news|articles?|library|podcasts?)(?:\/|$)/i.test(url.pathname)) continue;

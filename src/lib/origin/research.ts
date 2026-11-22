@@ -759,6 +759,14 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     add(checkpoint, 'identity', 'UNVERIFIED', 'The official entry point could not be corroborated during investigation.', [page.evidence]);
     return { checkpoint, artifacts: [] };
   }
+  // Search can enter through a deep offer page. The official homepage can supply
+  // the business's market, history and contact links that the offer omits.
+  if (!pages.some(item => new URL(item.url).pathname === '/')) {
+    const home = await inspect(web, new URL('/', page.url).href, signal, 'Official homepage context', own);
+    addJourney(checkpoint, page.url, home, 'Official homepage');
+    if (home.state === 'READABLE' && !pages.some(item => item.url === home.url) &&
+      (home.brand && home.brand === checkpoint.identityName || containsName(home.identity, checkpoint.identityName ?? job.name))) pages.push(home);
+  }
   const discoveredCampaigns = [...new Set(job.seeds.flatMap(seed => seed.activityLinks ?? []))].filter(url => own(new URL(url)) && !pages.some(item => item.url === url))
     .slice(0, 2).map(url => ({ url, label: 'Discovered promotion' }));
   const discoveredCases = [...new Set(job.seeds.flatMap(seed => seed.commercialLinks ?? []))].filter(url => own(new URL(url)) && !pages.some(item => item.url === url))

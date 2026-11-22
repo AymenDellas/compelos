@@ -79,6 +79,23 @@ test('an indexed, unlinked case is read to verify commercial evidence on the off
   assert.ok(researched.checkpoint.evidence.some(item => item.url === caseUrl && commercial?.evidence.includes(item.id)));
 });
 
+test('a deep search landing page uses corroborated homepage evidence for the business market and operating history', async () => {
+  const offerUrl = official + 'executive-coaching';
+  const base = fixture(page.replace('<p>Coaching engagement pricing is $5,000.</p>', ''));
+  const offer = page.replace('<p>We serve executive teams in the United Kingdom.</p><p>Our business was founded in 2012.</p>', '');
+  const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
+    if (args[0] === offerUrl) return { url: offerUrl, status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(offer) };
+    return base.web.document(...args);
+  } };
+  const job = { ...candidate(), website: offerUrl };
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const { checkpoint: researched } = await investigate(web, { ...job, checkpoint }, settings, signal());
+  assert.equal(researched.country, 'UK');
+  assert.equal(researched.gates.find(gate => gate.name === 'substance')?.state, 'VERIFIED');
+  assert.ok(researched.evidence.some(item => item.url === official && item.method === 'First-party operating history'));
+  assert.ok(researched.evidence.some(item => item.url === offerUrl && item.method === 'Published offer price'));
+});
+
 test('an unanswered FAQ heading cannot establish a market, but the official postal notice can', async () => {
   const question = '<h2>Do you only work with UK businesses?</h2>';
   const html = page.replace('<p>We serve executive teams in the United Kingdom.</p>', question)

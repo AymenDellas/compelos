@@ -79,5 +79,7 @@ test('search favors indexed offers with commercial clues and keeps cases as supp
   assert.ok(found.every(item => item.occurredAt === undefined));
   assert.deepEqual(businessSearchSeeds([{ title: 'Privacy Policy | Cedar Leadership',
     snippet: 'Executive coaching webinars', link: homepage + 'privacy-policy/' }], 10, true), []);
+  assert.deepEqual(businessSearchSeeds([{ title: 'Business Coaching Program | Purchasing Portal',
+    link: 'https://purchasing.test/closed-bids/business-coaching-program/' }], 10), []);
   assert.equal(new Set(Array.from({ length: 120 }, (_, index) => businessSearchQuery(index))).size, 120);
 });
