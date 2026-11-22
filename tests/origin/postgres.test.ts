@@ -4,8 +4,11 @@ import test from 'node:test';
 import { Pool } from 'pg';
 import { modelAdvisory, readOrReserve } from '../../src/lib/origin/model';
 import { decide, defaults, emptyCheckpoint, finding, gateNames, observe } from '../../src/lib/origin/policy';
+import { businessSearchName } from '../../src/lib/origin/business-search';
+import { createPublicWeb, PublicFailure } from '../../src/lib/origin/public-web';
 import { artifact, dossier, overview, readyOpportunities, runSummary } from '../../src/lib/origin/read-model';
 import { claimRun, control, finish, migrate, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
+import { createOriginLane } from '../../src/lib/origin/worker';
 import { official, seed, source } from './fixtures';
 
 test('PostgreSQL fences interrupted stages, deduplicates identities, enforces budgets and serves only current qualified opportunities', {
@@ -129,6 +132,40 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     await saveDiscovery(pool, later, [started, untouched], []);
     assert.deepEqual((await runSummary(pool, later.id)).counts, { RESOLVING: 1 });
     assert.equal((await nextJob(pool, later))?.domain, 'maple-leadership.test');
+    assert.ok(await control(pool, later.id, 'cancel'));
+
+    // Initial searches only find three new businesses. A restarted lane fills the shortfall
+    // with fresh query indexes and preserves the previously processed exclusions across rounds.
+    const refillId = (await start(pool, { candidateLimit: 8 }))!;
+    const limit = async <T>(fn: () => Promise<T>) => fn();
+    const requested: number[] = [];
+    const web = createPublicWeb(limit, async () => { throw new PublicFailure('FIXTURE_UNAVAILABLE'); });
+    const laneOptions = { runId: refillId, web, businessSearch: async (index: number) => {
+      requested.push(index);
+      return [repeat, started, untouched, discovered(`refill-${index}.test`),
+        ...(index >= 6 ? [discovered('refill-last.test'), discovered('refill-overflow.test')] : [])];
+    } };
+    const initialLane = createOriginLane(pool, limit, laneOptions);
+    assert.equal(await initialLane.runOnce(), true);
+    initialLane.stop();
+    assert.equal((await runSummary(pool, refillId)).discovery_pending, true);
+    assert.deepEqual((await runSummary(pool, refillId)).counts, { RESOLVING: 3 });
+    assert.ok(await control(pool, refillId, 'pause'));
+    assert.ok(await control(pool, refillId, 'resume'));
+    const refillLane = createOriginLane(pool, limit, laneOptions);
+    assert.equal(await refillLane.runOnce(), true);
+    assert.deepEqual((await runSummary(pool, refillId)).counts, { RESOLVING: 6 });
+    assert.equal(await refillLane.runOnce(), true);
+    refillLane.stop();
+    const refilled = await runSummary(pool, refillId);
+    assert.equal(refilled.candidate_target, 8);
+    assert.equal(refilled.discovery_pending, false);
+    assert.deepEqual(refilled.counts, { RESOLVING: 8 });
+    assert.deepEqual(requested.sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6]);
+    assert.equal(refilled.sources?.find(item => item.adapter === businessSearchName)?.searches, 7);
+    const { rows } = await pool.query(`SELECT domain FROM origin_businesses b JOIN origin_investigations j ON b.id=j.business_id
+      WHERE j.run_id=$1 ORDER BY j.discovery_order`, [refillId]);
+    assert.deepEqual(rows.map(row => row.domain), [...Array.from({ length: 7 }, (_, index) => `refill-${index}.test`), 'refill-last.test']);
   } finally {
     await pool.end();
     if (created) await admin.query(`DROP SCHEMA ${name} CASCADE`);

@@ -63,3 +63,21 @@ test('business search can require an intake action and a commercial reference in
   assert.deepEqual(businessSearchSeeds([coverage], 4, true), []);
   assert.deepEqual(activitySearchPointers([coverage]), [{ url: coverage.link }]);
 });
+
+test('search favors indexed offers with commercial clues and keeps cases as supporting pages', () => {
+  const homepage = 'https://cedar.test/';
+  const offerUrl = homepage + 'executive-coaching';
+  const caseUrl = homepage + 'client-results';
+  const found = businessSearchSeeds([
+    { title: 'Executive coach | Cedar Leadership', link: homepage },
+    { title: 'Executive coaching results | Cedar Leadership', link: caseUrl },
+    { title: 'Executive coaching | Cedar Leadership', link: offerUrl,
+      snippet: 'Our 6-month coaching program has client results. Book a discovery call.' },
+  ], 10);
+  assert.deepEqual(found.map(item => item.website), [offerUrl, homepage]);
+  assert.deepEqual(found[1].commercialLinks, [caseUrl]);
+  assert.ok(found.every(item => item.occurredAt === undefined));
+  assert.deepEqual(businessSearchSeeds([{ title: 'Privacy Policy | Cedar Leadership',
+    snippet: 'Executive coaching webinars', link: homepage + 'privacy-policy/' }], 10, true), []);
+  assert.equal(new Set(Array.from({ length: 120 }, (_, index) => businessSearchQuery(index))).size, 120);
+});

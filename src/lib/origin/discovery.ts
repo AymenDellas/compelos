@@ -106,6 +106,7 @@ export async function discover(adapters: Adapter[], limit?: number, historical: 
       return { seeds: found.map(seed => ({ ...seed, adapter: seed.adapter ?? adapter.name })), status: {
         adapter: adapter.name, status: 'OK', discovered: found.length, elapsedMs: Date.now() - before,
         publisherAudit: Array.isArray(content) ? undefined : content.audit, credit: adapter.credit, queryIndex: adapter.queryIndex, searches: adapter.searches,
+        retryAt: adapter.retryAt,
       } };
     } catch (error) {
       const code = error instanceof PublicFailure ? error.code : error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name) ? 'TIMEOUT' : 'SOURCE_UNAVAILABLE';
@@ -121,13 +122,16 @@ export async function discover(adapters: Adapter[], limit?: number, historical: 
     const host = domain(seed.website);
     if (!discoveredHosts.has(host)) continue;
     const group = groups.get(host) ?? new Map<string, Seed>();
-    if (!group.has(seed.sourceKey)) group.set(seed.sourceKey, seed);
+    const earlier = group.get(seed.sourceKey);
+    if (!earlier || (earlier.discoveryPriority ?? 0) < (seed.discoveryPriority ?? 0)) group.set(seed.sourceKey, seed);
     groups.set(host, group);
   }
   const priority = (records: Map<string, Seed>) => {
     const seeds = [...records.values()];
     const publishers = new Set(seeds.filter(seed => seed.occurredAt).map(seed => seed.publisher ?? domain(seed.source))).size;
-    return publishers * 10 + Math.max(0, ...seeds.map(seed => seed.discoveryPriority ?? 0));
+    const indexedOffer = seeds.some(seed => seed.method === 'BUSINESS_SEARCH' && !seed.activityLinks?.length && !seed.commercialLinks?.length);
+    const supportingPages = Number(seeds.some(seed => seed.activityLinks?.length)) + Number(seeds.some(seed => seed.commercialLinks?.length));
+    return publishers * 10 + Math.max(0, ...seeds.map(seed => seed.discoveryPriority ?? 0)) + (indexedOffer ? supportingPages * 3 : 0);
   };
   const selected = [...groups.values()].sort((a, b) => priority(b) - priority(a)).slice(0, limit);
   return { results, seeds: selected.flatMap(group => [...group.values()].slice(0, 30)) };

@@ -9,7 +9,7 @@ import type { PublisherFeed } from './sources';
 type DB = Pool | PoolClient;
 const json = JSON.stringify;
 export { domain };
-export type Run = { id: string; state: string; config: Settings; sources: SourceResult[] | null; publisher_feeds: PublisherFeed[] | null; lease: string; deadline_at: Date; started_at: Date; control_revision: number };
+export type Run = { id: string; state: string; config: Settings; sources: SourceResult[] | null; discovery_round: number | null; publisher_feeds: PublisherFeed[] | null; lease: string; deadline_at: Date; started_at: Date; control_revision: number };
 export type Job = {
   id: string; business_id: string; name: string; website: string; domain: string; seeds: Seed[];
   stage: 'RESOLVING' | 'INVESTIGATING' | 'VERIFYING'; checkpoint: Checkpoint;
@@ -135,7 +135,7 @@ const processedEarlier = `EXISTS (SELECT 1 FROM origin_investigations prior
   WHERE prior.business_id=business.id AND prior.run_id<>$1 AND prior.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
     AND (prior.processing_started_at IS NOT NULL OR prior.stage<>'RESOLVING' OR prior.attempts>0))`;
 
-export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources: SourceResult[]) {
+export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources: SourceResult[], refill = false) {
   return fenced(pool, run, async db => {
     const candidates = seeds.map(seed => domain(seed.website));
     const { rows } = await db.query<{ domain: string }>(`SELECT DISTINCT candidate.domain
@@ -144,13 +144,21 @@ export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources
       JOIN origin_businesses business ON business.domain=candidate.domain OR business.id=identity.business_id
       WHERE ${processedEarlier}`, [run.id, candidates, seeds.map(seed => seed.sourceKey)]);
     const processed = new Set(rows.map(row => row.domain));
-    const selected = new Set([...new Set(candidates.filter(host => !processed.has(host)))].slice(0, run.config.candidateLimit));
+    const { rows: queued } = await db.query<{ business_id: string; domain: string; discovery_order: number }>(`SELECT j.business_id,b.domain,j.discovery_order
+      FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
+      WHERE j.run_id=$1 AND j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'`, [run.id]);
+    const selected = new Map(queued.map(row => [row.domain, row.business_id]));
+    const businessIds = new Set(selected.values());
+    let order = Math.max(-1, ...queued.map(row => row.discovery_order)) + 1;
     for (const [position, seed] of seeds.entries()) {
       const host = candidates[position];
-      if (!selected.has(host)) continue;
-      const { rows: [known] } = await db.query<{ business_id: string }>('SELECT business_id FROM origin_identity_keys WHERE key=$1', [seed.sourceKey]);
+      if (processed.has(host)) continue;
+      const known = seed.method === 'Wikidata' ? (await db.query<{ business_id: string }>(
+        'SELECT business_id FROM origin_identity_keys WHERE key=$1', [seed.sourceKey])).rows[0] : undefined;
+      const existing = known?.business_id ?? selected.get(host);
+      if ((!existing || !businessIds.has(existing)) && businessIds.size >= run.config.candidateLimit) continue;
       // An external record changing its official domain is evidence for re-investigation, never an automatic rename or merge.
-      const businessId = known?.business_id ?? (await db.query<{ id: string }>(`INSERT INTO origin_businesses(id,domain,name,website,seed)
+      const businessId = existing ?? (await db.query<{ id: string }>(`INSERT INTO origin_businesses(id,domain,name,website,seed)
         VALUES($1,$2,$3,$4,$5) ON CONFLICT(domain) DO UPDATE SET domain=EXCLUDED.domain RETURNING id`,
       [randomUUID(), host, seed.name, seed.website, json(seed)])).rows[0].id;
       if (seed.method === 'Wikidata') {
@@ -159,10 +167,27 @@ export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources
       }
       await db.query(`INSERT INTO origin_investigations(id,run_id,business_id,seeds,stage,checkpoint,discovery_order)
         VALUES($1,$2,$3,$4,'RESOLVING',$5,$6) ON CONFLICT(run_id,business_id)
-        DO UPDATE SET seeds=origin_investigations.seeds || EXCLUDED.seeds`,
-      [randomUUID(), run.id, businessId, json([seed]), json(emptyCheckpoint()), position]);
+        DO UPDATE SET seeds=origin_investigations.seeds || EXCLUDED.seeds
+        WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(origin_investigations.seeds) AS old(seed)
+          WHERE old.seed->>'sourceKey'=$7 AND old.seed->>'website'=$8)
+        AND jsonb_array_length(origin_investigations.seeds)<30`,
+      [randomUUID(), run.id, businessId, json([seed]), json(emptyCheckpoint()), order, seed.sourceKey, seed.website]);
+      if (!businessIds.has(businessId)) order++;
+      businessIds.add(businessId);
+      if (!known) selected.set(host, businessId);
     }
-    await db.query('UPDATE origin_runs SET sources=$2,error=NULL WHERE id=$1', [run.id, json(sources)]);
+    const combined = new Map(run.sources?.map(source => [source.adapter, source]));
+    for (const source of sources) {
+      const earlier = combined.get(source.adapter);
+      combined.set(source.adapter, earlier ? {
+        ...source, status: earlier.status === 'OK' ? 'OK' : source.status,
+        discovered: earlier.discovered + source.discovered, elapsedMs: earlier.elapsedMs + source.elapsedMs,
+        searches: (earlier.searches ?? 0) + (source.searches ?? 0), queryIndex: source.queryIndex ?? earlier.queryIndex,
+      } : source);
+    }
+    const nextRound = refill && businessIds.size < run.config.candidateLimit ? (run.discovery_round ?? 0) + 1 : null;
+    await db.query('UPDATE origin_runs SET sources=$2,discovery_round=$3,error=NULL WHERE id=$1',
+      [run.id, json([...combined.values()]), nextRound]);
   });
 }
 
@@ -181,7 +206,8 @@ export async function nextJob(pool: Pool, run: Run) {
     ) SELECT j.*,b.domain,b.name,b.website,b.signature FROM started j JOIN origin_businesses b ON b.id=j.business_id`, [run.id])).rows[0];
   });
   if (job) {
-    const target = job.seeds.find(seed => seed.method === 'BUSINESS_SEARCH' && domain(seed.website) === job.domain && new URL(seed.website).pathname !== '/');
+    const target = job.seeds.filter(seed => seed.method === 'BUSINESS_SEARCH' && domain(seed.website) === job.domain && new URL(seed.website).pathname !== '/')
+      .sort((a, b) => (b.discoveryPriority ?? 0) - (a.discoveryPriority ?? 0))[0];
     if (target) job.website = target.website;
   }
   return job ?? undefined;

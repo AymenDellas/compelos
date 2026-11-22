@@ -12,6 +12,13 @@ export const businessSearchCredit = 'Serper organic search, discovery pointers o
 const markets = ['United States', 'United Kingdom', 'Canada'];
 const marketQueries = ['("United States" OR Chicago OR Atlanta OR Boston)', '("United Kingdom" OR London OR Manchester OR Edinburgh)',
   '(Canada OR Toronto OR Vancouver OR Calgary)'];
+const regionalQueries = [
+  marketQueries,
+  ['("New York" OR Philadelphia OR Raleigh)', '(Bristol OR Leeds OR Cambridge)', '(Ottawa OR Montreal OR Waterloo)'],
+  ['(Seattle OR Denver OR Austin)', '(Birmingham OR Glasgow OR Oxford)', '(Edmonton OR Victoria OR Halifax)'],
+  ['("San Francisco" OR "San Diego" OR "Los Angeles")', '(Reading OR Brighton OR Belfast)', '(Winnipeg OR Saskatoon OR Kelowna)'],
+  ['(Dallas OR Minneapolis OR Nashville)', '(Liverpool OR Newcastle OR Cardiff)', '(Mississauga OR Hamilton OR Burnaby)'],
+];
 const specialties = [
   '"executive coaching" ("leadership team" OR "executive team")',
   '("CEO coaching" OR "founder coaching" OR "strategic leadership adviser")',
@@ -27,14 +34,21 @@ const service = /\b(?:coach(?:es|ing)?|leadership development|leadership advis(?
 const directory = /\b(?:top \d+|best \d+|find a coach|coach(?:es|ing) directory|certification|training for coaches|job openings)\b/i;
 const genericName = /^(?:(?:home|services|programs?|offerings|work with us|about us)$|(?:executive|leadership|career|business|CEO|founder|corporate|team) (?:coaches?|coaching)(?:\s+(?:in|services|programs?)\b.*)?$)/i;
 
+const offer = /\b(?:coaching (?:program(?:me)?s?|services?|packages?|engagements?)|one[- ]on[- ]one|1:1|private coaching|coaching sessions)\b/i;
+const commercial = /\b(?:case stud(?:y|ies)|client (?:results|stories|success)|published fee|pricing|\d+[- ]month|\d+ sessions)\b/i;
+const action = /\b(?:(?:schedule|book|request) (?:a |your )?(?:discovery |introductory |strategy )?(?:call|consultation)|work with (?:me|us))\b/i;
+const promotion = /\b(?:webinars?|workshops?|cohorts?|newsletter|podcast episodes?|masterclasses|register|applications open)\b/i;
+
 export function businessSearchQuery(attempt: number) {
   const marketIndex = attempt % markets.length;
   const specialty = specialties[Math.floor(attempt / markets.length) % specialties.length];
   const intents = ['("book a discovery call" OR "schedule a consultation" OR "book a call")',
     '("client results" OR "case study" OR "leadership coaching program")', '("executive briefing" OR "coaching program" OR "coaching enquiry")',
     '("book a call" OR "schedule a consultation" OR "discovery call") ("client results" OR "case studies" OR "client stories" OR "coaching engagement")'];
-  const rotation = Math.floor(attempt / (markets.length * specialties.length)) % intents.length;
-  const market = rotation === 3 ? marketQueries[marketIndex] : `"${markets[marketIndex]}"`;
+  const batch = Math.floor(attempt / (markets.length * specialties.length));
+  const regions = regionalQueries[Math.floor(batch / intents.length) % regionalQueries.length];
+  const rotation = batch % intents.length;
+  const market = batch >= intents.length || rotation === 3 ? regions[marketIndex] : '"' + markets[marketIndex] + '"';
   return `${specialty} ${market} ${intents[rotation]} -jobs -certification -directory -site:linkedin.com -site:indeed.com`;
 }
 
@@ -45,24 +59,32 @@ export function businessSearchSeeds(rows: unknown[], limit: number, campaign = f
     const { link, title, snippet } = row as Record<string, unknown>;
     if (typeof link !== 'string' || typeof title !== 'string' || directory.test(title) || /\b(?:frequently asked questions|what it is and when|request for proposals|contract for)\b/i.test(title)) continue;
     const description = typeof snippet === 'string' ? snippet.slice(0, 500) : '';
-    if (!service.test(`${title} ${description}`)) continue;
+    const text = `${title} ${description}`;
+    if (!service.test(text)) continue;
     let url: URL;
     try { url = documentUrl(link); } catch { continue; }
     const host = domain(url.href);
-    const key = campaign ? url.href : host;
-    if (results.has(key) || /\.(?:gov|gov\.uk|edu)$/.test(host) || excludedDomains.some(blocked => host === blocked || host.endsWith(`.${blocked}`))) continue;
-    if (/\/(?:directory|jobs?|certification)(?:\/|$)/i.test(url.pathname) || (!campaign && /\/(?:blog|news|articles?|podcast)(?:\/|$)/i.test(url.pathname))) continue;
+    const path = url.pathname.replace(/[-_/]/g, ' ');
+    if (/\.(?:gov|gov\.uk|edu|university)$/.test(host) || excludedDomains.some(blocked => host === blocked || host.endsWith(`.${blocked}`))) continue;
+    if (/\/(?:directory|jobs?|certification|terms(?:[-_]of[-_]use)?|privacy(?:[-_]policy)?|cookies?)(?:\/|$)/i.test(url.pathname)) continue;
+    const supportingCase = !campaign && /\b(?:case stud(?:y|ies)|client (?:results|stories|success))\b/i.test(path);
+    if (campaign && !promotion.test(`${text} ${path}`)) continue;
+    if (!campaign && !supportingCase && /\/(?:blog|news|articles?|library|podcasts?)(?:\/|$)/i.test(url.pathname)) continue;
+    const key = campaign || supportingCase ? url.href : host;
     const parts = title.slice(0, 260).split(/\s*(?:\||[–—])\s*|\s+-\s+/).map(item => item.trim());
     const name = parts.find(item => item.length >= 3 && item.length <= 90 && !service.test(item) && !genericName.test(item))
       ?? parts.find(item => item.length >= 3 && item.length <= 90 && !genericName.test(item));
     if (!name) continue;
-    results.set(key, { method: 'BUSINESS_SEARCH', name, website: campaign ? new URL('/', url).href : url.href, source: url.href,
-      sourceKey: campaign ? `campaign:${hash(url.href)}` : `business-search:${host}`, discoveryPriority: campaign ? 7 : 5,
+    const score = (campaign ? 6 : supportingCase ? 4 : 5) + Number(offer.test(text)) * 3 +
+      Number(commercial.test(text)) * 2 + Number(action.test(text)) * 3;
+    if ((results.get(key)?.discoveryPriority ?? 0) >= score) continue;
+    results.set(key, { method: 'BUSINESS_SEARCH', name, website: campaign || supportingCase ? new URL('/', url).href : url.href, source: url.href,
+      sourceKey: campaign ? `campaign:${hash(url.href)}` : supportingCase ? `case:${hash(url.href)}` : `business-search:${host}`, discoveryPriority: score,
       ...(campaign ? { activityLinks: [url.href] } : {}),
+      ...(supportingCase ? { commercialLinks: [url.href] } : {}),
       excerpt: `Serper indexed this URL under a title identifying ${name}. The business, offer and market require first-party verification.` });
-    if (results.size >= limit) break;
   }
-  return [...results.values()];
+  return [...results.values()].sort((a, b) => (b.discoveryPriority ?? 0) - (a.discoveryPriority ?? 0)).slice(0, limit);
 }
 
 export function createEvidenceFollowUp() {
@@ -110,14 +132,16 @@ export function createCampaignSearch() {
 }
 
 export function campaignSearchQuery(attempt: number, activityDays: number) {
-  const market = markets[attempt % markets.length];
+  const marketIndex = attempt % markets.length;
   const topic = specialties[attempt % specialties.length].split(' (')[0];
   const since = new Date(Date.now() - activityDays * 86_400_000).toISOString().slice(0, 10);
   const formats = ['("join" OR "register") (webinar OR workshop)', '("newsletter" OR "podcast") ("subscribe" OR "work with me")',
     '("applications open" OR "next cohort" OR "reserve your spot")',
     '(workshop OR webinar OR "upcoming events") ("book a call" OR "schedule a consultation" OR "discovery call")'];
   const format = formats[(attempt % markets.length + Math.floor(attempt / markets.length)) % formats.length];
-  return `${topic} "${market}" ${format} after:${since} -site:linkedin.com -site:youtube.com -site:reddit.com -site:eventbrite.com`;
+  const regional = regionalQueries[Math.floor(attempt / 15) % regionalQueries.length];
+  const market = attempt < 15 ? '"' + markets[marketIndex] + '"' : regional[marketIndex];
+  return `${topic} ${market} ${format} after:${since} -site:linkedin.com -site:youtube.com -site:reddit.com -site:eventbrite.com`;
 }
 
 export function activitySearchPointers(rows: unknown[]) {

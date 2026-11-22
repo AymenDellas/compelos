@@ -41,6 +41,7 @@ export type Seed = {
   publisherLinks?: string[];
   discoveryPriority?: number;
   activityLinks?: string[];
+  commercialLinks?: string[];
   contract?: { amountGbp: number; awardedOn: string; buyer?: string };
   publication?: { checkedAt: string; permissionPage: string; digest: string; use?: 'FACTS_ONLY'; title?: string; recordUrl?: string };
 };

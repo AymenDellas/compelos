@@ -61,6 +61,24 @@ test('a general study cannot count as the provider’s own coaching program', as
   }
 });
 
+test('an indexed, unlinked case is read to verify commercial evidence on the official site', async () => {
+  const homepage = page.replace('<p>Coaching engagement pricing is $5,000.</p>', '');
+  const caseUrl = official + 'engagement/tern';
+  const base = fixture(homepage);
+  const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
+    if (args[0] === caseUrl) return { url: caseUrl, status: 200, headers: { 'content-type': 'text/html' },
+      body: Buffer.from('<main><h1>Case study: Tern Manufacturing</h1><p>Tern Manufacturing engaged us to deliver executive coaching for its directors.</p></main>') };
+    return base.web.document(...args);
+  } };
+  const job = candidate();
+  job.seeds.push({ ...seed, source: caseUrl, sourceKey: 'case:tern', method: 'BUSINESS_SEARCH', commercialLinks: [caseUrl] });
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const researched = await investigate(web, { ...job, checkpoint }, settings, signal());
+  const commercial = researched.checkpoint.gates.find(item => item.name === 'substance');
+  assert.equal(commercial?.state, 'VERIFIED');
+  assert.ok(researched.checkpoint.evidence.some(item => item.url === caseUrl && commercial?.evidence.includes(item.id)));
+});
+
 test('an unanswered FAQ heading cannot establish a market, but the official postal notice can', async () => {
   const question = '<h2>Do you only work with UK businesses?</h2>';
   const html = page.replace('<p>We serve executive teams in the United Kingdom.</p>', question)

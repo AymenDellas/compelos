@@ -6,7 +6,7 @@ import type { Adapter } from './discovery';
 import { modelAdvisory } from './model';
 import { decide, domain } from './policy';
 import type { PublisherPointer, Seed, SourceResult } from './policy';
-import { createPublicWeb } from './public-web';
+import { createPublicWeb, PublicFailure } from './public-web';
 import type { PublicWeb } from './public-web';
 import { hasSchema } from './read-model';
 import { coachingContracts, procurementAdapter, procurementCredit, tenderAdapter } from './procurement';
@@ -29,10 +29,12 @@ function chooseSource(history: SourceResult[], quality: SourceQuality[], names: 
   }).sort((a, b) => explore ? a.attempts - b.attempts : b.yieldPerSecond - a.yieldPerSecond || a.attempts - b.attempts)[0]?.name;
 }
 
-export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { runId?: string; web?: PublicWeb } = {}) {
+export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
+  runId?: string; web?: PublicWeb; businessSearch?: ReturnType<typeof createBusinessSearch>;
+} = {}) {
   const shutdown = new AbortController();
   const web = options.web ?? createPublicWeb(limitRequest);
-  const search = options.web ? undefined : createBusinessSearch();
+  const search = options.businessSearch ?? (options.web ? undefined : createBusinessSearch());
   const activitySearch = options.web ? undefined : createActivitySearch();
   const campaignSearch = options.web ? undefined : createCampaignSearch();
   const followUp = options.web ? undefined : createEvidenceFollowUp();
@@ -43,27 +45,24 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
 
   async function discovery(run: Run, signal: AbortSignal) {
     const history = await sourceHistory(pool);
-    const quality = await sourceQuality(pool);
-    const explore = history.filter(item => item.adapter.startsWith('Wikidata')).length % 3 === 0;
-    const previous = history.find(item => item.adapter.startsWith('Wikidata') && item.status === 'OK')?.adapter;
-    const selection = chooseSource(history, quality, niches.map(niche => `Wikidata · ${niche}`).filter(name => name !== previous), explore);
-    const strategy = selection?.split(' · ')[1] ?? niches[0];
     const limit = run.config.candidateLimit;
     const hold = (name: string) => history.find(item => item.adapter === name && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
     const adapters: Adapter[] = [];
     const batch = <T,>(name: string, count: number, lookup: (index: number, signal: AbortSignal) => Promise<T[]>,
       reduce: (results: T[][]) => ReturnType<Adapter['run']>) => {
       const previous = history.find(item => item.adapter === name && item.queryIndex !== undefined)?.queryIndex ?? -1;
-      const adapter: Adapter = { name, credit: businessSearchCredit, queryIndex: previous + count, retryAt: hold(name), run: async () => {
+      const adapter: Adapter = { name, credit: businessSearchCredit, retryAt: hold(name), run: async () => {
         const results: T[][] = [];
         for (let start = 1; start <= count && !signal.aborted; start += 3) {
           const keys = Array.from({ length: Math.min(count - start + 1, 3) }, (_, index) => previous + start + index);
           const queries = await Promise.allSettled(keys.map(index => limitRequest(() => runSearch(pool, run, `${name}:${index}`,
             () => lookup(index, perSource(signal, 14_000))))));
+          adapter.queryIndex = keys[keys.length - 1];
           for (const outcome of queries) if (outcome.status === 'fulfilled' && outcome.value) results.push(outcome.value);
           const failure = queries.find(outcome => outcome.status === 'rejected');
           if (failure) {
             if (!results.length) throw failure.reason;
+            if (failure.reason instanceof PublicFailure) adapter.retryAt = failure.reason.retryAt;
             break;
           }
         }
@@ -74,6 +73,30 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
     };
     const ranked = async (groups: Seed[][]) => Array.from({ length: 10 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : []))
       .flat();
+    const canRefill = () => Boolean((search && !hold(businessSearchName)) || (campaignSearch && !hold(campaignSearchName)));
+    if (run.discovery_round !== null) {
+      const { rows: [{ queued }] } = await pool.query<{ queued: number }>(
+        "SELECT count(*)::int AS queued FROM origin_investigations WHERE run_id=$1 AND checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'", [run.id]);
+      const gap = limit - queued;
+      if (gap > 0) {
+        if (search && !hold(businessSearchName)) {
+          batch(businessSearchName, Math.min(6, Math.ceil(gap / 2)), (index, requestSignal) => search(index, 10, requestSignal), ranked);
+        }
+        if (campaignSearch && !hold(campaignSearchName)) {
+          batch(campaignSearchName, Math.min(3, Math.ceil(gap / 8)),
+            (index, requestSignal) => campaignSearch(index, run.config.activityDays, requestSignal), ranked);
+        }
+      }
+      const found = await discover(adapters);
+      signal.throwIfAborted();
+      await saveDiscovery(pool, run, found.seeds, found.results, adapters.length > 0 && run.discovery_round < 2);
+      return;
+    }
+    const quality = await sourceQuality(pool);
+    const explore = history.filter(item => item.adapter.startsWith('Wikidata')).length % 3 === 0;
+    const previous = history.find(item => item.adapter.startsWith('Wikidata') && item.status === 'OK')?.adapter;
+    const selection = chooseSource(history, quality, niches.map(niche => `Wikidata · ${niche}`).filter(name => name !== previous), explore);
+    const strategy = selection?.split(' · ')[1] ?? niches[0];
     if (search) {
       batch(businessSearchName, Math.max(3, Math.ceil(limit / 5)), (index, requestSignal) => search(index, 10, requestSignal), ranked);
     }
@@ -133,7 +156,7 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
     // PostgreSQL applies the candidate cap after excluding previously processed businesses.
     const found = await discover(adapters, undefined, historic);
     signal.throwIfAborted();
-    await saveDiscovery(pool, run, found.seeds, found.results);
+    await saveDiscovery(pool, run, found.seeds, found.results, canRefill());
   }
 
   async function runOnce() {
@@ -149,7 +172,7 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: { r
     if (!run) { nextProbe = Date.now() + 12_000; return false; }
     const signal = perSource(shutdown.signal, Math.max(1, Math.min(74_000, run.deadline_at.getTime() - Date.now())));
     try {
-      if (!run.sources) {
+      if (!run.sources || run.discovery_round !== null) {
         try { await discovery(run, signal); }
         catch (error) { if (!signal.aborted) throw error; }
       }

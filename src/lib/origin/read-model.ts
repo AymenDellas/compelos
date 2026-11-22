@@ -10,7 +10,8 @@ type DB = Pool | PoolClient;
 
 export type RunSummary = {
   id: string; state: string; created_at: string; started_at: string | null; finished_at: string | null;
-  sources: SourceResult[] | null; error: string | null; counts: Record<string, number>;
+  sources: SourceResult[] | null; error: string | null; counts: Record<string, number>; candidate_target: number;
+  discovery_pending: boolean;
 };
 export type Opportunity = {
   id: string; business_id: string; name: string; website: string; offer: string; country: string;
@@ -71,6 +72,8 @@ export async function sourceReadiness(db: DB) {
 }
 
 const summarySql = `SELECT r.id,r.state,r.created_at,r.started_at,r.finished_at,r.error,r.sources,
+  COALESCE((r.config->>'candidateLimit')::int,${defaults.candidateLimit}) AS candidate_target,
+  (r.sources IS NULL OR to_jsonb(r)->>'discovery_round' IS NOT NULL) AS discovery_pending,
   COALESCE((SELECT jsonb_object_agg(key,n) FROM (SELECT CASE WHEN checkpoint->>'skippedAsDuplicate'='true' THEN 'SKIPPED' ELSE COALESCE(outcome,stage) END AS key,count(*)::int AS n
     FROM origin_investigations WHERE run_id=r.id GROUP BY 1) c),'{}') AS counts FROM origin_runs r`;
 

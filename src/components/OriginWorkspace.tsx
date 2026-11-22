@@ -67,6 +67,7 @@ export default function OriginWorkspace() {
 
   const active = data?.runs.find(run => activeStates.includes(run.state));
   const latest = data?.runs[0];
+  const latestCount = latest ? candidateCount(latest) : 0;
   return <section className="origin-workspace" aria-label="ORIGIN workstation">
     <div className="origin-toolbar">
       <nav className="origin-tabs" aria-label="ORIGIN sections">
@@ -83,7 +84,7 @@ export default function OriginWorkspace() {
     {data && !dossierId && <>
       {tab === 'Overview' && <>
         <div className="origin-metrics">
-          <Metric label="Candidates in latest run" value={Object.values(latest?.counts ?? {}).reduce((sum, value) => sum + value, 0)} />
+          <Metric label="Candidates in latest run" value={latest ? `${latestCount} / ${latest.candidate_target}` : 0} />
           <Metric label="Rejected" value={latest?.counts.REJECTED ?? 0} />
           <Metric label="Unresolved" value={latest?.counts.UNRESOLVED ?? 0} />
           <Metric label="Ready opportunities" value={data.opportunities.length} accent />
@@ -91,10 +92,13 @@ export default function OriginWorkspace() {
         <section className="origin-section">
           <div className="origin-heading"><h2>Investigation runs</h2>{active && <RunActions run={active} busy={busy} mutate={mutate} />}</div>
           {!data.online && <p className="origin-note">Compel OS handles manually started ORIGIN runs while the worker is offline. Keep Compel OS open during the run.</p>}
-          {data.runs.length ? <div className="origin-scroll"><table><thead><tr><th>Queued at</th><th>Status</th><th>Investigations</th><th>Completed</th><th>Finished at</th></tr></thead>
+          {latest?.state === 'RUNNING' && latest.discovery_pending && <p className="origin-note">Searching for up to {latest.candidate_target} new businesses. Previously investigated businesses are skipped.</p>}
+          {latest?.state === 'COMPLETED' && latestCount < latest.candidate_target && <p className="origin-note">Discovery found {latestCount} of the {latest.candidate_target} requested new businesses within the run’s search limits.</p>}
+          {data.runs.length ? <div className="origin-scroll"><table><thead><tr><th>Queued at</th><th>Status</th><th>Investigations</th><th>Completed</th><th>Qualified</th><th>Finished at</th></tr></thead>
             <tbody>{data.runs.map(run => <tr key={run.id} title={run.error ?? undefined}>
-              <td>{stamp(run.created_at)}</td><td><State value={run.state} /></td><td>{Object.values(run.counts).reduce((sum, count) => sum + count, 0)}</td>
-              <td>{(run.counts.QUALIFIED ?? 0) + (run.counts.REJECTED ?? 0) + (run.counts.UNRESOLVED ?? 0)}</td><td>{stamp(run.finished_at)}</td>
+              <td>{stamp(run.created_at)}</td><td><State value={run.state} /></td><td>{candidateCount(run)} / {run.candidate_target}</td>
+              <td>{(run.counts.QUALIFIED ?? 0) + (run.counts.REJECTED ?? 0) + (run.counts.UNRESOLVED ?? 0)}</td>
+              <td>{run.counts.QUALIFIED ?? 0}</td><td>{stamp(run.finished_at)}</td>
             </tr>)}</tbody></table></div> : <p className="origin-empty">There are no investigation runs yet.</p>}
         </section>
         {!!data.gateProgress?.length && <section className="origin-section">
@@ -123,7 +127,11 @@ export default function OriginWorkspace() {
   </section>;
 }
 
-function Metric({ label, value, accent = false }: { label: string; value: number; accent?: boolean }) {
+function candidateCount(run: RunSummary) {
+  return Object.entries(run.counts).reduce((sum, [state, count]) => state === 'SKIPPED' ? sum : sum + count, 0);
+}
+
+function Metric({ label, value, accent = false }: { label: string; value: number | string; accent?: boolean }) {
   return <div><span>{label}</span><strong data-accent={accent}>{value}</strong></div>;
 }
 

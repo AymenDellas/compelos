@@ -731,7 +731,7 @@ function detailPages(pages: Page[], own: (url: URL) => boolean) {
   const ranked = targets.map(link => {
     const label = `${link.label} ${new URL(link.url).pathname.replace(/[-_/]/g, ' ')}`;
     const score = Number(relevantCoach.test(label)) * 6 + Number(offerLink.test(label)) * 2 + Number(link.main) -
-      Number(/\b(?:podcast|blog|articles|news|speaking|free training)\b/i.test(label)) * 6;
+      Number(/\b(?:podcasts?|blog|articles?|library|news|speaking|free training|case stud(?:y|ies)|client stor(?:y|ies)|testimonials?)\b/i.test(label)) * 9;
     return { link, score };
   });
   const offers = ranked.filter(value => value.score >= 2).sort((a, b) => b.score - a.score).slice(0, 2).map(value => value.link);
@@ -761,7 +761,9 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   }
   const discoveredCampaigns = [...new Set(job.seeds.flatMap(seed => seed.activityLinks ?? []))].filter(url => own(new URL(url)) && !pages.some(item => item.url === url))
     .slice(0, 2).map(url => ({ url, label: 'Discovered promotion' }));
-  const planned = [...new Map([...detailPages(pages, own), ...discoveredCampaigns].map(link => [link.url, link])).values()];
+  const discoveredCases = [...new Set(job.seeds.flatMap(seed => seed.commercialLinks ?? []))].filter(url => own(new URL(url)) && !pages.some(item => item.url === url))
+    .slice(0, 2).map(url => ({ url, label: 'Discovered coaching case' }));
+  const planned = [...new Map([...detailPages(pages, own), ...discoveredCampaigns, ...discoveredCases].map(link => [link.url, link])).values()];
   const details = await Promise.all(planned.map(link => inspect(web, link.url, signal, 'Official detail page', own)));
   for (const [index, detail] of details.entries()) {
     addJourney(checkpoint, page.url, detail, planned[index].label);
