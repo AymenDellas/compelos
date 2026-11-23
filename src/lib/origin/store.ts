@@ -9,7 +9,11 @@ import type { PublisherFeed } from './sources';
 type DB = Pool | PoolClient;
 const json = JSON.stringify;
 export { domain };
-export type Run = { id: string; state: string; config: Settings; sources: SourceResult[] | null; discovery_round: number | null; publisher_feeds: PublisherFeed[] | null; lease: string; deadline_at: Date; started_at: Date; control_revision: number };
+export type Run = {
+  id: string; state: string; config: Settings; sources: SourceResult[] | null; discovery_round: number | null;
+  batch_start: number; batch_search_start: number; publisher_feeds: PublisherFeed[] | null;
+  lease: string; deadline_at: Date; started_at: Date; control_revision: number;
+};
 export type Job = {
   id: string; business_id: string; name: string; website: string; domain: string; seeds: Seed[];
   stage: 'RESOLVING' | 'INVESTIGATING' | 'VERIFYING'; checkpoint: Checkpoint;
@@ -38,8 +42,9 @@ export function migrate(pool: Pool) {
   });
 }
 
-export const readConfig = (value?: Settings) => settingsSchema.parse({ ...defaults, ...value });
+export const readConfig = (value?: Partial<Settings>) => settingsSchema.parse({ ...defaults, ...value });
 type Configuration = { config: Settings; publisher_feeds: PublisherFeed[] | null; next_run_at: Date | null; worker_seen_at: Date | null; worker_policy_version: string | null };
+const hasQualifiedTarget = "COALESCE((config->>'qualifiedTarget')::int,0)>0";
 
 export async function configuration(db: DB) {
   return (await db.query<Configuration>('SELECT config,publisher_feeds,next_run_at,worker_seen_at,worker_policy_version FROM origin_settings WHERE id=1')).rows[0];
@@ -84,7 +89,9 @@ export function patchSettings(pool: Pool, patch: Partial<Settings>) {
 export async function control(db: DB, id: string, action: 'pause' | 'resume' | 'cancel') {
   const change = {
     pause: `state='PAUSED',paused_at=now()`,
-    resume: `state=CASE WHEN started_at IS NULL THEN 'QUEUED' ELSE 'RUNNING' END,deadline_at=deadline_at+(now()-paused_at),paused_at=NULL`,
+    resume: `state=CASE WHEN started_at IS NULL THEN 'QUEUED' ELSE 'RUNNING' END,
+      deadline_at=CASE WHEN ${hasQualifiedTarget} AND deadline_at<=paused_at THEN now()+make_interval(mins => (config->>'runMinutes')::int)
+      ELSE deadline_at+(now()-paused_at) END,paused_at=NULL,error=NULL`,
     cancel: `state='CANCELLED',finished_at=now(),lease=NULL,lease_until=NULL`,
   };
   const states = { pause: ['QUEUED', 'RUNNING'], resume: ['PAUSED'], cancel: ['QUEUED', 'RUNNING', 'PAUSED'] };
@@ -101,7 +108,11 @@ export async function claimRun(pool: Pool, target?: string) {
         await db.query('UPDATE origin_settings SET next_run_at=now()+make_interval(mins => $1) WHERE id=1', [config.intervalMinutes]);
       }
     }
-    await db.query(`UPDATE origin_runs SET state='FAILED',finished_at=now(),error='Run time budget elapsed.',lease=NULL,lease_until=NULL
+    await db.query(`UPDATE origin_runs SET state=CASE WHEN ${hasQualifiedTarget} THEN 'PAUSED' ELSE 'FAILED' END,
+      paused_at=CASE WHEN ${hasQualifiedTarget} THEN now() ELSE NULL END,
+      finished_at=CASE WHEN ${hasQualifiedTarget} THEN NULL ELSE now() END,lease=NULL,lease_until=NULL,
+      error=CASE WHEN ${hasQualifiedTarget} THEN 'Time budget elapsed. Resume to continue toward this qualified target.'
+      ELSE 'Run time budget elapsed.' END
       WHERE state='RUNNING' AND deadline_at<=now() AND (lease_until IS NULL OR lease_until<=now()) AND ($1::uuid IS NULL OR id=$1)`, [target ?? null]);
     const { rows: [run] } = await db.query<Run>(`UPDATE origin_runs SET state='RUNNING',lease=$1,lease_until=now()+interval '95 seconds',
       started_at=COALESCE(started_at,now()),deadline_at=COALESCE(deadline_at,now()+make_interval(mins => (config->>'runMinutes')::int))
@@ -125,9 +136,51 @@ export async function fenced<T>(pool: Pool, run: Run, action: (db: PoolClient) =
   });
 }
 
+function finishRun(db: PoolClient, id: string, error?: string, qualified?: number) {
+  return db.query(`UPDATE origin_runs SET state=$2,finished_at=now(),error=$3,qualified_at_stop=$4,lease=NULL,lease_until=NULL WHERE id=$1`,
+    [id, error ? 'FAILED' : 'COMPLETED', error ?? null, qualified ?? null]);
+}
+
 export async function finish(pool: Pool, run: Run, error?: string) {
-  return fenced(pool, run, db => db.query(`UPDATE origin_runs SET state=$2,finished_at=now(),error=$3,lease=NULL,lease_until=NULL WHERE id=$1`,
-    [run.id, error ? 'FAILED' : 'COMPLETED', error ?? null]));
+  return fenced(pool, run, db => finishRun(db, run.id, error));
+}
+
+export async function suppressionFilter(db: DB) {
+  const { rows: [table] } = await db.query("SELECT to_regclass('leads') AS name");
+  return table.name ? `EXISTS(SELECT 1 FROM leads l WHERE (to_jsonb(l)->>'do_not_contact')='true'
+    AND lower(regexp_replace(substring(btrim(l.website) FROM '^(?:https?://)?(?:www\\.)?([^/:?#]+)'), '\\.$', ''))=b.domain)` : 'false';
+}
+
+export const includedInvestigation = `j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
+  AND j.checkpoint->>'skippedAfterTarget' IS DISTINCT FROM 'true'`;
+
+export function qualifiedCountSql(runId: string, suppressed: string) {
+  return `(SELECT count(*)::int FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
+    WHERE j.run_id=${runId} AND ${includedInvestigation} AND j.outcome='QUALIFIED'
+    AND j.decision->>'version'='${POLICY_VERSION}' AND j.expires_at>now() AND NOT (${suppressed}))`;
+}
+
+async function qualifiedCount(db: PoolClient, id: string) {
+  const suppressed = await suppressionFilter(db);
+  return (await db.query<{ total: number }>(`SELECT ${qualifiedCountSql('$1', suppressed)} AS total`, [id])).rows[0].total;
+}
+
+async function finishQualifiedTarget(db: PoolClient, id: string, qualified: number) {
+  await db.query(`UPDATE origin_investigations j SET checkpoint=jsonb_set(j.checkpoint,'{skippedAfterTarget}','true')
+    WHERE j.run_id=$1 AND j.stage NOT IN ('COMPLETED','FAILED') AND ${includedInvestigation}`, [id]);
+  await finishRun(db, id, undefined, qualified);
+}
+
+export async function advanceQualifiedRun(pool: Pool, run: Run, searches: number) {
+  return fenced(pool, run, async db => {
+    const qualified = await qualifiedCount(db, run.id);
+    if (qualified >= run.config.qualifiedTarget) return finishQualifiedTarget(db, run.id, qualified);
+    const { rows: [{ total }] } = await db.query<{ total: number }>(`SELECT count(*)::int AS total FROM origin_investigations j
+      WHERE j.run_id=$1 AND ${includedInvestigation}`, [run.id]);
+    if (total <= run.batch_start) return finishRun(db, run.id, 'Search sources returned no new businesses before the qualified target was reached.', qualified);
+    await db.query(`UPDATE origin_runs SET batch_number=batch_number+1,batch_start=$2,batch_search_start=$3,discovery_round=0
+      WHERE id=$1`, [run.id, total, searches]);
+  });
 }
 
 // Earlier schema versions recorded progress through the stage or an attempt count.
@@ -144,11 +197,13 @@ export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources
       JOIN origin_businesses business ON business.domain=candidate.domain OR business.id=identity.business_id
       WHERE ${processedEarlier}`, [run.id, candidates, seeds.map(seed => seed.sourceKey)]);
     const processed = new Set(rows.map(row => row.domain));
-    const { rows: queued } = await db.query<{ business_id: string; domain: string; discovery_order: number }>(`SELECT j.business_id,b.domain,j.discovery_order
+    const { rows: queued } = await db.query<{ business_id: string; domain: string; discovery_order: number; stage: string }>(`SELECT j.business_id,b.domain,j.discovery_order,j.stage
       FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
-      WHERE j.run_id=$1 AND j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'`, [run.id]);
+      WHERE j.run_id=$1 AND ${includedInvestigation}`, [run.id]);
     const selected = new Map(queued.map(row => [row.domain, row.business_id]));
     const businessIds = new Set(selected.values());
+    const decided = new Set(queued.filter(row => ['COMPLETED', 'FAILED'].includes(row.stage)).map(row => row.business_id));
+    const batchLimit = run.batch_start + run.config.candidateLimit;
     let order = Math.max(-1, ...queued.map(row => row.discovery_order)) + 1;
     for (const [position, seed] of seeds.entries()) {
       const host = candidates[position];
@@ -156,7 +211,8 @@ export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources
       const known = seed.method === 'Wikidata' ? (await db.query<{ business_id: string }>(
         'SELECT business_id FROM origin_identity_keys WHERE key=$1', [seed.sourceKey])).rows[0] : undefined;
       const existing = known?.business_id ?? selected.get(host);
-      if ((!existing || !businessIds.has(existing)) && businessIds.size >= run.config.candidateLimit) continue;
+      if (existing && decided.has(existing)) continue;
+      if ((!existing || !businessIds.has(existing)) && businessIds.size >= batchLimit) continue;
       // An external record changing its official domain is evidence for re-investigation, never an automatic rename or merge.
       const businessId = existing ?? (await db.query<{ id: string }>(`INSERT INTO origin_businesses(id,domain,name,website,seed)
         VALUES($1,$2,$3,$4,$5) ON CONFLICT(domain) DO UPDATE SET domain=EXCLUDED.domain RETURNING id`,
@@ -186,7 +242,7 @@ export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources
         searchAttempts: (earlier.searchAttempts ?? earlier.searches ?? 0) + (source.searchAttempts ?? source.searches ?? 0),
       } : source);
     }
-    const nextRound = refill && businessIds.size < run.config.candidateLimit ? (run.discovery_round ?? 0) + 1 : null;
+    const nextRound = refill && businessIds.size < batchLimit ? (run.discovery_round ?? 0) + 1 : null;
     await db.query('UPDATE origin_runs SET sources=$2,discovery_round=$3,error=NULL WHERE id=$1',
       [run.id, json([...combined.values()]), nextRound]);
   });
@@ -197,14 +253,14 @@ export async function nextJob(pool: Pool, run: Run) {
     // A run queued before this change can still contain duplicates.
     await db.query(`UPDATE origin_investigations j SET checkpoint=jsonb_set(j.checkpoint,'{skippedAsDuplicate}','true')
       FROM origin_businesses business WHERE j.business_id=business.id AND j.run_id=$1
-      AND j.stage NOT IN ('COMPLETED','FAILED') AND j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true' AND ${processedEarlier}`, [run.id]);
+      AND j.stage NOT IN ('COMPLETED','FAILED') AND ${includedInvestigation} AND ${processedEarlier}`, [run.id]);
     return (await db.query<Job>(`WITH selected AS (
-      SELECT id FROM origin_investigations WHERE run_id=$1 AND stage NOT IN ('COMPLETED','FAILED') AND checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
-      ORDER BY CASE stage WHEN 'VERIFYING' THEN 0 WHEN 'RESOLVING' THEN 1 ELSE 2 END,discovery_order,created_at,id LIMIT 1
+      SELECT j.id FROM origin_investigations j WHERE j.run_id=$1 AND j.stage NOT IN ('COMPLETED','FAILED') AND ${includedInvestigation}
+      ORDER BY CASE WHEN j.stage='VERIFYING' THEN 0 WHEN (j.stage='INVESTIGATING')=$2 THEN 1 ELSE 2 END,discovery_order,created_at,id LIMIT 1
     ), started AS (
       UPDATE origin_investigations j SET processing_started_at=COALESCE(j.processing_started_at,now())
       FROM selected WHERE j.id=selected.id RETURNING j.*
-    ) SELECT j.*,b.domain,b.name,b.website,b.signature FROM started j JOIN origin_businesses b ON b.id=j.business_id`, [run.id])).rows[0];
+    ) SELECT j.*,b.domain,b.name,b.website,b.signature FROM started j JOIN origin_businesses b ON b.id=j.business_id`, [run.id, run.config.qualifiedTarget > 0])).rows[0];
   });
   if (job) {
     const target = job.seeds.filter(seed => seed.method === 'BUSINESS_SEARCH' && domain(seed.website) === job.domain && new URL(seed.website).pathname !== '/')
@@ -263,6 +319,10 @@ export async function saveStage(pool: Pool, run: Run, job: Job, checkpoint: Chec
     if (decision) {
       await db.query(`UPDATE origin_businesses SET investigated_at=now(),signature=COALESCE($2,signature) WHERE id=$1`,
         [job.business_id, checkpoint.signature ? json(checkpoint.signature) : null]);
+    }
+    if (run.config.qualifiedTarget && decision?.outcome === 'QUALIFIED') {
+      const qualified = await qualifiedCount(db, run.id);
+      if (qualified >= run.config.qualifiedTarget) await finishQualifiedTarget(db, run.id, qualified);
     }
   });
 }

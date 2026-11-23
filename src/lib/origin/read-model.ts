@@ -2,7 +2,7 @@ import type { Pool, PoolClient } from 'pg';
 import { readModelConfig } from './model';
 import { defaults, POLICY_VERSION } from './policy';
 import type { Checkpoint, Decision, Outcome, Settings, SourceResult } from './policy';
-import { configuration, sourceHistory, sourceQuality } from './store';
+import { configuration, includedInvestigation, qualifiedCountSql, readConfig, sourceHistory, sourceQuality, suppressionFilter } from './store';
 import type { SourceQuality } from './store';
 import { approvedFeeds, independentFeedCount } from './sources';
 
@@ -11,7 +11,7 @@ type DB = Pool | PoolClient;
 export type RunSummary = {
   id: string; state: string; created_at: string; started_at: string | null; finished_at: string | null;
   sources: SourceResult[] | null; error: string | null; counts: Record<string, number>; candidate_target: number;
-  discovery_pending: boolean;
+  discovery_pending: boolean; batch_number: number; qualified_target: number; qualified_progress: number | null;
 };
 export type Opportunity = {
   id: string; business_id: string; name: string; website: string; offer: string; country: string;
@@ -30,12 +30,6 @@ export async function hasSchema(pool: DB) {
     AND attname='worker_policy_version' AND NOT attisdropped) AS ready`)).rows[0].ready);
 }
 
-async function suppressionFilter(pool: DB) {
-  const { rows: [table] } = await pool.query("SELECT to_regclass('leads') AS name");
-  return table.name ? `EXISTS(SELECT 1 FROM leads l WHERE (to_jsonb(l)->>'do_not_contact')='true'
-    AND lower(regexp_replace(substring(btrim(l.website) FROM '^(?:https?://)?(?:www\\.)?([^/:?#]+)'), '\\.$', ''))=b.domain)` : 'false';
-}
-
 const currentEvidence = `COALESCE(j.decision->>'version'=$2 AND j.expires_at>now(),false)`;
 
 async function qualifiedOpportunities(pool: DB, limit: number, run: string | null, view: 'ready' | 'saved') {
@@ -44,8 +38,8 @@ async function qualifiedOpportunities(pool: DB, limit: number, run: string | nul
     j.checkpoint->>'offer' AS offer,j.checkpoint->>'country' AS country,j.checkpoint->>'contact' AS contact,
     (SELECT jsonb_array_length(g->'evidence') FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='acquisition') AS acquisition_sources,
     (SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='opportunity') AS opportunity
-    FROM origin_businesses b JOIN LATERAL (SELECT * FROM origin_investigations WHERE business_id=b.id
-      AND checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
+    FROM origin_businesses b JOIN LATERAL (SELECT j.* FROM origin_investigations j WHERE business_id=b.id
+      AND ${includedInvestigation}
       ORDER BY created_at DESC,id DESC LIMIT 1) j ON true
     WHERE j.outcome='QUALIFIED' AND ${view === 'ready' ? currentEvidence : `NOT ${currentEvidence}`}
       AND NOT (${suppressed}) AND ($3::uuid IS NULL OR j.run_id=$3)
@@ -71,18 +65,22 @@ export async function sourceReadiness(db: DB) {
   }
 }
 
-const summarySql = `SELECT r.id,r.state,r.created_at,r.started_at,r.finished_at,r.error,r.sources,
+const qualifiedTarget = `COALESCE((r.config->>'qualifiedTarget')::int,0)`;
+const summarySql = (suppressed: string) => `SELECT r.id,r.state,r.created_at,r.started_at,r.finished_at,r.error,r.sources,
   COALESCE((r.config->>'candidateLimit')::int,${defaults.candidateLimit}) AS candidate_target,
+  COALESCE((to_jsonb(r)->>'batch_number')::int,1) AS batch_number,
+  ${qualifiedTarget} AS qualified_target,
+  CASE WHEN ${qualifiedTarget}>0 THEN COALESCE((to_jsonb(r)->>'qualified_at_stop')::int,${qualifiedCountSql('r.id', suppressed)}) END AS qualified_progress,
   (r.sources IS NULL OR to_jsonb(r)->>'discovery_round' IS NOT NULL) AS discovery_pending,
-  COALESCE((SELECT jsonb_object_agg(key,n) FROM (SELECT CASE WHEN checkpoint->>'skippedAsDuplicate'='true' THEN 'SKIPPED' ELSE COALESCE(outcome,stage) END AS key,count(*)::int AS n
-    FROM origin_investigations WHERE run_id=r.id GROUP BY 1) c),'{}') AS counts FROM origin_runs r`;
+  COALESCE((SELECT jsonb_object_agg(key,n) FROM (SELECT CASE WHEN ${includedInvestigation} THEN COALESCE(outcome,stage) ELSE 'SKIPPED' END AS key,count(*)::int AS n
+    FROM origin_investigations j WHERE run_id=r.id GROUP BY 1) c),'{}') AS counts FROM origin_runs r`;
 
 export async function runSummary(db: DB, id: string) {
-  return (await db.query<RunSummary>(`${summarySql} WHERE r.id=$1`, [id])).rows[0];
+  return (await db.query<RunSummary>(`${summarySql(await suppressionFilter(db))} WHERE r.id=$1`, [id])).rows[0];
 }
 
 export async function listRuns(db: DB, limit = 12) {
-  return (await db.query<RunSummary>(`${summarySql} ORDER BY r.created_at DESC LIMIT $1`, [limit])).rows;
+  return (await db.query<RunSummary>(`${summarySql(await suppressionFilter(db))} ORDER BY r.created_at DESC LIMIT $1`, [limit])).rows;
 }
 
 export async function investigations(db: DB, run: string | null, outcome: string | null, limit: number) {
@@ -90,7 +88,7 @@ export async function investigations(db: DB, run: string | null, outcome: string
     COALESCE(j.error,(SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'state'<>'VERIFIED'
       ORDER BY (g->>'state'='CONTRADICTED') DESC LIMIT 1)) AS reason
     FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
-    WHERE j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true' AND ($1::uuid IS NULL OR j.run_id=$1) AND ($2::text IS NULL OR COALESCE(j.outcome,j.stage)=$2)
+    WHERE ${includedInvestigation} AND ($1::uuid IS NULL OR j.run_id=$1) AND ($2::text IS NULL OR COALESCE(j.outcome,j.stage)=$2)
     ORDER BY j.updated_at DESC,j.id LIMIT $3`, [run, outcome, limit])).rows;
 }
 
@@ -119,7 +117,7 @@ export async function overview(pool: Pool) {
       count(*) FILTER (WHERE g->>'state' IN ('UNVERIFIED','STALE'))::int AS held,
       count(*) FILTER (WHERE g->>'state'='CONTRADICTED')::int AS contradicted
       FROM origin_investigations j CROSS JOIN LATERAL jsonb_array_elements(j.checkpoint->'gates') g
-      WHERE j.run_id=$1 AND j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true' GROUP BY 1 ORDER BY 1`, [runs[0].id])).rows : [];
+      WHERE j.run_id=$1 AND ${includedInvestigation} GROUP BY 1 ORDER BY 1`, [runs[0].id])).rows : [];
     const ready = await readyOpportunities(db);
     const savedOpportunities = await qualifiedOpportunities(db, 100, null, 'saved');
     const needsRecheck = new Set(savedOpportunities.map(item => item.business_id));
@@ -128,12 +126,12 @@ export async function overview(pool: Pool) {
       COALESCE(j.error,(SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'state'<>'VERIFIED'
         ORDER BY (g->>'state'='CONTRADICTED') DESC LIMIT 1)) AS reason
       FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id WHERE j.outcome IS DISTINCT FROM 'QUALIFIED'
-      AND j.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
+      AND ${includedInvestigation}
       ORDER BY j.updated_at DESC LIMIT 75`)).rows;
     const sources = await sourceHistory(db);
     const quality = await sourceQuality(db);
     const usage = await modelUsage(db);
-    return { config: config.config, next_run_at: config.next_run_at?.toISOString() ?? null, worker_seen_at: config.worker_seen_at?.toISOString() ?? null,
+    return { config: readConfig(config.config), next_run_at: config.next_run_at?.toISOString() ?? null, worker_seen_at: config.worker_seen_at?.toISOString() ?? null,
       online: Boolean(config.worker_seen_at && Date.now() - config.worker_seen_at.getTime() < 115_000), configured, ready: true, runs,
       opportunities, savedOpportunities, findings, sources, quality, usage, gateProgress, independentPublishers: sourceConfig.independent };
   } finally { db.release(); }

@@ -25,6 +25,10 @@ ALTER TABLE origin_settings ADD COLUMN IF NOT EXISTS publisher_feeds jsonb;
 ALTER TABLE origin_settings ADD COLUMN IF NOT EXISTS worker_policy_version text;
 ALTER TABLE origin_runs ADD COLUMN IF NOT EXISTS publisher_feeds jsonb;
 ALTER TABLE origin_runs ADD COLUMN IF NOT EXISTS discovery_round integer;
+ALTER TABLE origin_runs ADD COLUMN IF NOT EXISTS batch_number integer NOT NULL DEFAULT 1;
+ALTER TABLE origin_runs ADD COLUMN IF NOT EXISTS batch_start integer NOT NULL DEFAULT 0;
+ALTER TABLE origin_runs ADD COLUMN IF NOT EXISTS batch_search_start integer NOT NULL DEFAULT 0;
+ALTER TABLE origin_runs ADD COLUMN IF NOT EXISTS qualified_at_stop integer;
 CREATE TABLE IF NOT EXISTS origin_businesses (
   id uuid PRIMARY KEY,
   domain text NOT NULL UNIQUE,

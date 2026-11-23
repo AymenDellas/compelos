@@ -4,6 +4,7 @@ import { z } from 'zod';
 export const POLICY_VERSION = 'origin-v6';
 export const MAX_CANDIDATES = 72;
 export const MAX_RUN_MINUTES = 75;
+export const MAX_QUALIFIED_TARGET = 2_147_483_647;
 export const gateNames = ['identity', 'niche', 'geography', 'substance', 'acquisition', 'opportunity', 'contact'] as const;
 export type GateName = typeof gateNames[number];
 export type Outcome = 'QUALIFIED' | 'UNRESOLVED' | 'REJECTED';
@@ -12,6 +13,7 @@ export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLI
 export const settingsSchema = z.object({
   intervalMinutes: z.number().int().min(60).max(43_200).nullable(),
   candidateLimit: z.number().int().min(1).max(MAX_CANDIDATES),
+  qualifiedTarget: z.number().int().min(0).max(MAX_QUALIFIED_TARGET).default(0),
   runMinutes: z.number().int().min(2).max(MAX_RUN_MINUTES),
   browser: z.boolean(),
   activityDays: z.number().int().min(30).max(180),
@@ -22,7 +24,7 @@ export const settingsSchema = z.object({
 }).strict();
 export type Settings = z.infer<typeof settingsSchema>;
 export const defaults: Settings = {
-  intervalMinutes: null, candidateLimit: 36, runMinutes: 30, browser: true, activityDays: 120,
+  intervalMinutes: null, candidateLimit: 36, qualifiedTarget: 0, runMinutes: 30, browser: true, activityDays: 120,
   runBudgetCents: 200, dailyBudgetCents: 600, monthlyBudgetCents: 2500, modelCalls: 0,
 };
 

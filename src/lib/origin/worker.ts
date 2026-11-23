@@ -12,7 +12,7 @@ import { hasSchema } from './read-model';
 import { coachingContracts, procurementAdapter, procurementCredit, tenderAdapter } from './procurement';
 import { enrichAcquisition, enrichCommercial, investigate, resolveBusiness, verifyOpportunity } from './research';
 import { approvedFeeds } from './sources';
-import { claimRun, failStage, finish, migrate, newPublishedBusinesses, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
+import { advanceQualifiedRun, claimRun, failStage, finish, includedInvestigation, migrate, newPublishedBusinesses, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
 import type { Run, SourceQuality } from './store';
 
 type Limiter = <T>(run: () => Promise<T>) => Promise<T>;
@@ -84,12 +84,12 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
     const ranked = async (groups: Seed[][]) => Array.from({ length: 10 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : []))
       .flat();
     const canRefill = () => Boolean((search && !hold(businessSearchName)) || (campaignSearch && !hold(campaignSearchName)));
-    if (run.discovery_round !== null) {
+    if ((run.discovery_round ?? 0) > 0) {
       const { rows: [{ queued }] } = await pool.query<{ queued: number }>(
-        "SELECT count(*)::int AS queued FROM origin_investigations WHERE run_id=$1 AND checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'", [run.id]);
-      const gap = Math.max(0, limit - queued);
+        `SELECT count(*)::int AS queued FROM origin_investigations j WHERE run_id=$1 AND ${includedInvestigation}`, [run.id]);
+      const gap = Math.max(0, run.batch_start + limit - queued);
       // Count saved batches so a restarted batch can recover its receipts at the same indexes.
-      const remaining = Math.max(0, searchAllowance - targetSearchAttempts(run.sources ?? []));
+      const remaining = Math.max(0, searchAllowance + run.batch_search_start - targetSearchAttempts(run.sources ?? []));
       const business = search && !hold(businessSearchName) ? Math.min(6, Math.ceil(gap / 2), remaining) : 0;
       const campaign = campaignSearch && !hold(campaignSearchName) ? Math.min(3, Math.ceil(gap / 8), remaining - business) : 0;
       if (search && business) batch(businessSearchName, business, (index, requestSignal) => search(index, 10, requestSignal), ranked);
@@ -186,7 +186,8 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
       }
       else {
         const job = await nextJob(pool, run);
-        if (!job) await finish(pool, run, run.sources.every(source => source.status !== 'OK' || !source.discovered) &&
+        if (!job && run.config.qualifiedTarget) await advanceQualifiedRun(pool, run, targetSearchAttempts(run.sources));
+        else if (!job) await finish(pool, run, run.sources.every(source => source.status !== 'OK' || !source.discovered) &&
           run.sources.some(source => source.status === 'FAILED') ? 'A discovery source was unavailable. See Discovery for its latest status.' : undefined);
         else try {
           const startedAt = Date.now();

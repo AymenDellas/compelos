@@ -48,9 +48,12 @@ test('the actual CLI manages saved settings, readiness, sources, run controls an
     assert.equal((await call(['schedule', 'off'])).nextRunAt, null);
     await call(['sources', 'add', 'Training Journal', 'https://journal.test/feed', 'https://journal.test/terms', '--publisher', 'journal-press']);
     assert.equal((await call(['sources', 'add', 'Executive Forum', 'https://forum.test/feed', 'https://forum.test/terms', '--publisher', 'forum-press'])).independent, 2);
-    const queued = await call(['start', '--qualification']);
+    const queued = await call(['start', '--qualification', '--qualified-target', '3']);
     assert.equal(queued.mode, 'automatic-discovery');
-    assert.equal((await call(['pause', queued.id])).state, 'PAUSED');
+    const paused = await call(['pause', queued.id]);
+    assert.equal(paused.state, 'PAUSED');
+    assert.equal(paused.qualified_target, 3);
+    assert.equal(paused.qualified_progress, 0);
     assert.equal((await call(['resume', 'active'])).state, 'QUEUED');
     assert.equal((await call(['cancel', 'active'])).state, 'CANCELLED');
     assert.equal((await call(['wait', queued.id, '--quiet'], 4)).run.state, 'CANCELLED');

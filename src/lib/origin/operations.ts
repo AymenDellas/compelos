@@ -52,7 +52,7 @@ export async function followRun(pool: Pool, id: string, options: { signal: Abort
       options.signal.throwIfAborted();
       const run = await runSummary(pool, id);
       if (!run) throw new Error('This run does not exist.');
-      const state = JSON.stringify([run.state, run.sources !== null, run.counts]);
+      const state = JSON.stringify([run.state, run.discovery_pending, run.batch_number, run.qualified_progress, run.counts]);
       if (last !== state) {
         options.progress?.(run);
         last = state;

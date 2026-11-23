@@ -68,6 +68,7 @@ export default function OriginWorkspace() {
   const active = data?.runs.find(run => activeStates.includes(run.state));
   const latest = data?.runs[0];
   const latestCount = latest ? candidateCount(latest) : 0;
+  const goalRun = Boolean(latest?.qualified_target);
   return <section className="origin-workspace" aria-label="ORIGIN workstation">
     <div className="origin-toolbar">
       <nav className="origin-tabs" aria-label="ORIGIN sections">
@@ -84,7 +85,7 @@ export default function OriginWorkspace() {
     {data && !dossierId && <>
       {tab === 'Overview' && <>
         <div className="origin-metrics">
-          <Metric label="New businesses in latest run" value={latest ? `${latestCount} / ${latest.candidate_target}` : 0} />
+          <Metric label="New businesses in latest run" value={latest && !goalRun ? `${latestCount} / ${latest.candidate_target}` : latestCount} />
           <Metric label="Rejected" value={latest?.counts.REJECTED ?? 0} />
           <Metric label="Unresolved" value={latest?.counts.UNRESOLVED ?? 0} />
           <Metric label="Ready opportunities" value={data.opportunities.length} accent />
@@ -92,13 +93,17 @@ export default function OriginWorkspace() {
         <section className="origin-section">
           <div className="origin-heading"><h2>Investigation runs</h2>{active && <RunActions run={active} busy={busy} mutate={mutate} />}</div>
           {!data.online && <p className="origin-note">Compel OS handles manually started ORIGIN runs while the worker is offline. Keep Compel OS open during the run.</p>}
-          {latest?.state === 'RUNNING' && latest.discovery_pending && <p className="origin-note">Searching for {latest.candidate_target} new businesses. Repeats do not count toward the target.</p>}
-          {latest?.state === 'COMPLETED' && latestCount < latest.candidate_target && <p className="origin-note">Discovery found {latestCount} of the {latest.candidate_target} requested new businesses within the run’s search limits.</p>}
+          {latest?.state === 'RUNNING' && latest.discovery_pending && <p className="origin-note">
+            {goalRun ? `Searching batch ${latest.batch_number} for new businesses.` : `Searching for ${latest.candidate_target} new businesses. Repeats do not count toward the target.`}
+          </p>}
+          {latest?.state === 'COMPLETED' && !goalRun && latestCount < latest.candidate_target && <p className="origin-note">Discovery found {latestCount} of the {latest.candidate_target} requested new businesses within the run’s search limits.</p>}
+          {goalRun && latest?.error && <p className="origin-note" role="status">{latest.qualified_progress ?? 0} of {latest.qualified_target} qualified. {latest.error}</p>}
           {data.runs.length ? <div className="origin-scroll"><table><thead><tr><th>Queued at</th><th>Status</th><th>Investigations</th><th>Completed</th><th>Qualified</th><th>Finished at</th></tr></thead>
             <tbody>{data.runs.map(run => <tr key={run.id} title={run.error ?? undefined}>
-              <td>{stamp(run.created_at)}</td><td><State value={run.state} /></td><td>{candidateCount(run)} / {run.candidate_target}</td>
+              <td>{stamp(run.created_at)}</td><td><State value={run.state} /></td>
+              <td>{run.qualified_target ? `${candidateCount(run)} · Batch ${run.batch_number}` : `${candidateCount(run)} / ${run.candidate_target}`}</td>
               <td>{(run.counts.QUALIFIED ?? 0) + (run.counts.REJECTED ?? 0) + (run.counts.UNRESOLVED ?? 0)}</td>
-              <td>{run.counts.QUALIFIED ?? 0}</td><td>{stamp(run.finished_at)}</td>
+              <td>{run.qualified_target ? `${run.qualified_progress ?? 0} / ${run.qualified_target}` : run.counts.QUALIFIED ?? 0}</td><td>{stamp(run.finished_at)}</td>
             </tr>)}</tbody></table></div> : <p className="origin-empty">There are no investigation runs yet.</p>}
         </section>
         {!!data.gateProgress?.length && <section className="origin-section">
@@ -273,6 +278,7 @@ function SettingsForm({ config, busy, save }: { config: Settings; busy: boolean;
     const fields = new FormData(event.currentTarget);
     const interval = Number(fields.get('intervalMinutes'));
     void save({ intervalMinutes: interval || null, browser: fields.has('browser'), candidateLimit: Number(fields.get('candidateLimit')),
+      qualifiedTarget: Number(fields.get('qualifiedTarget')),
       runMinutes: Number(fields.get('runMinutes')), activityDays: Number(fields.get('activityDays')), modelCalls: Number(fields.get('modelCalls')),
       runBudgetCents: Math.round(Number(fields.get('runBudgetCents')) * 100), dailyBudgetCents: Math.round(Number(fields.get('dailyBudgetCents')) * 100),
       monthlyBudgetCents: Math.round(Number(fields.get('monthlyBudgetCents')) * 100) });
@@ -280,7 +286,9 @@ function SettingsForm({ config, busy, save }: { config: Settings; busy: boolean;
   return <form className="origin-section" onSubmit={submit}><div className="origin-heading"><h2>Research settings</h2></div>
     <div className="origin-fields">
       <label>Schedule interval (minutes)<input name="intervalMinutes" type="number" min="60" max="43200" placeholder="Off" defaultValue={config.intervalMinutes ?? ''} /></label>
-      <label>New businesses per run<input required name="candidateLimit" type="number" min="1" max="72" defaultValue={config.candidateLimit} /></label>
+      <label>New businesses per batch<input required name="candidateLimit" type="number" min="1" max="72" defaultValue={config.candidateLimit} /></label>
+      <label>Qualified opportunities target<input name="qualifiedTarget" type="number" min="0" max="2147483647" defaultValue={config.qualifiedTarget || ''}
+        placeholder="Single batch" aria-describedby="origin-qualified-target-hint" /></label>
       <label>Time budget (minutes)<input required name="runMinutes" type="number" min="2" max="75" defaultValue={config.runMinutes} /></label>
       <label>Acquisition lookback (days)<input required name="activityDays" type="number" min="30" max="180" defaultValue={config.activityDays} /></label>
       <label>Model requests per run<input required name="modelCalls" type="number" min="0" max="5" defaultValue={config.modelCalls} /></label>
@@ -289,6 +297,7 @@ function SettingsForm({ config, busy, save }: { config: Settings; busy: boolean;
       <label>Monthly budget (USD)<input required name="monthlyBudgetCents" type="number" min="0" max="2500" step="0.01" defaultValue={config.monthlyBudgetCents / 100} /></label>
       <label className="origin-checkbox"><input name="browser" type="checkbox" defaultChecked={config.browser} /> Capture desktop and mobile views</label>
     </div>
-    <div className="origin-form-footer"><span>Applies to new runs.</span><button className="origin-primary" disabled={busy}>Save settings</button></div>
+    <div className="origin-form-footer"><span id="origin-qualified-target-hint">A qualified target repeats batches within the time budget. Leave it blank for a single batch.</span>
+      <button className="origin-primary" disabled={busy}>Save settings</button></div>
   </form>;
 }

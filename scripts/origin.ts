@@ -8,12 +8,12 @@ import { discoverPublicationPointers, gdeltCredits, publicationAdapter, verifyPu
 import { evaluate, evaluations } from '../src/lib/origin/evaluation';
 import { readModelConfig } from '../src/lib/origin/model';
 import { agentOnline, followRun, notifyAgent } from '../src/lib/origin/operations';
-import { defaults, domain, hash, MAX_CANDIDATES, MAX_RUN_MINUTES, POLICY_VERSION, settingsSchema } from '../src/lib/origin/policy';
+import { defaults, domain, hash, MAX_CANDIDATES, MAX_QUALIFIED_TARGET, MAX_RUN_MINUTES, POLICY_VERSION, settingsSchema } from '../src/lib/origin/policy';
 import type { Settings } from '../src/lib/origin/policy';
 import { coachingContracts, procurementAdapter, procurementCredit, tenderAdapter } from '../src/lib/origin/procurement';
 import { createPublicWeb, documentUrl, PublicFailure } from '../src/lib/origin/public-web';
 import { artifact, dossier, hasSchema, investigations, listRuns, modelUsage, overview, readyOpportunities, runSummary, sourceReadiness } from '../src/lib/origin/read-model';
-import { configuration, control, editPublishers, migrate, patchSettings, sourceHistory, sourceQuality, start } from '../src/lib/origin/store';
+import { configuration, control, editPublishers, migrate, patchSettings, readConfig, sourceHistory, sourceQuality, start } from '../src/lib/origin/store';
 import { runBenchmark } from './origin-benchmark';
 
 const connection = { connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 8_000, query_timeout: 15_000, max: 1,
@@ -24,8 +24,8 @@ const uuid = z.string().uuid();
 const active = ['QUEUED', 'RUNNING', 'PAUSED'];
 const commands = {
   help: [], migrate: [], status: [], doctor: ['strict'],
-  start: ['limit', 'minutes', 'model-calls', 'no-browser', 'qualification'],
-  run: ['limit', 'minutes', 'model-calls', 'no-browser', 'qualification', 'timeout', 'require-qualified', 'quiet'],
+  start: ['limit', 'qualified-target', 'minutes', 'model-calls', 'no-browser', 'qualification'],
+  run: ['limit', 'qualified-target', 'minutes', 'model-calls', 'no-browser', 'qualification', 'timeout', 'require-qualified', 'quiet'],
   work: ['timeout', 'require-qualified', 'quiet'], wait: ['timeout', 'require-qualified', 'quiet'],
   pause: [], resume: [], cancel: [], runs: ['limit'], 'show-run': [],
   investigations: ['run', 'outcome', 'limit'], opportunities: ['run', 'limit'], dossier: [], evidence: [], artifact: ['output'],
@@ -58,7 +58,7 @@ Usage: node origin.cjs <command> [arguments] [options]
                                          Run a private, isolated evaluation and record its summary
   evaluations [--limit N]                 Inspect stored benchmark summaries
 
-Start/run overrides: --limit 1..${MAX_CANDIDATES} --minutes 2..${MAX_RUN_MINUTES} --model-calls 0..5 --no-browser.
+Start/run overrides: --limit 1..${MAX_CANDIDATES} --qualified-target N --minutes 2..${MAX_RUN_MINUTES} --model-calls 0..5 --no-browser.
 Run/work/wait options: --timeout seconds --quiet --require-qualified.
 Every run discovers its sources automatically and applies the same qualification gates.
 Commands emit JSON. Run progress goes to stderr. Ctrl+C leaves saved checkpoints available.`;
@@ -123,6 +123,7 @@ async function inspectSources(pool: Pool, signal: AbortSignal) {
 async function main(argv: string[]) {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, strict: true, options: {
     help: { type: 'boolean', short: 'h' }, limit: { type: 'string' }, minutes: { type: 'string' }, timeout: { type: 'string' }, 'model-calls': { type: 'string' },
+    'qualified-target': { type: 'string' },
     'no-browser': { type: 'boolean' }, qualification: { type: 'boolean' }, quiet: { type: 'boolean' }, strict: { type: 'boolean' },
     'require-qualified': { type: 'boolean' }, run: { type: 'string' }, outcome: { type: 'string' }, output: { type: 'string' }, publisher: { type: 'string' },
   } });
@@ -139,12 +140,15 @@ async function main(argv: string[]) {
   const shutdown = new AbortController();
   const onInterrupt = () => shutdown.abort(new CommandError('Interrupted. Saved checkpoints remain available.', 130));
   process.once('SIGINT', onInterrupt);
-  const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(parseNumber(values.timeout, 1980, 1, 3600, 'Timeout') * 1000)]);
+  const runTimeout = (MAX_RUN_MINUTES + 3) * 60;
+  const defaultTimeout = ['run', 'work', 'wait'].includes(command) ? runTimeout : 1980;
+  const signal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(parseNumber(values.timeout, defaultTimeout, 1, runTimeout, 'Timeout') * 1000)]);
   const pool = new Pool(connection);
   const limit = (fallback: number, maximum = 250) => parseNumber(values.limit, fallback, 1, maximum, 'Limit');
   async function complete(id: string, drive: boolean) {
     const run = await followRun(pool, id, { signal, drive, progress: values.quiet ? undefined : item => {
-      console.error(`${item.id} ${item.state} ${JSON.stringify(item.counts)}`);
+      const target = item.qualified_target ? ` batch ${item.batch_number}, qualified ${item.qualified_progress ?? 0}/${item.qualified_target}` : '';
+      console.error(`${item.id} ${item.state}${target} ${JSON.stringify(item.counts)}`);
     } });
     const result = (await evaluate(pool, id))!;
     print(result);
@@ -180,6 +184,8 @@ async function main(argv: string[]) {
       await migrate(pool);
       const override: Partial<Settings> = {};
       if (values.limit !== undefined) override.candidateLimit = limit(defaults.candidateLimit, MAX_CANDIDATES);
+      if (values['qualified-target'] !== undefined)
+        override.qualifiedTarget = parseNumber(values['qualified-target'], 0, 0, MAX_QUALIFIED_TARGET, 'Qualified target');
       if (values.minutes !== undefined) override.runMinutes = parseNumber(values.minutes, defaults.runMinutes, 2, MAX_RUN_MINUTES, 'Run minutes');
       if (values['model-calls'] !== undefined) override.modelCalls = parseNumber(values['model-calls'], defaults.modelCalls, 0, 5, 'Model calls');
       if (values['no-browser']) override.browser = false;
@@ -238,7 +244,7 @@ async function main(argv: string[]) {
         break;
       }
       case 'settings': {
-        if ((!operand || operand === 'show') && !second) { const saved = await configuration(pool); print(saved.config); break; }
+        if ((!operand || operand === 'show') && !second) { const saved = await configuration(pool); print(readConfig(saved.config)); break; }
         let patch: Partial<Settings>;
         if (operand === 'set' && second && Object.hasOwn(defaults, second)) patch = { [second]: JSON.parse(requireValue(third, 'a JSON value')) };
         else if (operand === 'import' && second && !third) patch = settingsSchema.partial().parse(JSON.parse(await readFile(second, 'utf8')));

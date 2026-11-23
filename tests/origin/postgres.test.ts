@@ -199,3 +199,125 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     await admin.end();
   }
 });
+
+test('the qualified target carries across batches and stops on the third current opportunity', {
+  skip: process.env.ORIGIN_TEST_POSTGRES !== '1', timeout: 120_000,
+}, async () => {
+  const connection = { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10_000 };
+  const admin = new Pool(connection);
+  const name = `origin_target_${randomBytes(8).toString('hex')}`;
+  const pool = new Pool({ ...connection, options: `-c search_path=${name}` });
+  let created = false;
+  try {
+    await admin.query(`CREATE SCHEMA ${name}`);
+    created = true;
+    await migrate(pool);
+    await pool.query('CREATE TABLE leads (id text PRIMARY KEY, website text, do_not_contact boolean)');
+    const discovered = (label: string) => ({ ...seed, name: label, method: 'BUSINESS_SEARCH' as const,
+      website: `https://${label}.test/`, source: `https://${label}.test/`, sourceKey: `search:${label}` });
+    const incomplete = discovered('incomplete');
+    const suppressed = discovered('suppressed');
+    const [first, second, third, unused] = ['one', 'two', 'three', 'four'].map(discovered);
+    const historical = discovered('historical');
+    const completed = (verified: boolean) => {
+      const proof = observe('official', official, 'Fixture evidence', 'Fixture observation');
+      return { ...emptyCheckpoint(), evidence: verified ? [proof] : [],
+        gates: verified ? gateNames.map(gate => finding(gate, 'VERIFIED', 'Fixture verified requirement', [proof])) : [] };
+    };
+    const save = async (expected: string, verified: boolean, throughInvestigation = false) => {
+      const run = (await claimRun(pool))!;
+      const job = (await nextJob(pool, run))!;
+      assert.equal(job.domain, new URL(expected).hostname);
+      const checkpoint = completed(verified);
+      if (throughInvestigation) {
+        await saveStage(pool, run, job, emptyCheckpoint(), 'INVESTIGATING');
+        assert.equal((await nextJob(pool, run))?.id, job.id);
+      }
+      await saveStage(pool, run, job, checkpoint, decide(checkpoint.gates, checkpoint.evidence));
+      await release(pool, run);
+    };
+
+    await start(pool, { candidateLimit: 1 });
+    const prior = (await claimRun(pool))!;
+    await saveDiscovery(pool, prior, [historical], []);
+    await release(pool, prior);
+    await save(historical.website, true);
+    const priorFinish = (await claimRun(pool))!;
+    await finish(pool, priorFinish);
+    await pool.query('INSERT INTO leads VALUES ($1,$2,TRUE)', ['fixture-suppression', suppressed.website]);
+
+    const id = (await start(pool, { candidateLimit: 2, qualifiedTarget: 3 }))!;
+    const limit = async <T>(fn: () => Promise<T>) => fn();
+    const web = createPublicWeb(limit, async () => { throw new PublicFailure('FIXTURE_UNAVAILABLE'); });
+    const issued: number[] = [];
+    const options = { runId: id, web, businessSearch: async (index: number) => {
+      issued.push(index);
+      if (index < 3) return [historical, incomplete, suppressed];
+      if (index < 6) return [incomplete, first, second];
+      return [first, third, unused];
+    } };
+    const lane = createOriginLane(pool, limit, options);
+    assert.equal(await lane.runOnce(), true);
+    assert.equal((await runSummary(pool, id)).qualified_progress, 0);
+    await save(incomplete.website, false, true);
+    await save(suppressed.website, true);
+    assert.deepEqual((await runSummary(pool, id)).counts, { UNRESOLVED: 1, REJECTED: 1 });
+    assert.equal(await lane.runOnce(), true);
+    assert.equal((await runSummary(pool, id)).batch_number, 2);
+    assert.equal((await runSummary(pool, id)).discovery_pending, true);
+    assert.ok(await control(pool, id, 'pause'));
+    assert.ok(await control(pool, id, 'resume'));
+    lane.stop();
+
+    const restarted = createOriginLane(pool, limit, options);
+    assert.equal(await restarted.runOnce(), true);
+    await save(first.website, true, true);
+    await save(second.website, true);
+    assert.equal((await runSummary(pool, id)).qualified_progress, 2);
+    await pool.query("UPDATE origin_runs SET deadline_at=now()-interval '1 second' WHERE id=$1", [id]);
+    assert.equal(await claimRun(pool, id), null);
+    const elapsed = await runSummary(pool, id);
+    assert.equal(elapsed.state, 'PAUSED');
+    assert.equal(elapsed.qualified_progress, 2);
+    assert.match(elapsed.error ?? '', /Time budget elapsed/);
+    assert.ok(await control(pool, id, 'resume'));
+    const renewed = await claimRun(pool, id);
+    assert.ok(renewed && renewed.deadline_at.getTime() > Date.now());
+    assert.equal(renewed.config.qualifiedTarget, 3);
+    assert.equal((await runSummary(pool, id)).error, null);
+    await release(pool, renewed);
+    assert.equal(await restarted.runOnce(), true);
+    assert.equal((await runSummary(pool, id)).batch_number, 3);
+    assert.equal(await restarted.runOnce(), true);
+    await save(third.website, true);
+    const final = await runSummary(pool, id);
+    assert.equal(final.state, 'COMPLETED');
+    assert.equal(final.qualified_progress, 3);
+    assert.deepEqual(final.counts, { UNRESOLVED: 1, REJECTED: 1, QUALIFIED: 3, SKIPPED: 1 });
+    assert.equal((await readyOpportunities(pool, 10, id)).length, 3);
+    assert.deepEqual(issued.sort((a, b) => a - b), Array.from({ length: 9 }, (_, index) => index));
+    assert.equal(await restarted.runOnce(), false);
+    restarted.stop();
+
+    const laterId = (await start(pool, { candidateLimit: 1 }))!;
+    const later = (await claimRun(pool, laterId))!;
+    await saveDiscovery(pool, later, [first, unused], []);
+    assert.equal((await nextJob(pool, later))?.domain, 'four.test');
+    assert.ok(await control(pool, laterId, 'cancel'));
+
+    const emptyId = (await start(pool, { qualifiedTarget: 3 }))!;
+    const emptyLane = createOriginLane(pool, limit, { runId: emptyId, web });
+    assert.equal(await emptyLane.runOnce(), true);
+    assert.equal(await emptyLane.runOnce(), true);
+    emptyLane.stop();
+    const shortfall = await runSummary(pool, emptyId);
+    assert.equal(shortfall.state, 'FAILED');
+    assert.equal(shortfall.qualified_progress, 0);
+    assert.match(shortfall.error ?? '', /no new businesses/);
+
+  } finally {
+    await pool.end();
+    if (created) await admin.query(`DROP SCHEMA ${name} CASCADE`);
+    await admin.end();
+  }
+});

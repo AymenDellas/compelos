@@ -15,6 +15,8 @@ npm run worker
 
 In Compel OS, open **Acquisition → ORIGIN → Start run**. The first start or settings save applies the additive schema. Operations controls the schedule, research limits, budget, and desktop/mobile capture. Pause, resume, and cancel act on the saved run. The local agent and machine must stay online for scheduled work. With the agent offline, a queued run remains in PostgreSQL.
 
+To search for a specific number of ready opportunities, set **Qualified opportunities target** in Operations. **New businesses per batch** controls the size of each batch. A positive target continues into fresh batches under the same run and stops as soon as enough distinct, current, unsuppressed opportunities pass all seven gates. An empty target runs one batch. The configured time budget applies across batches. A goal run pauses at that deadline. Resume grants a new time window and continues the same target and checkpoints. Model spending limits apply across all batches, and each batch has a bounded search allowance. The run reports a shortfall if a full discovery attempt returns no new businesses.
+
 ## CLI
 
 ```powershell
@@ -22,6 +24,7 @@ node origin.cjs help
 node origin.cjs doctor
 node origin.cjs sources probe
 node origin.cjs run --qualification --require-qualified
+node origin.cjs run --qualified-target 3
 node origin.cjs evaluate latest
 ```
 
