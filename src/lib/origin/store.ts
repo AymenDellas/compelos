@@ -189,9 +189,12 @@ export async function advanceQualifiedRun(pool: Pool, run: Run, searches: number
   });
 }
 
-// Earlier schema versions recorded progress through the stage or an attempt count.
+// A reset releases earlier reviews for rediscovery while preserving their dossiers.
+// Legacy rows can record progress only through the stage or an attempt count.
 const processedEarlier = `EXISTS (SELECT 1 FROM origin_investigations prior
   WHERE prior.business_id=business.id AND prior.run_id<>$1 AND prior.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
+    AND COALESCE(prior.processing_started_at, prior.created_at) >= COALESCE(
+      (SELECT dedup_reset_at FROM origin_settings WHERE id=1), '-infinity'::timestamptz)
     AND (prior.processing_started_at IS NOT NULL OR prior.stage<>'RESOLVING' OR prior.attempts>0))`;
 
 async function processedDomains(db: Pool | PoolClient, runId: string, domains: string[], keys: string[]) {
@@ -284,7 +287,8 @@ export async function nextJob(pool: Pool, run: Run) {
     ) SELECT j.*,b.domain,b.name,b.website,b.signature FROM started j JOIN origin_businesses b ON b.id=j.business_id`, [run.id, run.config.qualifiedTarget > 0])).rows[0];
   });
   if (job) {
-    const target = job.seeds.filter(seed => seed.method === 'BUSINESS_SEARCH' && domain(seed.website) === job.domain && new URL(seed.website).pathname !== '/')
+    const screenedOffer = job.seeds.find(seed => seed.method === 'PUBLIC_OFFER' && domain(seed.website) === job.domain);
+    const target = screenedOffer ?? job.seeds.filter(seed => seed.method === 'BUSINESS_SEARCH' && domain(seed.website) === job.domain && new URL(seed.website).pathname !== '/')
       .sort((a, b) => (b.discoveryPriority ?? 0) - (a.discoveryPriority ?? 0))[0];
     if (target) job.website = target.website;
   }

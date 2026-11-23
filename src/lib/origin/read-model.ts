@@ -38,7 +38,7 @@ async function qualifiedOpportunities(pool: DB, limit: number, run: string | nul
     j.checkpoint->>'offer' AS offer,j.checkpoint->>'country' AS country,j.checkpoint->>'contact' AS contact,
     (SELECT jsonb_array_length(g->'evidence') FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='acquisition') AS acquisition_sources,
     (SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='opportunity') AS opportunity
-    FROM origin_businesses b JOIN LATERAL (SELECT j.* FROM origin_investigations j WHERE business_id=b.id
+    FROM origin_businesses b JOIN LATERAL (SELECT j.* FROM origin_investigations j WHERE business_id=b.id AND j.outcome IS NOT NULL
       AND ${includedInvestigation}
       ORDER BY created_at DESC,id DESC LIMIT 1) j ON true
     WHERE j.outcome='QUALIFIED' AND ${view === 'ready' ? currentEvidence : `NOT ${currentEvidence}`}

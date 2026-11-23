@@ -8,7 +8,7 @@ import { businessSearchName } from '../../src/lib/origin/business-search';
 import { publicOfferSource } from '../../src/lib/origin/public-discovery';
 import { createPublicWeb, PublicFailure } from '../../src/lib/origin/public-web';
 import { artifact, dossier, overview, readyOpportunities, runSummary } from '../../src/lib/origin/read-model';
-import { claimRun, control, finish, migrate, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
+import { claimRun, control, existingDiscoveryDomains, finish, migrate, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
 import { createOriginLane } from '../../src/lib/origin/worker';
 import { fixture, official, page, seed, source } from './fixtures';
 
@@ -194,6 +194,58 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     assert.equal(exhausted.discovery_pending, false);
     assert.deepEqual(exhausted.counts, {});
     assert.equal(exhausted.sources?.find(item => item.adapter === businessSearchName)?.searchAttempts, 26);
+  } finally {
+    await pool.end();
+    if (created) await admin.query(`DROP SCHEMA ${name} CASCADE`);
+    await admin.end();
+  }
+});
+
+test('resetting review history releases old businesses once and keeps their saved dossiers', {
+  skip: process.env.ORIGIN_TEST_POSTGRES !== '1', timeout: 120_000,
+}, async () => {
+  const connection = { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 10_000 };
+  const admin = new Pool(connection);
+  const name = `origin_reset_${randomBytes(8).toString('hex')}`;
+  const pool = new Pool({ ...connection, options: `-c search_path=${name}` });
+  let created = false;
+  try {
+    await admin.query(`CREATE SCHEMA ${name}`);
+    created = true;
+    await migrate(pool);
+    const host = new URL(official).hostname;
+    await start(pool, { candidateLimit: 1 });
+    const prior = (await claimRun(pool))!;
+    await saveDiscovery(pool, prior, [seed], []);
+    const oldJob = (await nextJob(pool, prior))!;
+    const evidence = observe('official', official, 'Fixture program', 'Fixture evidence');
+    const qualified = { ...emptyCheckpoint(), evidence: [evidence],
+      gates: gateNames.map(name => finding(name, 'VERIFIED', 'Fixture verified requirement', [evidence])) };
+    await saveStage(pool, prior, oldJob, qualified, decide(qualified.gates, qualified.evidence));
+    await finish(pool, prior);
+
+    const id = (await start(pool, { candidateLimit: 1 }))!;
+    assert.deepEqual(await existingDiscoveryDomains(pool, id, [host]), new Set([host]));
+    await pool.query('UPDATE origin_settings SET dedup_reset_at=clock_timestamp() WHERE id=1');
+    assert.deepEqual(await existingDiscoveryDomains(pool, id, [host]), new Set());
+    const current = (await claimRun(pool, id))!;
+    const offer = { ...seed, method: 'PUBLIC_OFFER' as const, website: `${official}new-program`, sourceKey: 'fresh-offer' };
+    await saveDiscovery(pool, current, [offer, offer], []);
+    const newJob = (await nextJob(pool, current))!;
+    assert.equal(newJob.business_id, oldJob.business_id);
+    assert.equal(newJob.website, offer.website);
+    assert.equal(newJob.seeds.length, 1);
+    assert.deepEqual(await existingDiscoveryDomains(pool, id, [host]), new Set([host]));
+    assert.deepEqual((await readyOpportunities(pool)).map(item => item.id), [oldJob.id]);
+    await saveStage(pool, current, newJob, qualified, decide(qualified.gates, qualified.evidence));
+    await finish(pool, current);
+    assert.equal((await dossier(pool, oldJob.id))?.decision?.outcome, 'QUALIFIED');
+
+    const later = (await start(pool, { candidateLimit: 1 }))!;
+    assert.deepEqual(await existingDiscoveryDomains(pool, later, [host]), new Set([host]));
+    const next = (await claimRun(pool, later))!;
+    await saveDiscovery(pool, next, [offer], []);
+    assert.equal(await nextJob(pool, next), undefined);
   } finally {
     await pool.end();
     if (created) await admin.query(`DROP SCHEMA ${name} CASCADE`);
