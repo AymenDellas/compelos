@@ -14,8 +14,9 @@ export async function evaluate(pool: Pool, runId: string) {
   const hasSearchReceipts = (await pool.query("SELECT to_regclass('origin_search_receipts') IS NOT NULL AS available")).rows[0].available;
   const searchActivity = hasSearchReceipts ? (await pool.query(`SELECT status,count(*)::int AS requests
     FROM origin_search_receipts WHERE run_id=$1 GROUP BY status ORDER BY status`, [runId])).rows : [];
-  const { rows } = await pool.query<{ id: string; name: string; domain: string; decision: Decision | null; stage: string; artifacts: number; checkpoint: Checkpoint; seeds: Seed[] }>(`
+  const { rows } = await pool.query<{ id: string; name: string; domain: string; decision: Decision | null; stage: string; started: boolean; artifacts: number; checkpoint: Checkpoint; seeds: Seed[] }>(`
     SELECT j.id,b.name,b.domain,j.decision,j.stage,j.checkpoint,j.seeds,
+    (to_jsonb(j)->>'processing_started_at' IS NOT NULL OR j.stage<>'RESOLVING' OR j.attempts>0) AS started,
     (SELECT count(*)::int FROM origin_artifacts a WHERE a.investigation_id=j.id AND a.image IS NOT NULL) AS artifacts
     FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
     WHERE run_id=$1 AND ${includedInvestigation} ORDER BY b.domain`, [runId]);
@@ -36,7 +37,7 @@ export async function evaluate(pool: Pool, runId: string) {
     const journey = row.checkpoint.journey;
     const testedGates = new Set(row.checkpoint.gates.map(gate => gate.name));
     const bookingUrls = new Set(evidence.filter(item => item.method === 'Initial direct booking GET').map(item => item.id));
-    const bookingRechecked = evidence.some(item => /^Independent (?:direct booking GET|booking duration recheck|message-form recheck|booking destination render|mobile placement recheck|missing-section recheck|published price recheck)$/.test(item.method));
+    const bookingRechecked = evidence.some(item => /^Independent (?:direct booking GET|booking duration recheck|message-form recheck|booking destination (?:render|recheck)|mobile placement recheck|missing-section recheck|published price recheck)$/.test(item.method));
     return { id: row.id, name: row.checkpoint.identityName ?? row.name, domain: row.domain, stage: row.stage, outcome: row.decision?.outcome ?? null,
       policy: row.decision?.version ?? null, discovery: row.seeds.map(seed => ({ adapter: seed.adapter ?? seed.method, url: seed.source })),
       gates: row.decision?.gates.map(gate => ({ name: gate.name, state: testedGates.has(gate.name) ? gate.state : 'NOT_REACHED', reason: gate.assertion,
@@ -55,7 +56,8 @@ export async function evaluate(pool: Pool, runId: string) {
   }));
   return {
     run, gates, publisherChecks, blockers: [...blockers.values()].sort((a, b) => b.count - a.count || a.gate.localeCompare(b.gate)),
-    investigated: rows.length, captures: rows.reduce((sum, row) => sum + row.artifacts, 0), usage: await modelUsage(pool, runId), stageWork, modelActivity, searchActivity,
+    queued: rows.length, investigated: rows.filter(row => row.started).length, completed: rows.filter(row => row.stage === 'COMPLETED').length,
+    captures: rows.reduce((sum, row) => sum + row.artifacts, 0), usage: await modelUsage(pool, runId), stageWork, modelActivity, searchActivity,
     investigationCoverage: { businessPagesRead: results.filter(row => row.pages.some(page => page.result === 'READABLE')).length,
       bookingDestinationsRead: results.reduce((count, row) => count + row.booking.observations.length, 0),
       bookingDestinationsRechecked: results.filter(row => row.booking.rechecked).length },

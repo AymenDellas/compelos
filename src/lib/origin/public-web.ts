@@ -29,8 +29,14 @@ export function websiteUrl(value: string) {
 
 export function documentUrl(value: string) {
   const url = websiteUrl(value);
-  if ([...url.searchParams.keys()].some(key => !/^(?:utm_[a-z]+|gclid|fbclid)$/i.test(key))) throw new Error('A parameterized public action was skipped.');
-  url.search = '';
+  const acuity = url.protocol === 'https:' && /^(?:[a-z\d-]+\.as\.me|app\.acuityscheduling\.com)$/i.test(url.hostname) &&
+    /^(?:\/schedule\.php|\/schedule\/[a-z\d]+(?:\/(?:appointment|calendar)\/\d+){0,2}|\/*)$/i.test(url.pathname);
+  for (const [key, value] of [...url.searchParams]) {
+    if (/^(?:utm_[a-z]+|gclid|fbclid)$/i.test(key)) url.searchParams.delete(key);
+    else if (!acuity || !/^(?:owner|appointmentType|calendarID|calendarIds)$/.test(key) ||
+      !/^\d{1,12}(?:,\d{1,12}){0,4}$/.test(value) || url.searchParams.getAll(key).length !== 1)
+      throw new Error('A parameterized public action was skipped.');
+  }
   return url;
 }
 

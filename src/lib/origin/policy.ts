@@ -121,6 +121,7 @@ export type Checkpoint = {
   advisory?: { assessment: string; evidence: string };
   breakage?: { url: string; from: string; label: string; status: number; evidence: string; alternatives: boolean; soft?: boolean };
   bookingMismatch?: { url: string; destination: string; from: string; promised: number; listed: number; evidence: string[] };
+  bookingDestinationMismatch?: { url: string; destination: string; from: string; label: string; evidence: string[] };
   priceMismatch?: { url: string; booking: string; currency: string; amounts: [number, number]; evidence: string[] };
   inquiryMismatch?: { url: string; destination: string; from: string; label: string; evidence: string[]; kind?: 'message' | 'fee' | 'intake' | 'embedded'; widget?: string };
   missingBookingSection?: { url: string; fragment: string; label: string; evidence: string };

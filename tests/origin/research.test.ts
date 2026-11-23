@@ -4,7 +4,7 @@ import { discover, feed } from '../../src/lib/origin/discovery';
 import { classifyModelError, reserveCents } from '../../src/lib/origin/model';
 import { decide, defaults, finding, gateNames, observe } from '../../src/lib/origin/policy';
 import { createPublicWeb, documentUrl, robotsAllows } from '../../src/lib/origin/public-web';
-import { enrichAcquisition, enrichCommercial, investigate, resolveBusiness, verifyOpportunity } from '../../src/lib/origin/research';
+import { enrichAcquisition, enrichCommercial, investigate, parseBusinessPage, resolveBusiness, verifyOpportunity } from '../../src/lib/origin/research';
 import { book, candidate, fixture, official, page, seed, source } from './fixtures';
 
 const signal = () => AbortSignal.timeout(30_000);
@@ -124,6 +124,111 @@ test('case indexes lead to named coaching engagements and linked public schedule
   assert.ok(researched.evidence.some(item => item.url === scheduler && item.method === 'Initial direct booking GET'));
   const verified = await verifyOpportunity(web, { ...job, checkpoint: researched }, signal());
   assert.equal(verified.gates.find(gate => gate.name === 'opportunity')?.state, 'UNVERIFIED');
+});
+
+test('recent first-party promotions and distinct client engagements can qualify a reproduced booking misroute', async () => {
+  const reviews = official + 'testimonials/';
+  const calendar = 'https://cedar-leadership.as.me/schedule/abcd1234/appointment/12/calendar/45?calendarIds=45';
+  const media = official + 'podcast/';
+  const promotions = [official + 'insights/one', official + 'insights/two'];
+  const home = page.replace('<p>Our business was founded in 2012.</p>', '')
+    .replace('<p>Coaching engagement pricing is $5,000.</p>', '<a href="/testimonials/">Testimonials</a>')
+    .replace('<a href="/booking">Book a call</a>', `<a href="${calendar}">Book a call</a><a href="${media}">Schedule a consultation</a>`);
+  const { web: publicWeb } = fixture(home);
+  const reviewsHtml = `<main><h1>Testimonials</h1>
+    <p>I worked with this coach in a series of coaching sessions and improved the way my executive team makes decisions.</p><h4>Alex Winter</h4><p>CEO, Tern Manufacturing</p>
+    <p>We worked with this coach over a leadership coaching engagement and clarified how our directors review progress.</p><p><strong>Robin Miller</strong><br>Director of Operations<br><span>Beacon Foods</span></p>
+    </main>`;
+  const runWithReviews = async (testimonialHtml: string) => {
+    const web = { ...publicWeb, async document(...args: Parameters<typeof publicWeb.document>) {
+      const index = promotions.indexOf(args[0]);
+      const html = args[0] === reviews ? testimonialHtml : args[0] === calendar ? '<main><h1>Choose a time</h1><input type="date"></main>' :
+        args[0] === media ? '<main><h1>The Leadership Podcast</h1><p>Listen to new episodes.</p></main>' :
+        index >= 0 ? `<meta property="article:published_time" content="${new Date(Date.now() - (index + 2) * 86_400_000).toISOString()}"><main>
+          <h1>Executive coaching for leadership teams</h1>${index ? '<a href="/">Explore executive coaching</a>' : `<a href="${calendar}">Book a call</a>`}</main>` : null;
+      if (html) {
+        assert.equal(args[2]?.(new URL(args[0])), true);
+        return { url: args[0], status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(html) };
+      }
+      return publicWeb.document(...args);
+    } };
+    const job = candidate([{ ...seed, method: 'BUSINESS_SEARCH', occurredAt: undefined, activityLinks: promotions }]);
+    const { checkpoint } = await resolveBusiness(web, job, signal());
+    const researched = (await investigate(web, { ...job, checkpoint }, settings, signal())).checkpoint;
+    assert.equal(researched.funnel?.tested, 2);
+    return verifyOpportunity(web, { ...job, checkpoint: researched }, signal());
+  };
+  const result = await runWithReviews(reviewsHtml);
+  assert.equal(decide(result.gates, result.evidence).outcome, 'QUALIFIED');
+  assert.equal(result.gates.find(gate => gate.name === 'substance')?.evidence.length, 2);
+  assert.equal(result.gates.find(gate => gate.name === 'acquisition')?.evidence.length, 2);
+  assert.match(result.gates.find(gate => gate.name === 'opportunity')?.assertion ?? '', /content page/);
+  const sameClient = await runWithReviews(reviewsHtml.replace('Beacon Foods', 'Tern Manufacturing LLC'));
+  assert.equal(sameClient.gates.find(gate => gate.name === 'substance')?.state, 'UNVERIFIED');
+});
+
+test('a domain-matched first-party coach bio can supply missing brand metadata', () => {
+  const html = '<title>Leadership and business coaching</title><main><p>Jamie Rowan is a strategic business coach for founders.</p></main>';
+  assert.equal(parseBusinessPage(html, 'https://jamierrowan.test/').brand, 'Jamie Rowan');
+  assert.equal(parseBusinessPage(html, 'https://unrelatedcoach.test/').brand, undefined);
+});
+
+test('an explicitly described coaching container proves provider program scope', async () => {
+  const home = page.replace('Coaching engagement pricing is $5,000.',
+    'In this 1:1 business coaching container we work through a practical process over six months together.');
+  const { web } = fixture(home);
+  const job = candidate();
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const { checkpoint: investigated } = await investigate(web, { ...job, checkpoint }, settings, signal());
+  assert.ok(investigated.evidence.some(item => item.method === 'Published coaching program scope'));
+  assert.equal(investigated.gates.find(gate => gate.name === 'substance')?.state, 'VERIFIED');
+});
+
+test('an explained callback is not a booking-to-inquiry mismatch', async () => {
+  const destination = official + 'contact';
+  const { web } = fixture(page.replace('href="/booking"', 'href="/contact"'));
+  const publicWeb = { ...web, async document(...args: Parameters<typeof web.document>) {
+    if (args[0] === destination) return { url: destination, status: 200, headers: { 'content-type': 'text/html' },
+      body: Buffer.from('<main><h1>Contact</h1><p>Fill out this form and we will get in touch to arrange your consultation.</p><form><input type="email"><textarea></textarea><button>Send a message</button></form></main>') };
+    return web.document(...args);
+  } };
+  const job = candidate();
+  const { checkpoint } = await resolveBusiness(publicWeb, job, signal());
+  const researched = (await investigate(publicWeb, { ...job, checkpoint }, settings, signal())).checkpoint;
+  assert.equal(researched.inquiryMismatch, undefined);
+  const result = await verifyOpportunity(publicWeb, { ...job, checkpoint: researched }, signal());
+  assert.equal(result.gates.find(gate => gate.name === 'opportunity')?.state, 'UNVERIFIED');
+});
+
+test('an explicitly linked branded landing page supplies offer proof while unrelated subdomains stay outside scope', async () => {
+  const landing = 'https://landing.cedar-leadership.test/executive/';
+  const unlinked = 'https://shop.cedar-leadership.test/executive/';
+  const root = `<title>Cedar Leadership</title><main><h1>Cedar Leadership</h1><a href="${landing}">Executive coaching services</a>
+    <a href="${unlinked}">More coaching services</a></main>`;
+  const base = fixture(root);
+  const web = { ...base.web, async document(...args: Parameters<typeof base.web.document>) {
+    if (args[0] === landing) {
+      assert.equal(args[2]?.(new URL(landing)), true);
+      assert.equal(args[2]?.(new URL(unlinked)), false);
+      return { url: landing, status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(page) };
+    }
+    return base.web.document(...args);
+  } };
+  const job = candidate();
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const { checkpoint: offer } = await investigate(web, { ...job, checkpoint }, settings, signal());
+  assert.equal(offer.gates.find(gate => gate.name === 'niche')?.state, 'VERIFIED');
+  assert.ok(offer.evidence.some(item => item.url === landing && item.method === 'Engagement scope'));
+  assert.ok(!base.read.includes(unlinked));
+});
+
+test('numeric public scheduling selectors retain only their approved read-only parameters', () => {
+  const calendar = 'https://mock.as.me/schedule/abcd1234/appointment/12/calendar/45';
+  assert.equal(documentUrl(calendar + '?calendarIds=45&utm_source=feed').href, calendar + '?calendarIds=45');
+  for (const url of [
+    calendar + '?calendarIds=45&action=cancel', calendar + '?calendarIds=45&calendarIds=46',
+    calendar + '?calendarIds=not-an-id', 'https://mock.as.me/confirm?owner=45', official + '?owner=45',
+  ]) assert.throws(() => documentUrl(url));
 });
 
 test('third-party coaching history and coaching-cost articles do not count as the provider’s own offer', async () => {

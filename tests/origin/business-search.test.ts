@@ -9,6 +9,7 @@ test('business search rotates across markets and specialties and returns distinc
     { title: 'Executive Coaching | North Star Partners', link: 'https://example.com/executive-coaching' },
     { title: 'CEO Coaching | Another Company', link: 'https://www.linkedin.com/company/business' },
     { title: 'Top 30 Executive Coaching Providers', link: 'https://directory.example.com/list' },
+    { title: 'List of the Best Executive Coaching Providers', link: 'https://ranking.example.com/list' },
     { title: 'Leadership Coaching | Third Company', link: 'http://127.0.0.1/admin' },
     { title: 'Business Coaching', link: 'https://example.net/' },
     { title: 'White Oak Advisory | CEO Mentoring', snippet: 'Executive coaching for founder transitions.', link: 'https://example.org/' },
@@ -90,8 +91,11 @@ test('business queries rotate distinct commercial signals and filter editorial l
   assert.ok(queries.some(query => query.includes('"client testimonials"')));
   assert.ok(queries.some(query => query.includes('"12 coaching sessions"')));
   assert.ok(queries.some(query => query.includes('"discovery call"') && query.includes('"client stories"')));
+  assert.ok(queries.some(query => query.includes('"book a discovery call"') && query.includes('"contact form"')));
   assert.deepEqual(businessSearchSeeds([
     { title: 'Best CEO Coaches to Hire | Advisory Firm', link: 'https://example.com/best-ceo-coaches' },
     { title: 'Executive Coaching Cost 2026: $200 to $3,000/Hour', link: 'https://example.com/executive-coaching-cost' },
+    { title: 'SEO for Executive Coaches | Search Agency', snippet: 'Marketing for executive coaching programs.', link: 'https://example.com/seo-for-coaches' },
+    { title: 'Product Engineering | Product Team', snippet: 'Tools for leadership coaching services.', link: 'https://example.com/product-engineering' },
   ], 10), []);
 });

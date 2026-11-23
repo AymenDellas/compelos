@@ -52,8 +52,11 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
   async function discovery(run: Run, signal: AbortSignal) {
     const history = await sourceHistory(pool);
     const limit = run.config.candidateLimit;
-    const initialBusiness = search ? Math.max(3, Math.ceil(limit / 5)) : 0;
-    const initialCampaign = campaignSearch ? Math.max(2, Math.ceil(limit / 12)) : 0;
+    const businessPlan = search ? Math.max(3, Math.ceil(limit / 5)) : 0;
+    const campaignPlan = campaignSearch ? Math.max(2, Math.ceil(limit / 12)) : 0;
+    const campaignShare = search && campaignSearch ? Math.max(0, Math.floor((businessPlan + campaignPlan) * 0.4) - campaignPlan) : 0;
+    const initialBusiness = businessPlan - campaignShare;
+    const initialCampaign = campaignPlan + campaignShare;
     const searchAllowance = initialBusiness + initialCampaign + REFILL_SEARCH_ALLOWANCE;
     const hold = (name: string) => history.find(item => item.adapter === name && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
     const adapters: Adapter[] = [];

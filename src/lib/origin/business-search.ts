@@ -1,6 +1,6 @@
 import { createSerperSearcher } from '../dorkEngine';
 import { publisherPointer } from './auto-publishers';
-import { coachingEditorial } from './discovery';
+import { coachingEditorial, relevantCoach } from './discovery';
 import { domain, hash } from './policy';
 import type { Seed } from './policy';
 import { documentUrl, PublicFailure, retryAt } from './public-web';
@@ -32,7 +32,9 @@ const excludedDomains = ['linkedin.com', 'facebook.com', 'instagram.com', 'youtu
   'podscan.fm', 'listennotes.com', 'feedspot.com', 'player.fm', 'goodpods.com', 'podchaser.com', 'podcasts.apple.com', 'spotify.com',
   'theglobeandmail.com', 'prnewswire.com', 'businesswire.com', 'globenewswire.com'];
 const service = /\b(?:coach(?:es|ing)?|leadership development|leadership advis(?:er|or|ory)|executive advis(?:er|or|ory)|CEO mentor)\b/i;
-const directory = /\b(?:top \d+|best \d+|find a coach|coach(?:es|ing) directory|certification|training for coaches|job openings)\b/i;
+const supportingVendors = /\b(?:SEO|marketing|lead generation|software|web design|product engineering|automation)\b.{0,50}\b(?:for|serving) (?:[\w-]+ ){0,3}coach(?:es|ing businesses?)\b/i;
+const unrelatedService = /^(?:[a-z0-9 -]{0,24} )?(?:product engineering|software development|recruitment services|executive search)(?:\s*[|–—-]|$)/i;
+const directory = /\b(?:top \d+|best \d+|list of (?:the )?(?:best|top)|find a coach|coach(?:es|ing) directory|certification|training for coaches|job openings)\b/i;
 const genericName = /^(?:(?:home|services|programs?|offerings|work with us|about us)$|(?:executive|leadership|career|business|CEO|founder|corporate|team) (?:coaches?|coaching)(?:\s+(?:in|services|programs?)\b.*)?$)/i;
 
 const offer = /\b(?:coaching (?:program(?:me)?s?|services?|packages?|engagements?)|one[- ]on[- ]one|1:1|private coaching|coaching sessions)\b/i;
@@ -50,6 +52,7 @@ export function businessSearchQuery(attempt: number) {
     '("client results" OR "client testimonials" OR "case study") ("coaching program" OR "coaching engagement")',
     '("6-month coaching" OR "six-month coaching" OR "12 coaching sessions") ("book a call" OR "apply for coaching" OR "discovery call")',
     '("book a call" OR "schedule a consultation" OR "discovery call") ("client results" OR "case studies" OR "client stories" OR "coaching engagement")',
+    '("book a discovery call" OR "schedule a consultation" OR "book a free call") ("contact form" OR "send a message" OR "fill out the form")',
   ];
   const batch = Math.floor(attempt / (markets.length * specialties.length));
   const regions = regionalQueries[Math.floor(batch / intents.length) % regionalQueries.length];
@@ -67,7 +70,7 @@ export function businessSearchSeeds(rows: unknown[], limit: number, campaign = f
         /\b(?:frequently asked questions|what it is and when|request for proposals|contract for)\b/i.test(title)) continue;
     const description = typeof snippet === 'string' ? snippet.slice(0, 500) : '';
     const text = `${title} ${description}`;
-    if (!service.test(text)) continue;
+    if (!service.test(text) || supportingVendors.test(title) || unrelatedService.test(title)) continue;
     let url: URL;
     try { url = documentUrl(link); } catch { continue; }
     const host = domain(url.href);
@@ -75,14 +78,16 @@ export function businessSearchSeeds(rows: unknown[], limit: number, campaign = f
     if (/\.(?:gov|gov\.uk|edu|university)$/.test(host) || excludedDomains.some(blocked => host === blocked || host.endsWith(`.${blocked}`))) continue;
     if (/\/(?:directory|jobs?|certification|terms(?:[-_]of[-_]use)?|privacy(?:[-_]policy)?|cookies?|solicitations|closed-bids)(?:\/|$)/i.test(url.pathname)) continue;
     const supportingCase = !campaign && /\b(?:case stud(?:y|ies)|client (?:results|stories|success))\b/i.test(path);
-    if (campaign && !promotion.test(`${text} ${path}`)) continue;
+    const scoped = relevantCoach.test(text) || /\b(?:CEO mentor(?:ing)?|executive advis(?:er|or|ory)|leadership advis(?:er|or|ory))\b/i.test(text);
+    if (!scoped && !offer.test(text) && !supportingCase) continue;
+    if (campaign && !promotion.test(`${text} ${path}`) && !action.test(text)) continue;
     if (!campaign && !supportingCase && /\/(?:blog|news|articles?|library|podcasts?)(?:\/|$)/i.test(url.pathname)) continue;
     const key = campaign || supportingCase ? url.href : host;
     const parts = title.slice(0, 260).split(/\s*(?:\||[–—])\s*|\s+-\s+/).map(item => item.trim());
     const name = parts.find(item => item.length >= 3 && item.length <= 90 && !service.test(item) && !genericName.test(item))
       ?? parts.find(item => item.length >= 3 && item.length <= 90 && !genericName.test(item));
     if (!name) continue;
-    const score = (campaign ? 6 : supportingCase ? 4 : 5) + Number(offer.test(text)) * 3 +
+    const score = (campaign ? 6 : supportingCase ? 4 : 5) + Number(scoped) * 3 + Number(offer.test(text)) * 3 +
       Number(clientProof.test(text)) * 3 + Number(programProof.test(text)) * 3 + Number(action.test(text)) * 3;
     if ((results.get(key)?.discoveryPriority ?? 0) >= score) continue;
     results.set(key, { method: 'BUSINESS_SEARCH', name, website: campaign || supportingCase ? new URL('/', url).href : url.href, source: url.href,
@@ -98,7 +103,7 @@ export function createEvidenceFollowUp() {
   const search = createBoundedSearch();
   if (search) return async (host: string, activityDays: number, purpose: 'campaign' | 'case', signal: AbortSignal) => {
     const since = new Date(Date.now() - activityDays * 86_400_000).toISOString().slice(0, 10);
-    const query = purpose === 'campaign' ? `(webinar OR workshop OR cohort OR "podcast episode" OR "newsletter") after:${since}` :
+    const query = purpose === 'campaign' ? `(webinar OR workshop OR cohort OR "podcast episode" OR "newsletter" OR "book a discovery call" OR "schedule a consultation") after:${since}` :
       '("case study" OR "client stories" OR "client results") ("executive coaching" OR "business coaching" OR "coaching sessions")';
     const organic = await search(`site:${host} ${query}`, signal);
     return activitySearchPointers(organic).map(pointer => pointer.url).filter(url => domain(url) === host).slice(0, 3);
@@ -144,7 +149,8 @@ export function campaignSearchQuery(attempt: number, activityDays: number) {
   const since = new Date(Date.now() - activityDays * 86_400_000).toISOString().slice(0, 10);
   const formats = ['("join" OR "register") (webinar OR workshop)', '("newsletter" OR "podcast") ("subscribe" OR "work with me")',
     '("applications open" OR "next cohort" OR "reserve your spot")',
-    '(workshop OR webinar OR "upcoming events") ("book a call" OR "schedule a consultation" OR "discovery call")'];
+    '(workshop OR webinar OR "upcoming events") ("book a call" OR "schedule a consultation" OR "discovery call")',
+    '("my coaching" OR "our coaching" OR "client case study") ("book a discovery call" OR "schedule a consultation")'];
   const format = formats[(attempt % markets.length + Math.floor(attempt / markets.length)) % formats.length];
   const regional = regionalQueries[Math.floor(attempt / 15) % regionalQueries.length];
   const market = attempt < 15 ? '"' + markets[marketIndex] + '"' : regional[marketIndex];
