@@ -13,6 +13,11 @@ export const publicOfferSource = 'Public coaching offers';
 const indexHost = 'public-api.wordpress.com';
 const tags = ['executive-coaching', 'leadership-coaching', 'business-coaching', 'business-coach', 'leadership-development',
   'entrepreneurship', 'coaching-program', 'group-coaching', 'business-growth', 'leadership-training', 'executive-coach', 'small-business-growth'];
+const markets = [
+  { country: 'us', cities: ['Chicago', 'Atlanta', 'Boston', 'New York', 'Philadelphia', 'Seattle', 'Denver', 'Austin', 'San Francisco', 'Minneapolis', 'Raleigh', 'Nashville'] },
+  { country: 'gb', cities: ['London', 'Manchester', 'Edinburgh', 'Bristol', 'Leeds', 'Cambridge', 'Birmingham', 'Glasgow', 'Oxford', 'Brighton', 'Liverpool', 'Cardiff'] },
+  { country: 'ca', cities: ['Toronto', 'Vancouver', 'Calgary', 'Ottawa', 'Montreal', 'Waterloo', 'Edmonton', 'Victoria', 'Halifax', 'Winnipeg', 'Hamilton', 'Kelowna'] },
+] as const;
 const rounds = 8;
 const intent = /\b(?:book|schedule|apply|join|register|enrol+l?|cohort|workshop|masterclass|program(?:me)?|engagement|consultation|investment|pricing)\b/i;
 const directIntent = /\b(?:book (?:a|your)|schedule (?:a|your)|register|enrol+l?|applications? (?:are )?open|join (?:the|our|my)|cohort|workshop|coaching program(?:me)?)\b/i;
@@ -39,7 +44,7 @@ export function publicOfferPointers(payload: unknown): Pointer[] {
 
 function indexPage(index: number) {
   const tag = tags[index % tags.length];
-  const window = Math.floor(index / tags.length) % 3;
+  const window = Math.floor(index / tags.length) % 26;
   const query = new URLSearchParams({ number: '24', fields: 'URL,site_URL,title,date,excerpt' });
   if (window) {
     const before = new Date(Date.now() - window * 14 * 86_400_000).toISOString().slice(0, 10);
@@ -49,8 +54,10 @@ function indexPage(index: number) {
 }
 
 function offerSearch(index: number) {
-  const country = (['us', 'gb', 'ca'] as const)[index % 3];
-  const specialty = ['executive', 'leadership', 'business'][Math.floor(index / 3) % 3];
+  const market = markets[index % markets.length];
+  const specialties = ['executive', 'leadership', 'business'];
+  const specialtyIndex = Math.floor(index / markets.length);
+  const specialty = specialties[specialtyIndex % specialties.length];
   const intents = [
     '"investment" "90-day"',
     '"coaching package" "pricing"',
@@ -59,7 +66,10 @@ function offerSearch(index: number) {
     '"coaching package" "6 months"',
     '"investment" "coaching program"',
   ];
-  return { country, query: `"${specialty} coaching" ${intents[Math.floor(index / 9) % intents.length]} -site:linkedin.com -site:youtube.com -jobs -certification` };
+  const intentIndex = Math.floor(specialtyIndex / specialties.length);
+  const region = Math.floor(intentIndex / intents.length) % (market.cities.length + 1);
+  const location = region ? ` "${market.cities[region - 1]}"` : '';
+  return { country: market.country, query: `"${specialty} coaching" ${intents[intentIndex % intents.length]}${location} -site:linkedin.com -site:youtube.com -jobs -certification` };
 }
 
 export function searchPromotionPointers(payload: unknown): Pointer[] {

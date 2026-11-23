@@ -182,7 +182,8 @@ export async function advanceQualifiedRun(pool: Pool, run: Run, searches: number
     if (qualified >= run.config.qualifiedTarget) return finishQualifiedTarget(db, run.id, qualified);
     const { rows: [{ total }] } = await db.query<{ total: number }>(`SELECT count(*)::int AS total FROM origin_investigations j
       WHERE j.run_id=$1 AND ${includedInvestigation}`, [run.id]);
-    if (total <= run.batch_start) return finishRun(db, run.id, discoveryError(run.sources), qualified);
+    const error = discoveryError(run.sources);
+    if (total <= run.batch_start && error) return finishRun(db, run.id, error, qualified);
     await db.query(`UPDATE origin_runs SET batch_number=batch_number+1,batch_start=$2,batch_search_start=$3,discovery_round=0
       WHERE id=$1`, [run.id, total, searches]);
   });

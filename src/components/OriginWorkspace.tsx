@@ -95,7 +95,7 @@ export default function OriginWorkspace() {
           <div className="origin-heading"><h2>Investigation runs</h2>{active && <RunActions run={active} busy={busy} mutate={mutate} />}</div>
           {!data.online && <p className="origin-note">Compel OS handles manually started ORIGIN runs while the worker is offline. Keep Compel OS open during the run.</p>}
           {latest?.state === 'RUNNING' && latest.discovery_pending && <p className="origin-note">
-            {goalRun ? `Searching batch ${latest.batch_number} for new businesses.` : `Searching for ${latest.candidate_target} new businesses. Repeats do not count toward the target.`}
+            {goalRun ? `${progress}Searching batch ${latest.batch_number} for new businesses.` : `Searching for ${latest.candidate_target} new businesses. Repeats do not count toward the target.`}
           </p>}
           {latest?.state === 'COMPLETED' && !goalRun && latestCount < latest.candidate_target && <p className="origin-note">Discovery found {latestCount} of the {latest.candidate_target} requested new businesses within the run’s search limits.</p>}
           {latest && targetShortfall(latest) && <p className="origin-note" role="status">{progress}Discovery found no more new businesses within the run’s search limits.</p>}
@@ -290,7 +290,7 @@ function SettingsForm({ config, busy, save }: { config: Settings; busy: boolean;
         placeholder="Single batch" aria-describedby="origin-qualified-target-hint" /></label>
       <label>Time budget (minutes)<input required name="runMinutes" type="number" min="2" max="75" defaultValue={config.runMinutes} /></label>
     </div>
-    <div className="origin-form-footer"><span id="origin-qualified-target-hint">A qualified target repeats batches within the time budget. Leave it blank for a single batch.</span>
+    <div className="origin-form-footer"><span id="origin-qualified-target-hint">A qualified target keeps searching through empty batches within the time budget. Leave it blank for a single batch.</span>
       <button className="origin-primary" disabled={busy}>Save settings</button></div>
   </form>;
 }

@@ -5,11 +5,12 @@ import { Pool } from 'pg';
 import { modelAdvisory, readOrReserve } from '../../src/lib/origin/model';
 import { decide, defaults, emptyCheckpoint, finding, gateNames, observe } from '../../src/lib/origin/policy';
 import { businessSearchName } from '../../src/lib/origin/business-search';
+import { publicOfferSource } from '../../src/lib/origin/public-discovery';
 import { createPublicWeb, PublicFailure } from '../../src/lib/origin/public-web';
 import { artifact, dossier, overview, readyOpportunities, runSummary } from '../../src/lib/origin/read-model';
 import { claimRun, control, finish, migrate, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveSettings, saveStage, start } from '../../src/lib/origin/store';
 import { createOriginLane } from '../../src/lib/origin/worker';
-import { official, seed, source } from './fixtures';
+import { fixture, official, page, seed, source } from './fixtures';
 
 test('PostgreSQL fences interrupted stages, deduplicates identities, enforces budgets and serves only current qualified opportunities', {
   skip: process.env.ORIGIN_TEST_POSTGRES !== '1', timeout: 120_000,
@@ -288,6 +289,16 @@ test('the qualified target carries across batches and stops on the third current
     await release(pool, renewed);
     assert.equal(await restarted.runOnce(), true);
     assert.equal((await runSummary(pool, id)).batch_number, 3);
+    const emptyBatch = (await claimRun(pool, id))!;
+    await saveDiscovery(pool, emptyBatch, [], [{ adapter: businessSearchName, status: 'OK', discovered: 0,
+      elapsedMs: 1, queryIndex: 8, searches: 3, searchAttempts: 3 }]);
+    await release(pool, emptyBatch);
+    assert.equal(await restarted.runOnce(), true);
+    const continuing = await runSummary(pool, id);
+    assert.equal(continuing.state, 'RUNNING');
+    assert.equal(continuing.batch_number, 4);
+    assert.equal(continuing.qualified_progress, 2);
+    assert.equal(continuing.discovery_pending, true);
     assert.equal(await restarted.runOnce(), true);
     await save(third.website, true);
     const final = await runSummary(pool, id);
@@ -295,7 +306,7 @@ test('the qualified target carries across batches and stops on the third current
     assert.equal(final.qualified_progress, 3);
     assert.deepEqual(final.counts, { UNRESOLVED: 1, REJECTED: 1, QUALIFIED: 3, SKIPPED: 1 });
     assert.equal((await readyOpportunities(pool, 10, id)).length, 3);
-    assert.deepEqual(issued.sort((a, b) => a - b), Array.from({ length: 9 }, (_, index) => index));
+    assert.deepEqual(issued.sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 9, 10, 11]);
     assert.equal(await restarted.runOnce(), false);
     restarted.stop();
 
@@ -318,19 +329,44 @@ test('the qualified target carries across batches and stops on the third current
     assert.equal(outage.sources?.[0].searchAttempts, 6);
     assert.match(outage.error ?? '', /search sources could not be reached/);
 
-    const shortfallId = (await start(pool, { qualifiedTarget: 3 }))!;
+    const shortfallId = (await start(pool, { qualifiedTarget: 1 }))!;
     const shortfallRun = (await claimRun(pool, shortfallId))!;
-    await saveDiscovery(pool, shortfallRun, [], [{ adapter: 'Fixture search', status: 'OK', discovered: 0, elapsedMs: 1 }]);
+    await saveDiscovery(pool, shortfallRun, [], [{ adapter: publicOfferSource, status: 'OK', discovered: 0,
+      elapsedMs: 1, queryIndex: 80, searchAttempts: 24, searches: 24 }]);
     await release(pool, shortfallRun);
-    const shortfallLane = createOriginLane(pool, limit, { runId: shortfallId, web });
+    const cedar = fixture(page.replace('<title>', '<meta property="og:site_name" content="Cedar Leadership"><title>'));
+    const queries: string[] = [];
+    const readerPages: string[] = [];
+    const publicWeb = { ...cedar.web,
+      async publicSearch(query: string) {
+        queries.push(query);
+        return { results: { web: { results: [{ url: official, title: 'Cedar Leadership executive coaching program' }] } } };
+      },
+      async api(url: string) {
+        readerPages.push(url);
+        return { posts: [] };
+      },
+    };
+    const shortfallLane = createOriginLane(pool, limit, { runId: shortfallId, web: publicWeb });
     assert.equal(await shortfallLane.runOnce(), true);
-    shortfallLane.stop();
     const shortfall = await runSummary(pool, shortfallId);
-    assert.equal(shortfall.state, 'COMPLETED');
+    assert.equal(shortfall.state, 'RUNNING');
+    assert.equal(shortfall.batch_number, 2);
     assert.equal(shortfall.qualified_progress, 0);
     assert.equal(shortfall.error, null);
+    assert.equal(await shortfallLane.runOnce(), true);
+    assert.equal(await shortfallLane.runOnce(), true);
+    assert.equal(await shortfallLane.runOnce(), true);
+    assert.equal(await shortfallLane.runOnce(), false);
+    shortfallLane.stop();
+    assert.equal((await runSummary(pool, shortfallId)).qualified_progress, 1);
+    assert.equal((await runSummary(pool, shortfallId)).state, 'COMPLETED');
+    assert.equal((await readyOpportunities(pool, 10, shortfallId))[0]?.name, 'Cedar Leadership');
+    assert.deepEqual(queries.map(query => query.match(/"(Chicago|London)"/)?.[1]), ['Chicago', 'London']);
+    assert.equal(readerPages.length, 1);
+    assert.ok(new URL(readerPages[0]).searchParams.has('before'));
 
-    await pool.query("UPDATE origin_runs SET state='FAILED',error=$2 WHERE id=$1", [shortfallId,
+    await pool.query("UPDATE origin_runs SET state='FAILED',error=$2,qualified_at_stop=0 WHERE id=$1", [shortfallId,
       'Search sources returned no new businesses before the qualified target was reached.']);
     const historicalShortfall = await runSummary(pool, shortfallId);
     assert.equal(historicalShortfall.state, 'COMPLETED');
