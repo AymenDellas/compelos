@@ -53,6 +53,8 @@ export type Page = { url: string; state: string; evidence: Evidence; identity: s
   scheduling?: boolean; schedulerProblem?: string; feedUrl?: string; embeddedInquiry?: string; hostedInquiry?: string };
 
 const intakeDisclosure = /\b(?:(?:request|apply for) (?:an? |the |your )?(?:call|consultation|session|appointment)|application form|(?:we|I|our team)(?: will|['’]ll) (?:be in touch|get in touch|contact you|reach out|respond|reply|follow up|get back to you)|(?:after|once) you submit|subject to (?:review|approval))\b/i;
+const callArrangement = /\b(?:we|I|our team)(?: will|['’]ll)? (?:arrange|set up) (?:an? |the |your )?(?:(?:no[- ]obligation|free|initial|introductory|brief|phone|video) ){0,3}(?:call|consultation|appointment|meeting)\b/i;
+const ukStreetAddress = /^(?:[^,]{2,70},\s*)?\d{1,5}\s+[\p{L}.'’ -]{3,65},(?:\s*[^,]{2,50},){1,2}\s*(?!(?:GY|JE|IM|BX)\d)[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/iu;
 
 function linkedOfferHost(url: URL, host: string) {
   return url.protocol === 'https:' && ['landing', 'go', 'offers', 'coaching'].some(prefix => url.hostname === prefix + '.' + host);
@@ -186,11 +188,18 @@ export function parseBusinessPage(html: string, url: string) {
   }
   $('footer').slice(0, 4).each((_index, footer) => {
     const section = $(footer);
-    if (!section.find('a[href^="mailto:"]').length || !section.find('a[href^="tel:"]').length) return;
+    if (!section.find('a[href^="mailto:"]').length) return;
+    const telephone = section.find('a[href^="tel:"]').length;
     for (const paragraph of section.find('p,address').slice(0, 45).toArray()) {
-      const location = squash($(paragraph).text());
+      const block = $(paragraph).clone();
+      block.find('br').replaceWith(' ');
+      const location = squash(block.text());
+      if (ukStreetAddress.test(location)) {
+        markets.push({ country: 'UK', evidence: `Published UK postal contact: ${location}` });
+        continue;
+      }
       const market = location.match(/^[\p{L} .'-]{2,45},\s*[\p{L} .'-]{2,45},\s*(United Kingdom|United States|Canada)\s*$/iu)?.[1];
-      if (market) markets.push({ country: /Canada/i.test(market) ? 'CA' : /Kingdom/i.test(market) ? 'UK' : 'US', evidence: `Published business contact location: ${location}` });
+      if (market && telephone) markets.push({ country: /Canada/i.test(market) ? 'CA' : /Kingdom/i.test(market) ? 'UK' : 'US', evidence: `Published business contact location: ${location}` });
     }
   });
   const postalMarkets = [
@@ -308,7 +317,7 @@ export function parseBusinessPage(html: string, url: string) {
   const hostedInquiry = publicInquiryWidget(url) && !scheduling && read('input[type="email"]').length && read('input[type="tel"]').length
     ? read('label,textarea[aria-label]').toArray().map(node => squash($(node).text() || $(node).attr('aria-label') || ''))
       .find(label => /^(?:what would you like help with|your message|how can we help|how can I help)\??\s*\*?$/i.test(label)) : undefined;
-  const informedIntake = [title, ...headings, ...statements].some(value => intakeDisclosure.test(value));
+  const informedIntake = [title, ...headings, ...statements].some(value => intakeDisclosure.test(value) || callArrangement.test(value));
   const consultationIntake = !scheduling && !informedIntake ? read('form').slice(0, 6).toArray().flatMap(node => {
     const form = $(node);
     const labels = form.find('label[for]').toArray().map(label => [$(label).attr('for'), squash($(label).text()).replace(/\s*\*$/, '')] as const);

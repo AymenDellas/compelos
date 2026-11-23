@@ -186,18 +186,30 @@ test('an explicitly described coaching container proves provider program scope',
 
 test('an explained callback is not a booking-to-inquiry mismatch', async () => {
   const destination = official + 'contact';
-  const { web } = fixture(page.replace('href="/booking"', 'href="/contact"'));
-  const publicWeb = { ...web, async document(...args: Parameters<typeof web.document>) {
-    if (args[0] === destination) return { url: destination, status: 200, headers: { 'content-type': 'text/html' },
-      body: Buffer.from('<main><h1>Contact</h1><p>Fill out this form and we will get in touch to arrange your consultation.</p><form><input type="email"><textarea></textarea><button>Send a message</button></form></main>') };
-    return web.document(...args);
-  } };
-  const job = candidate();
-  const { checkpoint } = await resolveBusiness(publicWeb, job, signal());
-  const researched = (await investigate(publicWeb, { ...job, checkpoint }, settings, signal())).checkpoint;
-  assert.equal(researched.inquiryMismatch, undefined);
-  const result = await verifyOpportunity(publicWeb, { ...job, checkpoint: researched }, signal());
-  assert.equal(result.gates.find(gate => gate.name === 'opportunity')?.state, 'UNVERIFIED');
+  for (const disclosureOnOffer of [false, true]) {
+    const offer = page.replace('href="/booking"', 'href="/contact"')
+      .replace('</main>', disclosureOnOffer ? '<p>We arrange a no-obligation phone call to discuss your business objectives.</p></main>' : '</main>');
+    const { web } = fixture(offer);
+    const publicWeb = { ...web, async document(...args: Parameters<typeof web.document>) {
+      const disclosure = disclosureOnOffer ? '' : '<p>Fill out this form and we will get in touch to arrange your consultation.</p>';
+      if (args[0] === destination) return { url: destination, status: 200, headers: { 'content-type': 'text/html' },
+        body: Buffer.from(`<main><h1>Contact</h1>${disclosure}<form><input type="email"><textarea></textarea><button>Send a message</button></form></main>`) };
+      return web.document(...args);
+    } };
+    const job = candidate();
+    const { checkpoint } = await resolveBusiness(publicWeb, job, signal());
+    const researched = (await investigate(publicWeb, { ...job, checkpoint }, settings, signal())).checkpoint;
+    assert.equal(researched.inquiryMismatch, undefined);
+    const result = await verifyOpportunity(publicWeb, { ...job, checkpoint: researched }, signal());
+    assert.equal(result.gates.find(gate => gate.name === 'opportunity')?.state, 'UNVERIFIED');
+  }
+});
+
+test('a published street address and UK postcode can establish the market without a country label', () => {
+  const footer = '<footer><a href="mailto:hello@cedar-leadership.test">Email</a><p>Trade Centre,<br>49 Oak Street,<br>London, EC1A 1BB</p></footer>';
+  assert.deepEqual(parseBusinessPage(footer, official).markets.map(market => market.country), ['UK']);
+  assert.equal(parseBusinessPage(footer.replace('EC1A 1BB', 'JE2 3XX'), official).markets.length, 0);
+  assert.equal(parseBusinessPage(footer.replace('49 Oak Street,<br>London, ', ''), official).markets.length, 0);
 });
 
 test('an explicitly linked branded landing page supplies offer proof while unrelated subdomains stay outside scope', async () => {
