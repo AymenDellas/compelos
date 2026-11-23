@@ -30,6 +30,23 @@ test('Serper capacity errors are deferred without spending another search credit
   assert.equal(fetch.mock.callCount(), 1);
 });
 
+test('cancelling discovery interrupts the in-flight Serper read', async (t) => {
+  const previous = process.env.SERPER_API_KEY;
+  t.after(() => { if (previous === undefined) delete process.env.SERPER_API_KEY; else process.env.SERPER_API_KEY = previous; });
+  process.env.SERPER_API_KEY = 'fixture-key';
+  const controller = new AbortController();
+  const reason = new Error('Run cancelled');
+  let abortedRequest = false;
+  const fetch = t.mock.method(globalThis, 'fetch', async (_input: string, init: RequestInit) => {
+    controller.abort(reason);
+    abortedRequest = init.signal?.aborted === true;
+    return Response.json({ organic: [] });
+  });
+  await assert.rejects(createBusinessSearch()!(0, 8, controller.signal), reason);
+  assert.equal(abortedRequest, true);
+  assert.equal(fetch.mock.callCount(), 1);
+});
+
 test('publisher search keeps only public URLs for subsequent first-party source verification', () => {
   assert.deepEqual(activitySearchPointers([
     { title: 'Unverified date and speaker', link: 'https://journal.example/interview' },
