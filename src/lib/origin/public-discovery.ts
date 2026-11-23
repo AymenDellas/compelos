@@ -52,10 +52,12 @@ function offerSearch(index: number) {
   const country = (['us', 'gb', 'ca'] as const)[index % 3];
   const specialty = ['executive', 'leadership', 'business'][Math.floor(index / 3) % 3];
   const intents = [
-    '"investment" "coaching program"',
+    '"investment" "90-day"',
     '"coaching package" "pricing"',
     '"coaching sessions" "fees"',
-    '"investment" "months"',
+    '"investment" "coaching sessions"',
+    '"coaching package" "6 months"',
+    '"investment" "coaching program"',
   ];
   return { country, query: `"${specialty} coaching" ${intents[Math.floor(index / 9) % intents.length]} -site:linkedin.com -site:youtube.com -jobs -certification` };
 }

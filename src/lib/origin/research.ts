@@ -227,7 +227,7 @@ export function parseBusinessPage(html: string, url: string) {
   $('script,style,noscript,template,blockquote,[hidden],[aria-hidden="true"],.testimonial,.review').remove();
   const content = $('main,[role="main"]').first();
   const read = (selector: string) => content.length ? content.find(selector) : $(selector).filter((_i, node) => !$(node).closest('nav,footer,aside').length);
-  const headings = read('h1,h2,h3').slice(0, 50).toArray().map(node => squash($(node).text()).slice(0, 240));
+  const headings = read('h1,h2,h3,h4,h5,h6').slice(0, 50).toArray().map(node => squash($(node).text()).slice(0, 240));
   const attributedTestimonialPage = /(?:^|[-/])(?:testimonials?|client-reviews|coaching-reviews)(?:[-/]|$)/i.test(new URL(url).pathname);
   const testimonialContext = headings.some(heading => /\b(?:testimonials|what (?:our )?clients say|what executives are saying)\b/i.test(heading)) ||
     relevantCoach.test(headings[0] ?? '') && /\b(?:program(?:me)?|package|services)\b/i.test(headings[0] ?? '');
@@ -1010,11 +1010,18 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     const namedClients = [...clientAccounts.values()].slice(0, 2);
     const proof = clientCase ?? (procurement?.contract ? observe('external', procurement.source,
       `${procurement.contract.buyer} recorded a coaching award to ${procurement.name} on ${procurement.contract.awardedOn.slice(0, 10)}. Value GBP ${procurement.contract.amountGbp}. Open Government Licence v3.0.`, 'Public contract award') : undefined);
-    const program = offer.statements.find(item => /\b(?:(?:[3-9]|1[0-9]|three|four|five|six|nine|twelve)[- ]months?|(?:[6-9]|[1-9]\d) (?:private |individual |executive |leadership |one-on-one )?coaching (?:sessions|calls))\b/i.test(item)
+    const writtenProgram = offer.statements.find(item => /\b(?:(?:[3-9]|1[0-9]|three|four|five|six|nine|twelve)[- ]months?|(?:[6-9]|[1-9]\d) (?:private |individual |executive |leadership |one-on-one )?coaching (?:sessions|calls))\b/i.test(item)
       && /\b(?:coaching|engagement|program(?:me)?)\b/i.test(item)
       && !/\b(?:free|may offer|might offer|formerly|according to|report (?:on|by|from)|(?:a |the )?(?:study|survey|report|research) (?:shows|found|finds|documents|suggests|by|from))\b/i.test(item)
       && (/\b(?:our|my) (?:[\w:-]+ ){0,5}(?:coaching|engagement|program(?:me)?)\b|\bthis (?:[\w:-]+ ){0,4}coaching (?:container|package|program(?:me)?|engagement)\b|\b(?:at|with) (?:our|this|the) (?:practice|firm)\b|\b(?:we|I) (?:offer|deliver|provide|run|include)\b|\byou(?:['’]ll| will) (?:receive|get)\b/i.test(item)
         || containsName(item, checkpoint.identityName ?? job.name)));
+    const programTitle = [line, offer.title, ...offer.headings.slice(0, 4)].find(item =>
+      /\b(?:9\d|[1-3]\d{2})[- ]day\b/i.test(item) && businessNiche.test(item) &&
+      /\bcoaching (?:program(?:me)?|package|engagement)\b/i.test(item) && !/\b(?:free|trial)\b/i.test(item));
+    const programSessions = programTitle && offer.headings.find(item =>
+      /^(?:[^\p{L}\p{N}]*)(?:[6-9]|[1-9]\d)\s+(?:(?:private|individual|1[: -]1|one-on-one|weekly|biweekly|monthly)\s+){0,3}coaching (?:sessions|calls)\b/iu.test(item) &&
+      !/\b(?:free|sample|bonus)\b/i.test(item));
+    const program = writtenProgram ?? (programTitle && programSessions ? `${programTitle} | ${programSessions}` : undefined);
     const requirePaidTerms = qualificationOnly || Boolean(screenedOffer);
     const explicitPrice = requirePaidTerms ? paidOffer(offer) : price;
     const commercial = [explicitPrice && quote(offer, explicitPrice, paidAmount.test(explicitPrice) ? 'Published offer price' : 'Published paid terms'),

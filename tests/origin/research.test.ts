@@ -59,6 +59,23 @@ test('an evergreen paid offer qualifies without promotion, funnel checks, or bus
   assert.equal(checkpoint.contact, undefined);
 });
 
+test('a named coaching package and repeated private sessions in headings support commercial substance', async () => {
+  const home = page.replace('<p>Our business was founded in 2012.</p>', '')
+    .replace('<p>Coaching engagement pricing is $5,000.</p>', `<h5>The 90-Day VIP Business Coaching Program</h5>
+      <h4>6 Private Biweekly Coaching Sessions</h4><p>Coaching engagement pricing is $5,000.</p>`);
+  for (const [html, state] of [[home, 'VERIFIED'], [home.replace('6 Private', '2 Private'), 'UNVERIFIED']]) {
+    const { web } = fixture(html);
+    const job = candidate();
+    const { checkpoint } = await resolveBusiness(web, job, signal());
+    const { checkpoint: inspected } = await investigate(web, { ...job, checkpoint }, settings, signal(), { qualificationOnly: true });
+    assert.equal(inspected.gates.find(gate => gate.name === 'substance')?.state, state);
+    if (state === 'VERIFIED') {
+      assert.match(inspected.evidence.find(item => item.method === 'Published coaching program scope')?.excerpt ?? '', /90-Day.*6 Private Biweekly/);
+      assert.equal(decide(inspected.gates, inspected.evidence).outcome, 'QUALIFIED');
+    }
+  }
+});
+
 test('hosted events require a reciprocal organizer link and cannot become a business', async () => {
   const event = 'https://www.eventbrite.com/e/leadership-workshop';
   const date = new Date(Date.now() + 86_400_000).toISOString();
