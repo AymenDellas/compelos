@@ -2,7 +2,7 @@ import type { Pool, PoolClient } from 'pg';
 import { readModelConfig } from './model';
 import { defaults, POLICY_VERSION } from './policy';
 import type { Checkpoint, Decision, Outcome, Settings, SourceResult } from './policy';
-import { configuration, includedInvestigation, qualifiedCountSql, readConfig, sourceHistory, sourceQuality, suppressionFilter } from './store';
+import { configuration, discoveryError, includedInvestigation, qualifiedCountSql, readConfig, sourceHistory, sourceQuality, suppressionFilter } from './store';
 import type { SourceQuality } from './store';
 import { approvedFeeds, independentFeedCount } from './sources';
 
@@ -76,11 +76,19 @@ const summarySql = (suppressed: string) => `SELECT r.id,r.state,r.created_at,r.s
     FROM origin_investigations j WHERE run_id=r.id GROUP BY 1) c),'{}') AS counts FROM origin_runs r`;
 
 export async function runSummary(db: DB, id: string) {
-  return (await db.query<RunSummary>(`${summarySql(await suppressionFilter(db))} WHERE r.id=$1`, [id])).rows[0];
+  const [run] = (await db.query<RunSummary>(`${summarySql(await suppressionFilter(db))} WHERE r.id=$1`, [id])).rows;
+  return run && reportRun(run);
 }
 
 export async function listRuns(db: DB, limit = 12) {
-  return (await db.query<RunSummary>(`${summarySql(await suppressionFilter(db))} ORDER BY r.created_at DESC LIMIT $1`, [limit])).rows;
+  return (await db.query<RunSummary>(`${summarySql(await suppressionFilter(db))} ORDER BY r.created_at DESC LIMIT $1`, [limit])).rows.map(reportRun);
+}
+
+function reportRun(run: RunSummary): RunSummary {
+  const legacyShortfall = 'Search sources returned no new businesses before the qualified target was reached.';
+  if (run.state !== 'FAILED' || run.error !== legacyShortfall || !run.sources?.length) return run;
+  const error = discoveryError(run.sources);
+  return error ? { ...run, error } : { ...run, state: 'COMPLETED', error: null };
 }
 
 export async function investigations(db: DB, run: string | null, outcome: string | null, limit: number) {

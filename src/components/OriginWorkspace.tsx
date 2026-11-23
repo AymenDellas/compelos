@@ -69,6 +69,7 @@ export default function OriginWorkspace() {
   const latest = data?.runs[0];
   const latestCount = latest ? candidateCount(latest) : 0;
   const goalRun = Boolean(latest?.qualified_target);
+  const progress = latest && goalRun ? `${latest.qualified_progress ?? 0} of ${latest.qualified_target} qualified. ` : '';
   return <section className="origin-workspace" aria-label="ORIGIN workstation">
     <div className="origin-toolbar">
       <nav className="origin-tabs" aria-label="ORIGIN sections">
@@ -97,10 +98,11 @@ export default function OriginWorkspace() {
             {goalRun ? `Searching batch ${latest.batch_number} for new businesses.` : `Searching for ${latest.candidate_target} new businesses. Repeats do not count toward the target.`}
           </p>}
           {latest?.state === 'COMPLETED' && !goalRun && latestCount < latest.candidate_target && <p className="origin-note">Discovery found {latestCount} of the {latest.candidate_target} requested new businesses within the run’s search limits.</p>}
-          {goalRun && latest?.error && <p className="origin-note" role="status">{latest.qualified_progress ?? 0} of {latest.qualified_target} qualified. {latest.error}</p>}
+          {latest && targetShortfall(latest) && <p className="origin-note" role="status">{progress}Discovery found no more new businesses within the run’s search limits.</p>}
+          {latest?.error && <p className="origin-note" role="status">{progress}{latest.error}</p>}
           {data.runs.length ? <div className="origin-scroll"><table><thead><tr><th>Queued at</th><th>Status</th><th>Investigations</th><th>Completed</th><th>Qualified</th><th>Finished at</th></tr></thead>
             <tbody>{data.runs.map(run => <tr key={run.id} title={run.error ?? undefined}>
-              <td>{stamp(run.created_at)}</td><td><State value={run.state} /></td>
+              <td>{stamp(run.created_at)}</td><td><State value={targetShortfall(run) ? 'TARGET_NOT_REACHED' : run.state} /></td>
               <td>{run.qualified_target ? `${candidateCount(run)} · Batch ${run.batch_number}` : `${candidateCount(run)} / ${run.candidate_target}`}</td>
               <td>{(run.counts.QUALIFIED ?? 0) + (run.counts.REJECTED ?? 0) + (run.counts.UNRESOLVED ?? 0)}</td>
               <td>{run.qualified_target ? `${run.qualified_progress ?? 0} / ${run.qualified_target}` : run.counts.QUALIFIED ?? 0}</td><td>{stamp(run.finished_at)}</td>
@@ -134,6 +136,10 @@ export default function OriginWorkspace() {
 
 function candidateCount(run: RunSummary) {
   return Object.entries(run.counts).reduce((sum, [state, count]) => state === 'SKIPPED' ? sum : sum + count, 0);
+}
+
+function targetShortfall(run: RunSummary) {
+  return run.state === 'COMPLETED' && (run.qualified_progress ?? 0) < run.qualified_target;
 }
 
 function Metric({ label, value, accent = false }: { label: string; value: number | string; accent?: boolean }) {

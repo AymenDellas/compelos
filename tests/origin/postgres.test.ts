@@ -308,12 +308,33 @@ test('the qualified target carries across batches and stops on the third current
     const emptyId = (await start(pool, { qualifiedTarget: 3 }))!;
     const emptyLane = createOriginLane(pool, limit, { runId: emptyId, web });
     assert.equal(await emptyLane.runOnce(), true);
+    assert.equal((await runSummary(pool, emptyId)).discovery_pending, true);
+    assert.equal(await emptyLane.runOnce(), true);
     assert.equal(await emptyLane.runOnce(), true);
     emptyLane.stop();
-    const shortfall = await runSummary(pool, emptyId);
-    assert.equal(shortfall.state, 'FAILED');
+    const outage = await runSummary(pool, emptyId);
+    assert.equal(outage.state, 'FAILED');
+    assert.equal(outage.qualified_progress, 0);
+    assert.equal(outage.sources?.[0].searchAttempts, 6);
+    assert.match(outage.error ?? '', /search sources could not be reached/);
+
+    const shortfallId = (await start(pool, { qualifiedTarget: 3 }))!;
+    const shortfallRun = (await claimRun(pool, shortfallId))!;
+    await saveDiscovery(pool, shortfallRun, [], [{ adapter: 'Fixture search', status: 'OK', discovered: 0, elapsedMs: 1 }]);
+    await release(pool, shortfallRun);
+    const shortfallLane = createOriginLane(pool, limit, { runId: shortfallId, web });
+    assert.equal(await shortfallLane.runOnce(), true);
+    shortfallLane.stop();
+    const shortfall = await runSummary(pool, shortfallId);
+    assert.equal(shortfall.state, 'COMPLETED');
     assert.equal(shortfall.qualified_progress, 0);
-    assert.match(shortfall.error ?? '', /no new businesses/);
+    assert.equal(shortfall.error, null);
+
+    await pool.query("UPDATE origin_runs SET state='FAILED',error=$2 WHERE id=$1", [shortfallId,
+      'Search sources returned no new businesses before the qualified target was reached.']);
+    const historicalShortfall = await runSummary(pool, shortfallId);
+    assert.equal(historicalShortfall.state, 'COMPLETED');
+    assert.equal(historicalShortfall.error, null);
 
   } finally {
     await pool.end();

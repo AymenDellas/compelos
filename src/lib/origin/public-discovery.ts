@@ -159,6 +159,9 @@ export async function discoverPublicOffers(pool: Pool, run: Run, web: PublicWeb,
     source.status = source.retryAt ? 'DEFERRED' : 'FAILED';
     source.code = source.retryAt ? 'RATE_LIMITED' : 'PUBLIC_INDEX_UNAVAILABLE';
   } else if (!accepted.size) source.code = 'NO_VERIFIED_PAID_OFFERS';
-  const refill = Boolean(source.searches) && round + 1 < rounds && (!run.config.qualifiedTarget || !accepted.size);
+  const previousCode = run.sources?.find(item => item.adapter === publicOfferSource)?.code;
+  // An unavailable group can be transient. Try the next group within the same search budget.
+  const canContinue = source.status === 'OK' || source.status === 'FAILED' && previousCode !== 'PUBLIC_INDEX_UNAVAILABLE';
+  const refill = canContinue && round + 1 < rounds && (!run.config.qualifiedTarget || !accepted.size);
   await saveDiscovery(pool, run, [...accepted.values()].sort((a, b) => (b.discoveryPriority ?? 0) - (a.discoveryPriority ?? 0)), [source], refill);
 }

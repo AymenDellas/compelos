@@ -45,6 +45,11 @@ export function migrate(pool: Pool) {
 export const readConfig = (value?: Partial<Settings>) => settingsSchema.parse({ ...defaults, ...value });
 type Configuration = { config: Settings; publisher_feeds: PublisherFeed[] | null; next_run_at: Date | null; worker_seen_at: Date | null; worker_policy_version: string | null };
 const hasQualifiedTarget = "COALESCE((config->>'qualifiedTarget')::int,0)>0";
+const discoveryUnavailable = 'The search sources could not be reached. See Discovery for details.';
+
+export function discoveryError(sources: SourceResult[] | null) {
+  return sources?.length && !sources.some(source => source.status === 'OK') ? discoveryUnavailable : undefined;
+}
 
 export async function configuration(db: DB) {
   return (await db.query<Configuration>('SELECT config,publisher_feeds,next_run_at,worker_seen_at,worker_policy_version FROM origin_settings WHERE id=1')).rows[0];
@@ -177,7 +182,7 @@ export async function advanceQualifiedRun(pool: Pool, run: Run, searches: number
     if (qualified >= run.config.qualifiedTarget) return finishQualifiedTarget(db, run.id, qualified);
     const { rows: [{ total }] } = await db.query<{ total: number }>(`SELECT count(*)::int AS total FROM origin_investigations j
       WHERE j.run_id=$1 AND ${includedInvestigation}`, [run.id]);
-    if (total <= run.batch_start) return finishRun(db, run.id, 'Search sources returned no new businesses before the qualified target was reached.', qualified);
+    if (total <= run.batch_start) return finishRun(db, run.id, discoveryError(run.sources), qualified);
     await db.query(`UPDATE origin_runs SET batch_number=batch_number+1,batch_start=$2,batch_search_start=$3,discovery_round=0
       WHERE id=$1`, [run.id, total, searches]);
   });

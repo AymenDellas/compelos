@@ -6,11 +6,11 @@ import type { Adapter } from './discovery';
 import { decide } from './policy';
 import type { Seed, SourceResult } from './policy';
 import { discoverPublicOffers, publicOfferSource } from './public-discovery';
-import { createPublicWeb } from './public-web';
+import { createPublicWeb, PublicFailure } from './public-web';
 import type { PublicWeb } from './public-web';
 import { hasSchema } from './read-model';
 import { investigate, resolveBusiness } from './research';
-import { advanceQualifiedRun, claimRun, failStage, finish, includedInvestigation, migrate, nextJob, release, runSearch, saveDiscovery, saveStage, sourceHistory } from './store';
+import { advanceQualifiedRun, claimRun, discoveryError, failStage, finish, includedInvestigation, migrate, nextJob, release, runSearch, saveDiscovery, saveStage, sourceHistory } from './store';
 import type { Run } from './store';
 
 type Limiter = <T>(run: () => Promise<T>) => Promise<T>;
@@ -56,6 +56,7 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
         for (const result of results) if (result.status === 'fulfilled' && result.value) groups.push(result.value);
       }
       adapter.searches = groups.length;
+      if (!groups.length) throw new PublicFailure('SOURCE_UNAVAILABLE');
       return Array.from({ length: 10 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : [])).flat();
     } };
     const found = await discover(count > 0 ? [adapter] : []);
@@ -83,8 +84,7 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
       else {
         const job = await nextJob(pool, run);
         if (!job && run.config.qualifiedTarget) await advanceQualifiedRun(pool, run, targetSearchAttempts(run.sources));
-        else if (!job) await finish(pool, run, run.sources.every(source => source.status !== 'OK' || !source.discovered) &&
-          run.sources.some(source => source.status === 'FAILED') ? 'A discovery source was unavailable. See Discovery for its latest status.' : undefined);
+        else if (!job) await finish(pool, run, discoveryError(run.sources));
         else try {
           const startedAt = Date.now();
           if (job.stage === 'RESOLVING') {

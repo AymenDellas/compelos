@@ -43,7 +43,7 @@
 .origin-state::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .origin-state:is([data-value=READY],[data-value=QUALIFIED],[data-value=VERIFIED],[data-value=OK],[data-value=COMPLETED]) { color: var(--success); }
 .origin-state:is([data-value=RUNNING],[data-value=QUEUED]) { color: var(--info); }
-.origin-state:is([data-value=NEEDS_RECHECK],[data-value=UNRESOLVED],[data-value=UNVERIFIED],[data-value=PAUSED],[data-value=STALE],[data-value=DEFERRED]) { color: var(--warn); }
+.origin-state:is([data-value=NEEDS_RECHECK],[data-value=UNRESOLVED],[data-value=UNVERIFIED],[data-value=PAUSED],[data-value=STALE],[data-value=DEFERRED],[data-value=TARGET_NOT_REACHED]) { color: var(--warn); }
 .origin-state:is([data-value=FAILED],[data-value=REJECTED],[data-value=CONTRADICTED],[data-value=SUPPRESSED]) { color: var(--bad); }
 .origin-operations { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); align-items: start; gap: 16px; }
 .origin-detail { display: grid; grid-template-columns: minmax(0, 145px) minmax(0, 1fr); align-items: start; gap: 9px 15px; margin: 0; padding: 14px 16px; }
