@@ -218,8 +218,9 @@ test('resetting review history releases old businesses once and keeps their save
     const prior = (await claimRun(pool))!;
     await saveDiscovery(pool, prior, [seed], []);
     const oldJob = (await nextJob(pool, prior))!;
-    const evidence = observe('official', official, 'Fixture program', 'Fixture evidence');
-    const qualified = { ...emptyCheckpoint(), evidence: [evidence],
+    const offer = { ...seed, method: 'PUBLIC_OFFER' as const, website: `${official}new-program`, sourceKey: 'fresh-offer' };
+    const evidence = observe('official', offer.website, 'Fixture program', 'Offer heading');
+    const qualified = { ...emptyCheckpoint(), country: 'UK' as const, evidence: [evidence],
       gates: gateNames.map(name => finding(name, 'VERIFIED', 'Fixture verified requirement', [evidence])) };
     await saveStage(pool, prior, oldJob, qualified, decide(qualified.gates, qualified.evidence));
     await finish(pool, prior);
@@ -228,9 +229,13 @@ test('resetting review history releases old businesses once and keeps their save
     assert.deepEqual(await existingDiscoveryDomains(pool, id, [host]), new Set([host]));
     await pool.query('UPDATE origin_settings SET dedup_reset_at=clock_timestamp() WHERE id=1');
     assert.deepEqual(await existingDiscoveryDomains(pool, id, [host]), new Set());
+    const { web } = fixture(page.replace('<title>', '<meta property="og:site_name" content="Cedar Leadership"><title>'));
+    const unexpectedIndex = async () => { assert.fail('The first round should use saved first-party offers.'); };
+    const lane = createOriginLane(pool, async work => work(), { runId: id, web: { ...web, api: unexpectedIndex, publicSearch: unexpectedIndex } });
+    assert.equal(await lane.runOnce(), true);
+    assert.equal((await runSummary(pool, id)).sources?.[0].adapter, 'Saved coaching offers');
+    lane.stop();
     const current = (await claimRun(pool, id))!;
-    const offer = { ...seed, method: 'PUBLIC_OFFER' as const, website: `${official}new-program`, sourceKey: 'fresh-offer' };
-    await saveDiscovery(pool, current, [offer, offer], []);
     const newJob = (await nextJob(pool, current))!;
     assert.equal(newJob.business_id, oldJob.business_id);
     assert.equal(newJob.website, offer.website);
@@ -328,11 +333,11 @@ test('the qualified target carries across batches and stops on the third current
     await save(second.website, true);
     assert.equal((await runSummary(pool, id)).qualified_progress, 2);
     await pool.query("UPDATE origin_runs SET deadline_at=now()-interval '1 second' WHERE id=$1", [id]);
-    assert.equal(await claimRun(pool, id), null);
     const elapsed = await runSummary(pool, id);
     assert.equal(elapsed.state, 'PAUSED');
     assert.equal(elapsed.qualified_progress, 2);
     assert.match(elapsed.error ?? '', /Time budget elapsed/);
+    assert.equal((await pool.query('SELECT state FROM origin_runs WHERE id=$1', [id])).rows[0].state, 'RUNNING');
     assert.ok(await control(pool, id, 'resume'));
     const renewed = await claimRun(pool, id);
     assert.ok(renewed && renewed.deadline_at.getTime() > Date.now());
@@ -348,7 +353,7 @@ test('the qualified target carries across batches and stops on the third current
     assert.equal(await restarted.runOnce(), true);
     const continuing = await runSummary(pool, id);
     assert.equal(continuing.state, 'RUNNING');
-    assert.equal(continuing.batch_number, 4);
+    assert.equal(continuing.batch_number, 3);
     assert.equal(continuing.qualified_progress, 2);
     assert.equal(continuing.discovery_pending, true);
     assert.equal(await restarted.runOnce(), true);
@@ -403,7 +408,7 @@ test('the qualified target carries across batches and stops on the third current
     assert.equal(await shortfallLane.runOnce(), true);
     const shortfall = await runSummary(pool, shortfallId);
     assert.equal(shortfall.state, 'RUNNING');
-    assert.equal(shortfall.batch_number, 2);
+    assert.equal(shortfall.batch_number, 1);
     assert.equal(shortfall.qualified_progress, 0);
     assert.equal(shortfall.error, null);
     assert.equal(await shortfallLane.runOnce(), true);

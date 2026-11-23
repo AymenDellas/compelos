@@ -876,13 +876,17 @@ export async function screenPublicOffer(web: PublicWeb, source: string, signal: 
   const own = (url: URL) => domain(url.href) === host;
   const entry = hosted ? await inspect(web, official, signal, 'Event organizer website', own) : pointer;
   if (entry.state !== 'READABLE' || entry.canonical && !own(new URL(entry.canonical))) return { reason: 'Official site unverified' };
+  const scopedOffer = (page: Page) => {
+    const offer = offerOn(page);
+    return page.state === 'READABLE' && (!page.canonical || own(new URL(page.canonical))) &&
+      businessNiche.test(offer?.line ?? '') && Boolean(offer?.detail);
+  };
   const sameSite = [...new Map(entry.links.filter(link => own(new URL(link.url)) && link.url !== entry.url &&
     (offerPath.test(new URL(link.url).pathname) || link.main && offerLink.test(link.label) &&
       (relevantCoach.test(link.label) || programAction.test(link.label)))).map(link => [link.url, link])).values()];
   const ranked = sameSite.sort((a, b) => Number(b.main) - Number(a.main));
-  const scoped = [entry, ...await Promise.all(ranked.slice(0, 2).map(link => inspect(web, link.url, signal, 'Paid offer screening', own)))]
-    .filter(page => page.state === 'READABLE' && (!page.canonical || own(new URL(page.canonical))) &&
-      businessNiche.test(offerOn(page)?.line ?? '') && offerOn(page)?.detail);
+  const scoped = scopedOffer(entry) && paidOffer(entry) ? [entry] :
+    [entry, ...await Promise.all(ranked.slice(0, 2).map(link => inspect(web, link.url, signal, 'Paid offer screening', own)))].filter(scopedOffer);
   if (!scoped.length) return { reason: 'No scoped coaching offer' };
   const paid = scoped.filter(paidOffer);
   if (!paid.length) return { reason: 'Paid terms unverified' };

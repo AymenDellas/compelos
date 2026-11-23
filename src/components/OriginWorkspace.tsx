@@ -68,6 +68,7 @@ export default function OriginWorkspace() {
   const active = data?.runs.find(run => activeStates.includes(run.state));
   const latest = data?.runs[0];
   const latestCount = latest ? candidateCount(latest) : 0;
+  const awaitingReview = (latest?.counts.RESOLVING ?? 0) + (latest?.counts.INVESTIGATING ?? 0) + (latest?.counts.VERIFYING ?? 0);
   const goalRun = Boolean(latest?.qualified_target);
   const progress = latest && goalRun ? `${latest.qualified_progress ?? 0} of ${latest.qualified_target} qualified. ` : '';
   return <section className="origin-workspace" aria-label="ORIGIN workstation">
@@ -86,7 +87,7 @@ export default function OriginWorkspace() {
     {data && !dossierId && <>
       {tab === 'Overview' && <>
         <div className="origin-metrics">
-          <Metric label="New businesses in latest run" value={latest && !goalRun ? `${latestCount} / ${latest.candidate_target}` : latestCount} />
+          <Metric label="Businesses queued in latest run" value={latest && !goalRun ? `${latestCount} / ${latest.candidate_target}` : latestCount} />
           <Metric label="Rejected" value={latest?.counts.REJECTED ?? 0} />
           <Metric label="Unresolved" value={latest?.counts.UNRESOLVED ?? 0} />
           <Metric label="Ready opportunities" value={data.opportunities.length} accent />
@@ -94,8 +95,8 @@ export default function OriginWorkspace() {
         <section className="origin-section">
           <div className="origin-heading"><h2>Investigation runs</h2>{active && <RunActions run={active} busy={busy} mutate={mutate} />}</div>
           {!data.online && <p className="origin-note">Compel OS handles manually started ORIGIN runs while the worker is offline. Keep Compel OS open during the run.</p>}
-          {latest?.state === 'RUNNING' && latest.discovery_pending && <p className="origin-note">
-            {goalRun ? `${progress}Searching batch ${latest.batch_number} for new businesses.` : `Searching for ${latest.candidate_target} new businesses. Repeats do not count toward the target.`}
+          {latest?.state === 'RUNNING' && (latest.discovery_pending || awaitingReview > 0) && <p className="origin-note">
+            {progress}{awaitingReview > 0 ? `${awaitingReview} queued for review.` : goalRun ? 'Searching for more businesses.' : `Searching for ${latest.candidate_target} new businesses.`}
           </p>}
           {latest?.state === 'COMPLETED' && !goalRun && latestCount < latest.candidate_target && <p className="origin-note">Discovery found {latestCount} of the {latest.candidate_target} requested new businesses within the run’s search limits.</p>}
           {latest && targetShortfall(latest) && <p className="origin-note" role="status">{progress}Discovery found no more new businesses within the run’s search limits.</p>}
@@ -103,7 +104,7 @@ export default function OriginWorkspace() {
           {data.runs.length ? <div className="origin-scroll"><table><thead><tr><th>Queued at</th><th>Status</th><th>Investigations</th><th>Completed</th><th>Qualified</th><th>Finished at</th></tr></thead>
             <tbody>{data.runs.map(run => <tr key={run.id} title={run.error ?? undefined}>
               <td>{stamp(run.created_at)}</td><td><State value={targetShortfall(run) ? 'TARGET_NOT_REACHED' : run.state} /></td>
-              <td>{run.qualified_target ? `${candidateCount(run)} · Batch ${run.batch_number}` : `${candidateCount(run)} / ${run.candidate_target}`}</td>
+              <td>{run.qualified_target ? candidateCount(run) : `${candidateCount(run)} / ${run.candidate_target}`}</td>
               <td>{(run.counts.QUALIFIED ?? 0) + (run.counts.REJECTED ?? 0) + (run.counts.UNRESOLVED ?? 0)}</td>
               <td>{run.qualified_target ? `${run.qualified_progress ?? 0} / ${run.qualified_target}` : run.counts.QUALIFIED ?? 0}</td><td>{stamp(run.finished_at)}</td>
             </tr>)}</tbody></table></div> : <p className="origin-empty">There are no investigation runs yet.</p>}

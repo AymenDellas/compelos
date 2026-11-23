@@ -46,6 +46,9 @@ export const readConfig = (value?: Partial<Settings>) => settingsSchema.parse({ 
 type Configuration = { config: Settings; publisher_feeds: PublisherFeed[] | null; next_run_at: Date | null; worker_seen_at: Date | null; worker_policy_version: string | null };
 const hasQualifiedTarget = "COALESCE((config->>'qualifiedTarget')::int,0)>0";
 const discoveryUnavailable = 'The search sources could not be reached. See Discovery for details.';
+export const expiredUnownedRun = "state='RUNNING' AND deadline_at<=now() AND (lease_until IS NULL OR lease_until<=now())";
+export const qualifiedBudgetMessage = 'Time budget elapsed. Resume to continue toward this qualified target.';
+export const runBudgetMessage = 'Run time budget elapsed.';
 
 export function discoveryError(sources: SourceResult[] | null) {
   return sources?.length && !sources.some(source => source.status === 'OK') ? discoveryUnavailable : undefined;
@@ -92,6 +95,7 @@ export function patchSettings(pool: Pool, patch: Partial<Settings>) {
 }
 
 export async function control(db: DB, id: string, action: 'pause' | 'resume' | 'cancel') {
+  if (action === 'resume') await settleExpiredRuns(db, id);
   const change = {
     pause: `state='PAUSED',paused_at=now()`,
     resume: `state=CASE WHEN started_at IS NULL THEN 'QUEUED' ELSE 'RUNNING' END,
@@ -113,18 +117,21 @@ export async function claimRun(pool: Pool, target?: string) {
         await db.query('UPDATE origin_settings SET next_run_at=now()+make_interval(mins => $1) WHERE id=1', [config.intervalMinutes]);
       }
     }
-    await db.query(`UPDATE origin_runs SET state=CASE WHEN ${hasQualifiedTarget} THEN 'PAUSED' ELSE 'FAILED' END,
-      paused_at=CASE WHEN ${hasQualifiedTarget} THEN now() ELSE NULL END,
-      finished_at=CASE WHEN ${hasQualifiedTarget} THEN NULL ELSE now() END,lease=NULL,lease_until=NULL,
-      error=CASE WHEN ${hasQualifiedTarget} THEN 'Time budget elapsed. Resume to continue toward this qualified target.'
-      ELSE 'Run time budget elapsed.' END
-      WHERE state='RUNNING' AND deadline_at<=now() AND (lease_until IS NULL OR lease_until<=now()) AND ($1::uuid IS NULL OR id=$1)`, [target ?? null]);
+    await settleExpiredRuns(db, target);
     const { rows: [run] } = await db.query<Run>(`UPDATE origin_runs SET state='RUNNING',lease=$1,lease_until=now()+interval '95 seconds',
       started_at=COALESCE(started_at,now()),deadline_at=COALESCE(deadline_at,now()+make_interval(mins => (config->>'runMinutes')::int))
       WHERE id=(SELECT id FROM origin_runs WHERE state IN ('QUEUED','RUNNING') AND (lease_until IS NULL OR lease_until<=now())
       AND ($2::uuid IS NULL OR id=$2) ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`, [randomUUID(), target ?? null]);
     return run ? { ...run, config: readConfig(run.config) } : null;
   });
+}
+
+function settleExpiredRuns(db: DB, target?: string) {
+  return db.query(`UPDATE origin_runs SET state=CASE WHEN ${hasQualifiedTarget} THEN 'PAUSED' ELSE 'FAILED' END,
+    paused_at=CASE WHEN ${hasQualifiedTarget} THEN now() ELSE NULL END,
+    finished_at=CASE WHEN ${hasQualifiedTarget} THEN NULL ELSE deadline_at END,lease=NULL,lease_until=NULL,
+    error=CASE WHEN ${hasQualifiedTarget} THEN $2 ELSE $3 END
+    WHERE ${expiredUnownedRun} AND ($1::uuid IS NULL OR id=$1)`, [target ?? null, qualifiedBudgetMessage, runBudgetMessage]);
 }
 
 export async function release(db: DB, run: Run) {
@@ -184,8 +191,9 @@ export async function advanceQualifiedRun(pool: Pool, run: Run, searches: number
       WHERE j.run_id=$1 AND ${includedInvestigation}`, [run.id]);
     const error = discoveryError(run.sources);
     if (total <= run.batch_start && error) return finishRun(db, run.id, error, qualified);
-    await db.query(`UPDATE origin_runs SET batch_number=batch_number+1,batch_start=$2,batch_search_start=$3,discovery_round=0
-      WHERE id=$1`, [run.id, total, searches]);
+    const fullBatch = total >= run.batch_start + run.config.candidateLimit;
+    await db.query(`UPDATE origin_runs SET batch_number=batch_number+$2,batch_start=$3,batch_search_start=$4,discovery_round=0
+      WHERE id=$1`, [run.id, fullBatch ? 1 : 0, fullBatch ? total : run.batch_start, searches]);
   });
 }
 
@@ -360,6 +368,24 @@ export async function sourceHistory(db: DB) {
   return (await db.query<{ source: SourceResult }>(`SELECT item AS source FROM
     (SELECT sources,created_at FROM origin_runs WHERE sources IS NOT NULL ORDER BY created_at DESC LIMIT 50) r
     CROSS JOIN LATERAL jsonb_array_elements(r.sources) WITH ORDINALITY a(item,position) ORDER BY r.created_at DESC,a.position`)).rows.map(row => row.source);
+}
+
+export async function savedOfferPointers(db: DB, offset: number, limit: number) {
+  const { rows } = await db.query<{ website: string }>(`WITH earlier AS (
+    SELECT DISTINCT ON (j.business_id) j.business_id,j.checkpoint,j.updated_at
+    FROM origin_investigations j CROSS JOIN origin_settings settings
+    WHERE settings.id=1 AND COALESCE(j.processing_started_at,j.created_at)<settings.dedup_reset_at
+      AND j.outcome IN ('QUALIFIED','UNRESOLVED') AND j.checkpoint->>'country' IN ('US','UK','CA')
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(j.checkpoint->'gates') gate
+        WHERE gate->>'name'='niche' AND gate->>'state'='VERIFIED')
+    ORDER BY j.business_id,j.updated_at DESC,j.id
+  ) SELECT COALESCE((SELECT NULLIF(evidence->>'url','') FROM jsonb_array_elements(earlier.checkpoint->'evidence') evidence
+    WHERE evidence->>'method'='Offer heading' LIMIT 1),b.website) AS website
+  FROM earlier JOIN origin_businesses b ON b.id=earlier.business_id
+  ORDER BY EXISTS (SELECT 1 FROM jsonb_array_elements(earlier.checkpoint->'evidence') evidence
+    WHERE evidence->>'method' IN ('Published offer price','Published paid terms','Published coaching program scope')) DESC,
+    earlier.updated_at DESC,earlier.business_id OFFSET $1 LIMIT $2`, [offset, limit]);
+  return rows.map(row => row.website);
 }
 
 export async function recentPublisherEvidence(db: DB, activityDays: number) {

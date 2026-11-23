@@ -77,13 +77,15 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
     if (!run) { nextProbe = Date.now() + 12_000; return false; }
     const signal = perSource(shutdown.signal, Math.max(1, Math.min(74_000, run.deadline_at.getTime() - Date.now())));
     try {
-      if (!run.sources || run.discovery_round !== null) {
+      const pendingDiscovery = !run.sources || run.discovery_round !== null;
+      const interleave = run.config.qualifiedTarget > 0 && run.sources && !options.businessSearch;
+      const job = !pendingDiscovery || interleave ? await nextJob(pool, run) : undefined;
+      if (!job && pendingDiscovery) {
         try { await discovery(run, signal); }
         catch (error) { if (!signal.aborted) throw error; }
       }
       else {
-        const job = await nextJob(pool, run);
-        if (!job && run.config.qualifiedTarget) await advanceQualifiedRun(pool, run, targetSearchAttempts(run.sources));
+        if (!job && run.config.qualifiedTarget) await advanceQualifiedRun(pool, run, targetSearchAttempts(run.sources ?? []));
         else if (!job) await finish(pool, run, discoveryError(run.sources));
         else try {
           const startedAt = Date.now();

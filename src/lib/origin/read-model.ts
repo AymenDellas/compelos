@@ -2,7 +2,8 @@ import type { Pool, PoolClient } from 'pg';
 import { readModelConfig } from './model';
 import { defaults, POLICY_VERSION } from './policy';
 import type { Checkpoint, Decision, Outcome, Settings, SourceResult } from './policy';
-import { configuration, discoveryError, includedInvestigation, qualifiedCountSql, readConfig, sourceHistory, sourceQuality, suppressionFilter } from './store';
+import { configuration, discoveryError, expiredUnownedRun, includedInvestigation, qualifiedBudgetMessage, qualifiedCountSql, readConfig,
+  runBudgetMessage, sourceHistory, sourceQuality, suppressionFilter } from './store';
 import type { SourceQuality } from './store';
 import { approvedFeeds, independentFeedCount } from './sources';
 
@@ -66,7 +67,9 @@ export async function sourceReadiness(db: DB) {
 }
 
 const qualifiedTarget = `COALESCE((r.config->>'qualifiedTarget')::int,0)`;
+type StoredRunSummary = RunSummary & { budget_elapsed: boolean; deadline_at: string | null };
 const summarySql = (suppressed: string) => `SELECT r.id,r.state,r.created_at,r.started_at,r.finished_at,r.error,r.sources,
+  (${expiredUnownedRun}) AS budget_elapsed,r.deadline_at,
   COALESCE((r.config->>'candidateLimit')::int,${defaults.candidateLimit}) AS candidate_target,
   COALESCE((to_jsonb(r)->>'batch_number')::int,1) AS batch_number,
   ${qualifiedTarget} AS qualified_target,
@@ -76,15 +79,18 @@ const summarySql = (suppressed: string) => `SELECT r.id,r.state,r.created_at,r.s
     FROM origin_investigations j WHERE run_id=r.id GROUP BY 1) c),'{}') AS counts FROM origin_runs r`;
 
 export async function runSummary(db: DB, id: string) {
-  const [run] = (await db.query<RunSummary>(`${summarySql(await suppressionFilter(db))} WHERE r.id=$1`, [id])).rows;
+  const [run] = (await db.query<StoredRunSummary>(`${summarySql(await suppressionFilter(db))} WHERE r.id=$1`, [id])).rows;
   return run && reportRun(run);
 }
 
 export async function listRuns(db: DB, limit = 12) {
-  return (await db.query<RunSummary>(`${summarySql(await suppressionFilter(db))} ORDER BY r.created_at DESC LIMIT $1`, [limit])).rows.map(reportRun);
+  return (await db.query<StoredRunSummary>(`${summarySql(await suppressionFilter(db))} ORDER BY r.created_at DESC LIMIT $1`, [limit])).rows.map(reportRun);
 }
 
-function reportRun(run: RunSummary): RunSummary {
+function reportRun({ budget_elapsed, deadline_at, ...run }: StoredRunSummary): RunSummary {
+  if (budget_elapsed) return run.qualified_target
+    ? { ...run, state: 'PAUSED', error: qualifiedBudgetMessage }
+    : { ...run, state: 'FAILED', finished_at: deadline_at, error: runBudgetMessage };
   const legacyShortfall = 'Search sources returned no new businesses before the qualified target was reached.';
   if (run.state !== 'FAILED' || run.error !== legacyShortfall || !run.sources?.length) return run;
   const error = discoveryError(run.sources);

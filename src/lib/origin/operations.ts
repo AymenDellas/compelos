@@ -28,7 +28,15 @@ export function driveLocalRun(pool: Pool, id: string) {
   const running = { resumed: false };
   localRuns.set(id, running);
   const signal = AbortSignal.timeout((MAX_RUN_MINUTES + 3) * 60_000);
-  void followRun(pool, id, { drive: true, signal }).catch(() => {
+  async function drive() {
+    // The lease and discovery receipts make it safe to recover a short-lived connection failure.
+    for (const wait of [0, 2_000, 5_000]) {
+      if (wait) await delay(wait, undefined, { signal });
+      try { return await followRun(pool, id, { drive: true, signal }); }
+      catch (error) { if (wait === 5_000 || signal.aborted) throw error; }
+    }
+  }
+  void drive().catch(() => {
     // The PostgreSQL lease expires if the local host stops or loses its connection.
     console.error(`ORIGIN local run ${id} stopped. Its checkpoints remain in PostgreSQL.`);
   }).finally(() => {
