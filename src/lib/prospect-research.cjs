@@ -45,6 +45,11 @@ async function fetchPublicPage(value, options = {}, redirects = 0) {
     if (redirects > 4) throw new Error('Too many website redirects.');
     const url = publicUrl(value);
     if (options.allowUrl && !options.allowUrl(url)) throw new Error('The website redirected outside permitted public sources.');
+    const jsonBody = options.jsonBody;
+    if (jsonBody !== undefined && (url.origin !== 'https://www.searchia.com' || url.pathname !== '/api' ||
+        url.search || !options.resource || options.followRedirects !== false || typeof jsonBody !== 'string' || jsonBody.length > 500)) {
+        throw new Error('Unsupported public search request.');
+    }
     const timeout = Math.min(options.timeoutMs || 10000, 12000);
     const signal = options.signal || AbortSignal.timeout(timeout);
     signal.throwIfAborted();
@@ -68,10 +73,13 @@ async function fetchPublicPage(value, options = {}, redirects = 0) {
     const selected = addresses.find(address => address.family === 4) || addresses[0];
     const result = await new Promise((resolve, reject) => {
         const transport = url.protocol === 'https:' ? https : http;
-        const request = transport.get(url, {
+        const send = jsonBody === undefined ? transport.get : transport.request;
+        const request = send(url, {
+            ...(jsonBody === undefined ? {} : { method: 'POST' }),
             signal, agent: false, family: selected.family,
             lookup: (_host, _options, callback) => callback(null, selected.address, selected.family),
-            headers: { 'User-Agent': options.userAgent || 'Compel/1.0 (public business research)', Accept: options.resource ? '*/*' : 'text/html,application/xhtml+xml', 'Accept-Encoding': 'gzip, deflate, br' },
+            headers: { 'User-Agent': options.userAgent || 'Compel/1.0 (public business research)', Accept: options.resource ? '*/*' : 'text/html,application/xhtml+xml', 'Accept-Encoding': 'gzip, deflate, br',
+                ...(jsonBody === undefined ? {} : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(jsonBody) }) },
         }, response => {
             if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
                 if(options.resource && options.followRedirects===false){resolve({url:url.href,status:response.statusCode,headers:response.headers,body:Buffer.alloc(0)});response.destroy();return;}
@@ -96,6 +104,7 @@ async function fetchPublicPage(value, options = {}, redirects = 0) {
             response.on('aborted', () => reject(new Error('The website closed the connection.')));
         });
         request.on('error', reject);
+        if (jsonBody !== undefined) request.end(jsonBody);
     });
     return result.redirect ? fetchPublicPage(new URL(result.redirect, url).href, { ...options, signal }, redirects + 1) : result;
 }

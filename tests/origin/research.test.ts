@@ -3,8 +3,9 @@ import test from 'node:test';
 import { discover, feed } from '../../src/lib/origin/discovery';
 import { classifyModelError, reserveCents } from '../../src/lib/origin/model';
 import { decide, defaults, finding, gateNames, observe } from '../../src/lib/origin/policy';
+import { publicOfferPointers } from '../../src/lib/origin/public-discovery';
 import { createPublicWeb, documentUrl, robotsAllows } from '../../src/lib/origin/public-web';
-import { enrichAcquisition, enrichCommercial, investigate, parseBusinessPage, resolveBusiness, verifyOpportunity } from '../../src/lib/origin/research';
+import { enrichAcquisition, enrichCommercial, investigate, parseBusinessPage, resolveBusiness, screenPublicOffer, verifyOpportunity } from '../../src/lib/origin/research';
 import { book, candidate, fixture, official, page, seed, source } from './fixtures';
 
 const signal = () => AbortSignal.timeout(30_000);
@@ -24,6 +25,79 @@ test('only a complete and fresh proof dossier can qualify', async () => {
   assert.equal(read.filter(value => value === book).length, 2);
   assert.equal(decide(verified.gates, verified.evidence, Date.now() + 86_400_000).outcome, 'UNRESOLVED');
   assert.equal(decide(verified.gates, verified.evidence.filter(item => item.id !== decision.gates[0].evidence[0])).outcome, 'UNRESOLVED');
+});
+
+test('public promotion discovery verifies a paid offer and retains all seven dossier gates', async () => {
+  const sourceUrl = official + 'news/leadership-workshop';
+  const recently = new Date(Date.now() - 86_400_000).toISOString();
+  const fromIndex = publicOfferPointers({ posts: [
+    { URL: sourceUrl, date: recently, title: 'Executive coaching workshop registration' },
+    { URL: official + 'past', date: '2022-01-01', title: 'Executive coaching workshop' },
+    { URL: 'http://127.0.0.1/workshop', date: recently, title: 'Executive coaching workshop' },
+  ] }, 120);
+  assert.deepEqual(fromIndex.map(item => item.url), [sourceUrl]);
+  const brand = '<meta property="og:site_name" content="Cedar Leadership">';
+  const home = page.replace('<title>', brand + '<title>');
+  const { web } = fixture(home);
+  const scout = { ...web, async document(...args: Parameters<typeof web.document>) {
+    if (args[0] === sourceUrl) return { url: sourceUrl, status: 200, headers: { 'content-type': 'text/html' },
+      body: Buffer.from(`${brand}<main><h1>Leadership workshop</h1><time class="published" datetime="${recently}"></time>
+      <a href="/">Explore our executive coaching program</a></main>`) };
+    return web.document(...args);
+  } };
+  const screened = await screenPublicOffer(scout, sourceUrl, 120, signal(), new Set());
+  assert.ok('seed' in screened);
+  assert.equal(screened.seed.website, official);
+  assert.equal(screened.seed.source, sourceUrl);
+  assert.equal('reason' in await screenPublicOffer(scout, sourceUrl, 120, signal(), new Set(['cedar-leadership.test'])), true);
+  const job = candidate([screened.seed]);
+  const resolved = await resolveBusiness(scout, job, signal());
+  assert.equal(resolved.done, false);
+  const investigated = await investigate(scout, { ...job, checkpoint: resolved.checkpoint }, settings, signal());
+  const verified = await verifyOpportunity(scout, { ...job, checkpoint: investigated.checkpoint }, signal());
+  assert.equal(decide(verified.gates, verified.evidence).outcome, 'QUALIFIED');
+  assert.equal(verified.paidPromotion?.evidence.url, sourceUrl);
+  assert.equal(verified.gates.find(gate => gate.name === 'opportunity')?.state, 'VERIFIED');
+});
+
+test('hosted events require a reciprocal organizer link and cannot become a business', async () => {
+  const event = 'https://www.eventbrite.com/e/leadership-workshop';
+  const date = new Date(Date.now() + 86_400_000).toISOString();
+  const wrap = (home: string) => {
+    const { web } = fixture(home);
+    return { ...web, async document(...args: Parameters<typeof web.document>) {
+      if (args[0] === event) return { url: event, status: 200, headers: { 'content-type': 'text/html' },
+        body: Buffer.from(`<script type="application/ld+json">${JSON.stringify({ '@type': 'Event', startDate: date, organizer: { url: official } })}
+        </script><main><h1>Leadership workshop</h1><button>Register now</button></main>`) };
+      return web.document(...args);
+    } };
+  };
+  const home = page.replace('<title>', '<meta property="og:site_name" content="Cedar Leadership"><title>');
+  assert.ok('reason' in await screenPublicOffer(wrap(home), event, 120, signal(), new Set()));
+  const result = await screenPublicOffer(wrap(home.replace('</main>', `<a href="${event}">Register for the leadership workshop</a></main>`)),
+    event, 120, signal(), new Set());
+  assert.ok('seed' in result);
+  assert.equal(result.seed.website, official);
+  assert.equal((await resolveBusiness(wrap(home), { ...candidate(), website: event }, signal())).done, true);
+  assert.ok('reason' in await screenPublicOffer(wrap(home.replace('Coaching engagement pricing is $5,000.', 'Free introductory coaching.')), event, 120, signal(), new Set()));
+});
+
+test('a public index link may recover the exact path on the same business domain only', async () => {
+  const root = 'https://example.test/';
+  const signature = 's'.repeat(30);
+  const link = `/go/v1/${'p'.repeat(40)}?h=example.test&s=${signature}`;
+  const read: string[] = [];
+  const web = createPublicWeb(fn => fn(), async url => {
+    read.push(url);
+    return { url, status: 302, headers: { location: root + 'coaching?utm_source=search' }, body: Buffer.alloc(0) };
+  });
+  assert.equal(await web.publicSearchDestination(link, root, signal()), root + 'coaching');
+  assert.equal(await web.publicSearchDestination(link.replace('h=example.test', 'h=other.test'), root, signal()), root);
+  assert.deepEqual(read, [`https://www.searchia.com${link}`]);
+  const other = createPublicWeb(fn => fn(), async url => ({
+    url, status: 302, headers: { location: 'https://other.test/offer' }, body: Buffer.alloc(0),
+  }));
+  assert.equal(await other.publicSearchDestination(link, root, signal()), root);
 });
 
 test('first-party business address, scoped program and public inquiries are verified from official evidence', async () => {

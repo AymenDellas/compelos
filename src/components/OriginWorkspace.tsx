@@ -150,11 +150,8 @@ function RunActions({ run, busy, mutate }: { run: RunSummary; busy: boolean; mut
 function Discovery({ data }: { data: Overview }) {
   const names = [...new Set(data.sources.map(source => source.adapter))];
   const methods = [
-    ['ECHO', 'Discover publisher records and verify their reuse permission, dates and official links.'],
-    ['Business search', 'Find coaching offers across eligible markets and verify each business on its own website.'],
-    ['CONSTELLATION', 'Expand from named contributors on the same publisher record.'],
-    ['VOID', 'Trace public booking links and independently recheck failures and conflicting information.'],
-    ['FRONTIER', 'Prioritize sources by verified offers and qualified opportunities, with exploration of underused sources.'],
+    ['Public promotion discovery', 'Find recent coaching promotions and verify the paid offer, market and buyer path before investigation.'],
+    ['Funnel verification', 'Read the public booking and inquiry paths and independently recheck any observed issue.'],
   ];
   return <div className="origin-operations">
     <section className="origin-section"><div className="origin-heading"><h2>Discovery sources</h2></div>
@@ -164,9 +161,11 @@ function Discovery({ data }: { data: Overview }) {
           const quality = data.quality.find(item => item.adapter === name);
           return <tr key={name}><td>{name}</td><td><State value={history[0].status} />{history[0].code && <small>{human(history[0].code)}</small>}
             {history[0].retryAt && <small>Retry after {stamp(history[0].retryAt)}</small>}
+            {Object.entries(history[0].screening ?? {}).filter(([, count]) => count > 0).slice(0, 8)
+              .map(([reason, count]) => <small key={reason}>{reason} · {count}</small>)}
             {history[0].publisherAudit?.map(check => <small key={check.url}>{new URL(check.url).hostname} · {human(check.code)}</small>)}</td>
           <td>{history.reduce((sum, item) => sum + item.discovered, 0)}</td><td>{quality?.offers ?? 0}</td><td>{quality?.qualified ?? 0}</td><td>{history.filter(item => item.status === 'FAILED').length}</td></tr>;
-        })}</tbody></table></div> : <p className="origin-empty">Source activity will appear after the first run. Wikidata is available by default.</p>}
+        })}</tbody></table></div> : <p className="origin-empty">Public promotion screening results will appear after the first run.</p>}
     </section>
     <section className="origin-section"><div className="origin-heading"><h2>Research methods</h2></div>
       <dl className="origin-detail">{methods.map(([name, description]) => <div key={name}><dt>{name}</dt><dd>{description}</dd></div>)}</dl>
@@ -277,11 +276,9 @@ function SettingsForm({ config, busy, save }: { config: Settings; busy: boolean;
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
     const interval = Number(fields.get('intervalMinutes'));
-    void save({ intervalMinutes: interval || null, browser: fields.has('browser'), candidateLimit: Number(fields.get('candidateLimit')),
+    void save({ ...config, intervalMinutes: interval || null, browser: fields.has('browser'), candidateLimit: Number(fields.get('candidateLimit')),
       qualifiedTarget: Number(fields.get('qualifiedTarget')),
-      runMinutes: Number(fields.get('runMinutes')), activityDays: Number(fields.get('activityDays')), modelCalls: Number(fields.get('modelCalls')),
-      runBudgetCents: Math.round(Number(fields.get('runBudgetCents')) * 100), dailyBudgetCents: Math.round(Number(fields.get('dailyBudgetCents')) * 100),
-      monthlyBudgetCents: Math.round(Number(fields.get('monthlyBudgetCents')) * 100) });
+      runMinutes: Number(fields.get('runMinutes')), activityDays: Number(fields.get('activityDays')) });
   };
   return <form className="origin-section" onSubmit={submit}><div className="origin-heading"><h2>Research settings</h2></div>
     <div className="origin-fields">
@@ -291,10 +288,6 @@ function SettingsForm({ config, busy, save }: { config: Settings; busy: boolean;
         placeholder="Single batch" aria-describedby="origin-qualified-target-hint" /></label>
       <label>Time budget (minutes)<input required name="runMinutes" type="number" min="2" max="75" defaultValue={config.runMinutes} /></label>
       <label>Acquisition lookback (days)<input required name="activityDays" type="number" min="30" max="180" defaultValue={config.activityDays} /></label>
-      <label>Model requests per run<input required name="modelCalls" type="number" min="0" max="5" defaultValue={config.modelCalls} /></label>
-      <label>Per-run budget (USD)<input required name="runBudgetCents" type="number" min="0" max="100" step="0.01" defaultValue={config.runBudgetCents / 100} /></label>
-      <label>Daily budget (USD)<input required name="dailyBudgetCents" type="number" min="0" max="500" step="0.01" defaultValue={config.dailyBudgetCents / 100} /></label>
-      <label>Monthly budget (USD)<input required name="monthlyBudgetCents" type="number" min="0" max="2500" step="0.01" defaultValue={config.monthlyBudgetCents / 100} /></label>
       <label className="origin-checkbox"><input name="browser" type="checkbox" defaultChecked={config.browser} /> Capture desktop and mobile views</label>
     </div>
     <div className="origin-form-footer"><span id="origin-qualified-target-hint">A qualified target repeats batches within the time budget. Leave it blank for a single batch.</span>

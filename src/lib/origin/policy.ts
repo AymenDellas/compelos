@@ -8,7 +8,7 @@ export const MAX_QUALIFIED_TARGET = 2_147_483_647;
 export const gateNames = ['identity', 'niche', 'geography', 'substance', 'acquisition', 'opportunity', 'contact'] as const;
 export type GateName = typeof gateNames[number];
 export type Outcome = 'QUALIFIED' | 'UNRESOLVED' | 'REJECTED';
-export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLICATION' | 'PROCUREMENT' | 'BUSINESS_SEARCH';
+export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLICATION' | 'PROCUREMENT' | 'BUSINESS_SEARCH' | 'PUBLIC_OFFER';
 
 export const settingsSchema = z.object({
   intervalMinutes: z.number().int().min(60).max(43_200).nullable(),
@@ -43,6 +43,7 @@ export type Seed = {
   publisherLinks?: string[];
   discoveryPriority?: number;
   activityLinks?: string[];
+  promotion?: { url: string; offer: string };
   commercialLinks?: string[];
   contract?: { amountGbp: number; awardedOn: string; buyer?: string };
   publication?: { checkedAt: string; permissionPage: string; digest: string; use?: 'FACTS_ONLY'; title?: string; recordUrl?: string };
@@ -100,7 +101,8 @@ export function decide(findings: Gate[], evidence: Evidence[], now = Date.now())
 export type Decision = ReturnType<typeof decide>;
 
 export type SourceResult = { adapter: string; discovered: number; elapsedMs: number; status: 'OK' | 'FAILED' | 'DEFERRED'; code?: string; retryAt?: string;
-  publisherAudit?: PublisherAudit[]; credit?: string; queryIndex?: number; searches?: number; searchAttempts?: number };
+  publisherAudit?: PublisherAudit[]; credit?: string; queryIndex?: number; searches?: number; searchAttempts?: number;
+  screening?: Record<string, number> };
 export type PublisherAudit = { url: string; code: string; records: number; license?: string; publisher?: string; use?: 'FACTS_ONLY'; checkedTerms?: string[] };
 export type PublisherPointer = { url: string; name?: string; website?: string; viaOfficial?: boolean };
 
@@ -129,6 +131,7 @@ export type Checkpoint = {
   funnel?: { found: number; tested: number; interactive: boolean; intakeVersion?: number };
   acquisitionSources?: number;
   ownedActivities?: { date: string; evidence: Evidence }[];
+  paidPromotion?: { date: string; evidence: Evidence };
   ownedFeeds?: string[];
   publisherPointers?: PublisherPointer[];
   publisherAudit?: PublisherAudit[];

@@ -11,10 +11,13 @@ export const redirectCodes = [301, 302, 303, 307, 308];
 
 function indexUrl(value: string, host: string) {
   const url = funnelUrl(value);
+  const wordpress = host === 'public-api.wordpress.com' && /^\/rest\/v1\.2\/read\/tags\/[a-z-]{3,35}\/posts$/.test(url.pathname) &&
+    [...url.searchParams].every(([key, item]) => key === 'number' && item === '24' ||
+      key === 'fields' && item === 'URL,site_URL,title,date,excerpt' || key === 'before' && /^\d{4}-\d\d-\d\dT00:00:00Z$/.test(item));
   const matches = host === 'api.gdeltproject.org' && url.pathname === '/api/v2/doc/doc' || host === 'www.wikidata.org' && url.pathname === '/w/api.php' ||
     host === 'www.find-tender.service.gov.uk' && /^\/api\/1\.0\/ocdsReleasePackages(?:\/\d{6}-\d{4})?$/.test(url.pathname) ||
     host === 'www.contractsfinder.service.gov.uk' && url.pathname === '/Published/Notices/OCDS/Search';
-  if (!matches || url.protocol !== 'https:' || url.host !== host) throw new PublicFailure('UNVERIFIED_SOURCE');
+  if (!(matches || wordpress) || url.protocol !== 'https:' || url.host !== host) throw new PublicFailure('UNVERIFIED_SOURCE');
   return url;
 }
 
@@ -38,6 +41,10 @@ export function documentUrl(value: string) {
       throw new Error('A parameterized public action was skipped.');
   }
   return url;
+}
+
+export function hostedBooking(url: string) {
+  return /(?:^|\.)(?:eventbrite\.(?:com|ca|co\.uk)|lu\.ma|luma\.com|calendly\.com|acuityscheduling\.com|as\.me|cal\.com|koalendar\.com|youcanbook\.me|savvycal\.com|meetup\.com|zoom\.us|zoom\.com|jotform\.com|typeform\.com|booking\.page|square\.site|tally\.so|bookwhen\.com|tickettailor\.com|sessions\.us|simplybook\.me|eventcreate\.com|outlook\.office(?:365)?\.com)$/i.test(domain(url));
 }
 
 export function robotsAllows(text: string, path: string) {
@@ -78,19 +85,19 @@ export function retryAt(header: string | undefined, fallbackMs: number) {
 }
 
 type Resource = Awaited<ReturnType<typeof fetchResource>>;
-function fetchResource(url: string, signal: AbortSignal) {
-  return fetchPublicPage(url, { resource: true, followRedirects: false, signal, userAgent });
+function fetchResource(url: string, signal: AbortSignal, jsonBody?: string) {
+  return fetchPublicPage(url, { resource: true, followRedirects: false, signal, userAgent, jsonBody });
 }
 
 export function createPublicWeb(limit: <T>(run: () => Promise<T>) => Promise<T>, transport = fetchResource) {
   const robots = new Map<string, { expires: number; rules: Promise<string> }>();
   const cooldowns = new Map<string, number>();
   const lastDocument = new Map<string, number>();
-  async function get(url: URL, signal: AbortSignal) {
+  async function get(url: URL, signal: AbortSignal, jsonBody?: string) {
     const host = domain(url.href);
     const wait = cooldowns.get(host) ?? 0;
     if (wait > Date.now()) throw new PublicFailure('RATE_LIMITED', new Date(wait).toISOString());
-    const response = await limit(() => transport(url.href, signal));
+    const response = await limit(() => transport(url.href, signal, jsonBody));
     if (response.status === 429 || (response.status === 503 && response.headers['retry-after'])) {
       const restore = retryAt(response.headers['retry-after'], 60 * 60_000);
       cooldowns.set(host, Date.parse(restore));
@@ -143,6 +150,13 @@ export function createPublicWeb(limit: <T>(run: () => Promise<T>) => Promise<T>,
     }
     throw new PublicFailure('UNVERIFIED_REDIRECT');
   }
+  async function readIndex(url: URL, signal: AbortSignal, body?: string) {
+    const response = await get(url, signal, body);
+    if (response.url !== url.href || response.status !== 200) throw new PublicFailure(`HTTP_${response.status}`);
+    if (!/json/i.test(response.headers['content-type'] ?? '')) throw new PublicFailure('UNREADABLE_SOURCE');
+    try { return JSON.parse(response.body.toString('utf8')) as unknown; }
+    catch { throw new PublicFailure('UNREADABLE_SOURCE'); }
+  }
   return {
     document: readDocument,
     async asset(value: string, signal: AbortSignal, document: string): Promise<Resource> {
@@ -156,12 +170,22 @@ export function createPublicWeb(limit: <T>(run: () => Promise<T>) => Promise<T>,
       return get(url, signal);
     },
     async api(value: string, host: string, signal: AbortSignal) {
-      const url = indexUrl(value, host);
-      const response = await get(url, signal);
-      if (response.url !== url.href || response.status !== 200) throw new PublicFailure(`HTTP_${response.status}`);
-      if (!/json/i.test(response.headers['content-type'] ?? '')) throw new PublicFailure('UNREADABLE_SOURCE');
-      try { return JSON.parse(response.body.toString('utf8')) as unknown; }
-      catch { throw new PublicFailure('UNREADABLE_SOURCE'); }
+      return readIndex(indexUrl(value, host), signal);
+    },
+    async publicSearch(query: string, country: 'us' | 'gb' | 'ca', signal: AbortSignal) {
+      if (query.length > 240 || !query.trim() || !['us', 'gb', 'ca'].includes(country)) throw new PublicFailure('UNVERIFIED_SOURCE');
+      return readIndex(new URL('https://www.searchia.com/api'), signal, JSON.stringify({ query, type: 'web', page: 0, country }));
+    },
+    async publicSearchDestination(link: string, result: string, signal: AbortSignal) {
+      if (!/^\/go\/v1\/[a-z\d_-]{24,800}\?/i.test(link)) return result;
+      const redirect = new URL(link, 'https://www.searchia.com');
+      const host = domain(result);
+      const expected = redirect.searchParams.get('h')?.toLowerCase().replace(/^www\./, '');
+      if (expected !== host || redirect.searchParams.size !== 2 || !/^[a-z\d_-]{12,200}$/i.test(redirect.searchParams.get('s') ?? '')) return result;
+      const response = await get(redirect, signal);
+      if (!redirectCodes.includes(response.status) || !response.headers.location) return result;
+      const destination = documentUrl(response.headers.location);
+      return domain(destination.href) === host ? destination.href : result;
     },
   };
 }

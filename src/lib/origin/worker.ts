@@ -1,38 +1,24 @@
 import type { Pool } from 'pg';
-import { discoverPublicationPointers, gdeltCredits, publicationAdapter, verifyPublications } from './auto-publishers';
-import { activitySearchName, businessSearchCredit, businessSearchName, campaignSearchName, createActivitySearch, createBusinessSearch, createCampaignSearch, createEvidenceFollowUp } from './business-search';
-import { discover, feed, niches, wikidata } from './discovery';
+import { businessSearchName } from './business-search';
+import type { createBusinessSearch } from './business-search';
+import { discover } from './discovery';
 import type { Adapter } from './discovery';
-import { modelAdvisory } from './model';
-import { decide, domain } from './policy';
-import type { PublisherPointer, Seed, SourceResult } from './policy';
-import { createPublicWeb, PublicFailure } from './public-web';
+import { decide } from './policy';
+import type { Seed, SourceResult } from './policy';
+import { discoverPublicOffers, publicOfferSource } from './public-discovery';
+import { createPublicWeb } from './public-web';
 import type { PublicWeb } from './public-web';
 import { hasSchema } from './read-model';
-import { coachingContracts, procurementAdapter, procurementCredit, tenderAdapter } from './procurement';
-import { enrichAcquisition, enrichCommercial, investigate, resolveBusiness, verifyOpportunity } from './research';
-import { approvedFeeds } from './sources';
-import { advanceQualifiedRun, claimRun, failStage, finish, includedInvestigation, migrate, newPublishedBusinesses, nextJob, recentPublisherEvidence, release, runSearch, saveDiscovery, saveStage, sourceHistory, sourceQuality } from './store';
-import type { Run, SourceQuality } from './store';
+import { enrichAcquisition, investigate, resolveBusiness, verifyOpportunity } from './research';
+import { advanceQualifiedRun, claimRun, failStage, finish, includedInvestigation, migrate, nextJob, release, runSearch, saveDiscovery, saveStage, sourceHistory } from './store';
+import type { Run } from './store';
 
 type Limiter = <T>(run: () => Promise<T>) => Promise<T>;
 const REFILL_SEARCH_ALLOWANCE = 18;
 
 function targetSearchAttempts(sources: SourceResult[]) {
-  return sources.filter(source => source.adapter === businessSearchName || source.adapter === campaignSearchName)
+  return sources.filter(source => source.adapter === businessSearchName || source.adapter === publicOfferSource)
     .reduce((total, source) => total + (source.searchAttempts ?? source.searches ?? 0), 0);
-}
-
-function chooseSource(history: SourceResult[], quality: SourceQuality[], names: string[], explore: boolean) {
-  const cutoff = 50;
-  return names.map(name => {
-    const observations = history.filter(item => item.adapter === name).slice(0, cutoff);
-    const verified = quality.find(item => item.adapter === name);
-    // Reward qualified dossiers and confirmed offers ahead of identity-only matches.
-    const yieldPerSecond = ((verified?.qualified ?? 0) * 8 + (verified?.offers ?? 0) * 3 + (verified?.identities ?? 0)) /
-      Math.max(1, observations.reduce((sum, item) => sum + Math.max(500, item.elapsedMs), 0) / 1000);
-    return { name, attempts: observations.filter(item => item.status !== 'DEFERRED').length, yieldPerSecond };
-  }).sort((a, b) => explore ? a.attempts - b.attempts : b.yieldPerSecond - a.yieldPerSecond || a.attempts - b.attempts)[0]?.name;
 }
 
 export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
@@ -40,134 +26,41 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
 } = {}) {
   const shutdown = new AbortController();
   const web = options.web ?? createPublicWeb(limitRequest);
-  const search = options.businessSearch ?? (options.web ? undefined : createBusinessSearch());
-  const activitySearch = options.web ? undefined : createActivitySearch();
-  const campaignSearch = options.web ? undefined : createCampaignSearch();
-  const followUp = options.web ? undefined : createEvidenceFollowUp();
   let nextProbe = 0;
   let ready = false;
   let probeCount = 0;
   const perSource = (signal: AbortSignal, ms: number) => AbortSignal.any([signal, AbortSignal.timeout(ms)]);
 
   async function discovery(run: Run, signal: AbortSignal) {
+    const search = options.businessSearch;
+    if (!search) return discoverPublicOffers(pool, run, web, signal);
+
     const history = await sourceHistory(pool);
+    const previous = history.find(item => item.adapter === businessSearchName && item.queryIndex !== undefined)?.queryIndex ?? -1;
     const limit = run.config.candidateLimit;
-    const businessPlan = search ? Math.max(3, Math.ceil(limit / 5)) : 0;
-    const campaignPlan = campaignSearch ? Math.max(2, Math.ceil(limit / 12)) : 0;
-    const campaignShare = search && campaignSearch ? Math.max(0, Math.floor((businessPlan + campaignPlan) * 0.4) - campaignPlan) : 0;
-    const initialBusiness = businessPlan - campaignShare;
-    const initialCampaign = campaignPlan + campaignShare;
-    const searchAllowance = initialBusiness + initialCampaign + REFILL_SEARCH_ALLOWANCE;
-    const hold = (name: string) => history.find(item => item.adapter === name && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
-    const adapters: Adapter[] = [];
-    const batch = <T,>(name: string, count: number, lookup: (index: number, signal: AbortSignal) => Promise<T[]>,
-      reduce: (results: T[][]) => ReturnType<Adapter['run']>) => {
-      const previous = history.find(item => item.adapter === name && item.queryIndex !== undefined)?.queryIndex ?? -1;
-      const adapter: Adapter = { name, credit: businessSearchCredit, retryAt: hold(name), run: async () => {
-        const results: T[][] = [];
-        for (let start = 1; start <= count && !signal.aborted; start += 3) {
-          const keys = Array.from({ length: Math.min(count - start + 1, 3) }, (_, index) => previous + start + index);
-          const queries = await Promise.allSettled(keys.map(index => limitRequest(() => runSearch(pool, run, `${name}:${index}`,
-            () => lookup(index, perSource(signal, 14_000))))));
-          adapter.queryIndex = keys[keys.length - 1];
-          adapter.searchAttempts = (adapter.searchAttempts ?? 0) + keys.length;
-          for (const outcome of queries) if (outcome.status === 'fulfilled' && outcome.value) results.push(outcome.value);
-          const failure = queries.find(outcome => outcome.status === 'rejected');
-          if (failure) {
-            if (!results.length) throw failure.reason;
-            if (failure.reason instanceof PublicFailure) adapter.retryAt = failure.reason.retryAt;
-            break;
-          }
-        }
-        adapter.searches = results.length;
-        return reduce(results);
-      } };
-      adapters.push(adapter);
-    };
-    const ranked = async (groups: Seed[][]) => Array.from({ length: 10 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : []))
-      .flat();
-    const canRefill = () => Boolean((search && !hold(businessSearchName)) || (campaignSearch && !hold(campaignSearchName)));
-    if ((run.discovery_round ?? 0) > 0) {
-      const { rows: [{ queued }] } = await pool.query<{ queued: number }>(
-        `SELECT count(*)::int AS queued FROM origin_investigations j WHERE run_id=$1 AND ${includedInvestigation}`, [run.id]);
-      const gap = Math.max(0, run.batch_start + limit - queued);
-      // Count saved batches so a restarted batch can recover its receipts at the same indexes.
-      const remaining = Math.max(0, searchAllowance + run.batch_search_start - targetSearchAttempts(run.sources ?? []));
-      const business = search && !hold(businessSearchName) ? Math.min(6, Math.ceil(gap / 2), remaining) : 0;
-      const campaign = campaignSearch && !hold(campaignSearchName) ? Math.min(3, Math.ceil(gap / 8), remaining - business) : 0;
-      if (search && business) batch(businessSearchName, business, (index, requestSignal) => search(index, 10, requestSignal), ranked);
-      if (campaignSearch && campaign) batch(campaignSearchName, campaign,
-        (index, requestSignal) => campaignSearch(index, run.config.activityDays, requestSignal), ranked);
-      const found = await discover(adapters);
-      signal.throwIfAborted();
-      await saveDiscovery(pool, run, found.seeds, found.results, adapters.length > 0 && targetSearchAttempts(found.results) < remaining);
-      return;
-    }
-    const quality = await sourceQuality(pool);
-    const explore = history.filter(item => item.adapter.startsWith('Wikidata')).length % 3 === 0;
-    const previous = history.find(item => item.adapter.startsWith('Wikidata') && item.status === 'OK')?.adapter;
-    const selection = chooseSource(history, quality, niches.map(niche => `Wikidata · ${niche}`).filter(name => name !== previous), explore);
-    const strategy = selection?.split(' · ')[1] ?? niches[0];
-    if (search) {
-      batch(businessSearchName, initialBusiness, (index, requestSignal) => search(index, 10, requestSignal), ranked);
-    }
-    if (campaignSearch) batch(campaignSearchName, initialCampaign,
-      (index, requestSignal) => campaignSearch(index, run.config.activityDays, requestSignal), ranked);
-    if (activitySearch) {
-      batch<PublisherPointer>(activitySearchName, 2, (index, requestSignal) => activitySearch(index, run.config.activityDays, requestSignal),
-        groups => verifyPublications(web, groups.flat(), run.config.activityDays, perSource(signal, 20_000), 10));
-    }
-    for (const [index, name] of [['contracts', procurementAdapter], ['tender', tenderAdapter]] as const) {
-      const probes = history.filter(item => item.adapter === name && item.status === 'OK').length;
-      adapters.push({ name, credit: procurementCredit, retryAt: hold(name),
-        run: () => coachingContracts(web, index, (probes % 12) * 6, limit, perSource(signal, 17_000)) });
-    }
-    let feeds: ReturnType<typeof approvedFeeds> = [];
-    try {
-      feeds = approvedFeeds(run.publisher_feeds);
-      const preferred = chooseSource(history, quality, feeds.map(item => `ECHO · ${item.title}`), explore);
-      // Rotate through publishers, retaining a second independent source where available.
-      const first = feeds.find(item => `ECHO · ${item.title}` === preferred);
-      const other = first && feeds.find(item => domain(item.url) !== domain(first.url) &&
-        (item.publisher ?? domain(item.url)) !== (first.publisher ?? domain(first.url)));
-      const chosen = [first, other].filter(item => item !== undefined);
-      for (const item of chosen) {
-        const name = `ECHO · ${item.title}`;
-        adapters.push({ name, retryAt: hold(name), run: () => feed(web, item, Math.min(24, limit * 2), perSource(signal, 8_000)) });
+    const initial = Math.max(3, Math.ceil(limit / 5));
+    const remaining = initial + REFILL_SEARCH_ALLOWANCE + run.batch_search_start - targetSearchAttempts(run.sources ?? []);
+    const { rows: [{ queued }] } = await pool.query<{ queued: number }>(
+      'SELECT count(*)::int AS queued FROM origin_investigations j WHERE run_id=$1 AND ' + includedInvestigation, [run.id]);
+    const gap = Math.max(0, run.batch_start + limit - queued);
+    const count = (run.discovery_round ?? 0) > 0 ? Math.min(6, Math.ceil(gap / 2), remaining) : initial;
+    const adapter: Adapter = { name: businessSearchName, run: async () => {
+      const groups: Seed[][] = [];
+      for (let start = 1; start <= count; start += 3) {
+        signal.throwIfAborted();
+        const keys = Array.from({ length: Math.min(count - start + 1, 3) }, (_, offset) => previous + start + offset);
+        const results = await Promise.allSettled(keys.map(index => limitRequest(() => runSearch(pool, run,
+          businessSearchName + ':' + index, () => search(index, 10, perSource(signal, 14_000))))));
+        adapter.queryIndex = keys[keys.length - 1];
+        adapter.searchAttempts = (adapter.searchAttempts ?? 0) + keys.length;
+        for (const result of results) if (result.status === 'fulfilled' && result.value) groups.push(result.value);
       }
-    } catch {
-      adapters.push({ name: 'ECHO supplemental feeds', deferred: 'INVALID_FEED_CONFIGURATION', run: async () => [] });
-    }
-    adapters.push({ name: publicationAdapter, credit: gdeltCredits, retryAt: hold(publicationAdapter), run: async () => {
-      // Leave time for the index to return a rate-limit response and its retry instructions.
-      const indexSignal = perSource(signal, 21_000);
-      const pointers = await discoverPublicationPointers(web, strategy, indexSignal);
-      return verifyPublications(web, pointers, run.config.activityDays, perSource(signal, 12_000));
-    } });
-    const publisherObservation = (seed: Awaited<ReturnType<typeof recentPublisherEvidence>>[number]) => {
-      if (seed.method === 'PUBLICATION') {
-        const age = Date.now() - Date.parse(seed.publication?.checkedAt ?? '');
-        return seed.publication?.use === 'FACTS_ONLY' && age >= 0 && age < 86_400_000 ? [seed] : [];
-      }
-      const publisher = feeds.find(item => domain(item.url) === domain(seed.source) && item.permission === seed.permission);
-      return publisher ? [{ ...seed, publisher: publisher.publisher ?? domain(publisher.url) }] : [];
-    };
-    adapters.push({ name: 'Publisher relationships', run: async () => (await newPublishedBusinesses(pool, limit * 2)).flatMap(seed => {
-      const date = Date.parse(seed.occurredAt ?? '');
-      return date <= Date.now() && date > Date.now() - run.config.activityDays * 86_400_000
-        ? publisherObservation(seed).map(item => ({ ...item, adapter: 'Publisher relationships' })) : [];
-    }) });
-    const latestWikiHold = history.find(item => item.adapter.startsWith('Wikidata') && item.retryAt && Date.parse(item.retryAt) > Date.now())?.retryAt;
-    adapters.push({ name: `Wikidata · ${strategy}`, retryAt: latestWikiHold,
-      run: () => wikidata(web, Math.min(24, limit * 3), strategy, perSource(signal, 18_000)) });
-    const historic = (await recentPublisherEvidence(pool, run.config.activityDays)).flatMap(seed => {
-      const occurred = Date.parse(seed.occurredAt ?? '');
-      return occurred <= Date.now() && occurred >= Date.now() - run.config.activityDays * 86_400_000 ? publisherObservation(seed) : [];
-    });
-    // PostgreSQL applies the candidate cap after excluding previously processed businesses.
-    const found = await discover(adapters, undefined, historic);
+      adapter.searches = groups.length;
+      return Array.from({ length: 10 }, (_, index) => groups.flatMap(group => group[index] ? [group[index]] : [])).flat();
+    } };
+    const found = await discover(count > 0 ? [adapter] : []);
     signal.throwIfAborted();
-    await saveDiscovery(pool, run, found.seeds, found.results, canRefill());
+    await saveDiscovery(pool, run, found.seeds, found.results, count > 0 && count < remaining);
   }
 
   async function runOnce() {
@@ -206,21 +99,6 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
           } else {
             const publications = await enrichAcquisition(web, job, run.config, signal);
             const checkpoint = await verifyOpportunity(web, job, signal, run.config.browser);
-            await modelAdvisory(pool, run, job, checkpoint, signal);
-            const passed = new Set(checkpoint.gates.filter(item => item.state === 'VERIFIED').map(item => item.name));
-            const suggestion = checkpoint.advisory?.assessment;
-            const commercialEvidence = checkpoint.gates.find(item => item.name === 'substance')?.evidence.length ?? 0;
-            const purpose = !passed.has('substance') && (passed.has('opportunity') ||
-              passed.has('contact') && (commercialEvidence > 0 || passed.has('acquisition') || suggestion === 'VERIFY_COMMERCIAL_EVIDENCE')) ? 'case' :
-              !passed.has('acquisition') && (passed.has('substance') || passed.has('opportunity')) ? 'campaign' : null;
-            if (followUp && purpose && !signal.aborted && passed.has('niche') && passed.has('geography')) {
-              try {
-                const evidenceBudget = perSource(signal, 16_000);
-                const urls = await limitRequest(() => runSearch(pool, run, `follow-up:${purpose}:${job.domain}`, () => followUp(job.domain, run.config.activityDays, purpose, evidenceBudget)));
-                if (urls?.length && purpose === 'campaign') await enrichAcquisition(web, { ...job, seeds: [...job.seeds, ...publications] }, run.config, evidenceBudget, urls);
-                if (urls?.length && purpose === 'case') await enrichCommercial(web, job, urls, evidenceBudget);
-              } catch { /* Retain the checkpoint when a bounded follow-up is unavailable. */ }
-            }
             checkpoint.stageMs = { ...checkpoint.stageMs, verify: Date.now() - startedAt };
             await saveStage(pool, run, job, checkpoint, decide(checkpoint.gates, checkpoint.evidence), [], publications);
           }

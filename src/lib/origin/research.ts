@@ -4,7 +4,8 @@ import { createFunnelBrowser, type RenderedPage } from '../funnel-browser';
 import { coachingEditorial, relevantCoach } from './discovery';
 import { emptyCheckpoint, finding, hash, observe } from './policy';
 import type { Checkpoint, Evidence, Settings } from './policy';
-import { documentUrl, PublicFailure } from './public-web';
+import { documentUrl, hostedBooking, PublicFailure } from './public-web';
+import type { Seed } from './policy';
 import type { PublicWeb } from './public-web';
 import { domain } from './store';
 import type { Artifact, Job } from './store';
@@ -15,7 +16,7 @@ const contactLink = /^(?:contact(?: us| me)?|get in touch|connect|inquir(?:e|ies
 const aboutLink = /^(?:about\b|our story|company|meet (?:the )?(?:team|founder|coach)|the team)/i;
 const caseLink = /^(?:case stud(?:y|ies)|(?:client|customer) (?:stories|case studies|results|success stories)|our clients|(?:client |coaching )?testimonials|(?:see |read )?(?:more |our )?reviews)\b/i;
 const caseDetailPath = /\/(?:case-study|case-studies|client-results|client-stories)\/[^/]+/i;
-const offerPath = /\/(?:services?|coaching-services|programs?|(?:executive|leadership|career|business|ceo)-coaching)(?:\/|$)/i;
+const offerPath = /\/(?:services?|coaching|coaching-services|programs?|(?:executive|leadership|career|business|ceo)-coaching)(?:\/|$)/i;
 const pricingLink = /^(?:packages (?:and|&) pric(?:es|ing)|coaching (?:packages|fees|pricing)|program(?:me)? pricing)$/i;
 const mediaPage = /^(?:in the (?:press|media)|as (?:seen|featured) in|press(?: (?:&|and) media)?|media(?: (?:coverage|appearances))?|speaking(?: (?:&|and) media)?|interviews|podcasts)$/i;
 const mediaPath = /^(?:press|media|media-appearances|media-coverage|appearances|interviews|podcast-appearances|press-and-media)$/i;
@@ -40,7 +41,7 @@ const containsName = (label: string, name: string) => {
   // A displayed middle initial can differ from a source's omission of that initial.
   return new RegExp(`(?:^| )${parts[0]} \\p{L} ${parts[1]}(?: |$)`, 'u').test(normalized(label));
 };
-const scope = /\b(?:one[- ](?:on|to)[- ]one|1\s*[:\-x]\s*1|(?:individual|team) coaching|(?:regular |weekly |monthly )?coaching sessions?|coaching (?:program(?:me)?|engagement|package)|coaching for (?:[\w-]+ ){0,3}(?:executives|leaders|founders|managers|business owners)|(?:3|6|12)[- ]month)\b/i;
+const scope = /\b(?:one[- ](?:on|to)[- ]one|1\s*[:\-x]\s*1|(?:individual|team|group) coaching|(?:regular |weekly |monthly )?coaching sessions?|coaching (?:program(?:me)?|engagement|package)|coaching for (?:[\w-]+ ){0,3}(?:executives|leaders|founders|managers|business owners)|(?:3|6|12)[- ]month)\b/i;
 const navigationOnly = /\b(?:privacy|cookie|legal|terms|policies|newsletters?|archives?|login)\b/i;
 
 type Link = { url: string; label: string; main: boolean; appearanceContext: boolean };
@@ -48,7 +49,7 @@ type MarketStatement = { country: NonNullable<Checkpoint['country']>; evidence: 
 export type Page = { url: string; state: string; evidence: Evidence; identity: string; brand?: string; canonical: string | null;
   statements: string[]; headings: string[]; title: string; links: Link[]; contact: { address: string; context: string } | null;
   contactProhibited: boolean; bookingControl: boolean; markets: MarketStatement[]; missingPage: boolean; activityDates: string[]; activityAction?: string;
-  publicationDates?: string[];
+  publicationDates?: string[]; organizerSites?: string[];
   testimonials?: string[]; clientAccounts?: { organization: string; excerpt: string }[]; genericInquiry?: string; consultationIntake?: string[]; informedIntake?: boolean;
   scheduling?: boolean; schedulerProblem?: string; feedUrl?: string; embeddedInquiry?: string; hostedInquiry?: string };
 
@@ -131,6 +132,7 @@ export function parseBusinessPage(html: string, url: string) {
     defaultFeed, url);
   const datedRecords: string[] = [];
   const publicationDates: string[] = [];
+  const organizerSites = new Set<string>();
   const names: string[] = [];
   $('script[type="application/ld+json"]').slice(0, 12).each((_index, node) => {
     const raw = $(node).text();
@@ -146,6 +148,10 @@ export function parseBusinessPage(html: string, url: string) {
             (/(?:Organization|LocalBusiness|ProfessionalService|Corporation|WebSite)$/i.test(type) || /Person$/i.test(type) && relevantCoach.test(String(item.jobTitle ?? '')))) names.push(item.name);
         if (record && record !== url && record !== canonical) continue;
         const isPublication = /(?:Article|BlogPosting|PodcastEpisode)$/i.test(type);
+        if (hostedBooking(url) && /(?:^|\/)Event$/i.test(type)) {
+          const organizer = typeof item.organizer?.url === 'string' ? linkedUrl(item.organizer.url, url) : null;
+          if (organizer && domain(organizer) !== domain(url) && !hostedBooking(organizer)) organizerSites.add(organizer);
+        }
         const date = /(?:Event|CourseInstance)$/i.test(type) ? item?.startDate : isPublication ? item?.datePublished : null;
         if (typeof date === 'string') datedRecords.push(date);
         if (isPublication && typeof date === 'string') publicationDates.push(date);
@@ -263,14 +269,16 @@ export function parseBusinessPage(html: string, url: string) {
   }
   const activityDates = datedRecords.length ? datedRecords : read('time[datetime]').slice(0, 12).toArray().map(node => $(node).attr('datetime') ?? '');
   if (!activityDates.length) activityDates.push($('meta[property="article:published_time"]').attr('content') ?? $('meta[name="date"]').attr('content') ?? '');
-  const published = $('meta[property="article:published_time"]').attr('content') ?? read('time[itemprop="datePublished"]').first().attr('datetime');
+  const published = $('meta[property="article:published_time"]').attr('content') ??
+    read('time[itemprop="datePublished"],time.published,time.entry-date:not(.updated)').first().attr('datetime');
   if (published) publicationDates.push(published);
   const eventAction = read('a[href],button').slice(0, 80).toArray().map(node => squash($(node).text()).slice(0, 100))
     .find(text => text.length <= 80 && activityAction.test(text));
   const identity = [title, site, ...headings.slice(0, 5)].filter(Boolean).join(' · ').slice(0, 400);
   const statements = read('p,li,h1,h2,h3,address,dl').filter((_i, node) => !$(node).closest('nav,footer,aside').length)
     .slice(0, 220).toArray().map(node => squash($(node).text()).slice(0, 450)).filter(Boolean);
-  if (!activityDates.some(Boolean) && activityLink.test(`${headings[0] ?? ''} ${title} ${new URL(url).pathname.replace(/[-_/]/g, ' ')}`)) {
+  if (!activityDates.some(Boolean) && (activityLink.test(`${headings[0] ?? ''} ${title} ${new URL(url).pathname.replace(/[-_/]/g, ' ')}`) ||
+    statements.some(line => /\b(?:next cohort|program(?:me)? starts|applications close|enrolment closes|enrollment closes)\b/i.test(line)))) {
     const dateLabels = read('div,span,time').filter((_index, node) => !$(node).children().length && !$(node).closest('header,footer,nav,aside').length)
       .slice(0, 120).toArray().map(node => squash($(node).text())).filter(value => value.length <= 80);
     const dates = [...statements.slice(0, 28), ...dateLabels].flatMap(line => [...line.matchAll(preciseDate)]);
@@ -289,6 +297,13 @@ export function parseBusinessPage(html: string, url: string) {
     const context = squash($(node).closest('article,li,p,figure').text()).slice(0, 350);
     return [{ label, url: target, main, appearanceContext: main && appearanceLink.test(context) }];
   });
+  if (hostedBooking(url)) {
+    for (const link of links) {
+      if (link.main && !hostedBooking(link.url) && domain(link.url) !== domain(url) &&
+        /^(?:visit (?:the )?)?(?:event )?organi[sz]er(?:['’]s)? (?:official )?website$/i.test(link.label))
+        organizerSites.add(link.url);
+    }
+  }
   const bookingControl = read('button,input[type="submit"],iframe,a[href^="#"],a[href^="javascript:"]').toArray().some(node =>
     booking.test(squash($(node).text() || $(node).attr('value') || $(node).attr('title') || $(node).attr('aria-label') || ''))
     || /calendly|acuityscheduling|cal\.com/i.test($(node).attr('src') ?? '')) || read('form').toArray().some(node => {
@@ -367,7 +382,8 @@ export function parseBusinessPage(html: string, url: string) {
   const missingPage = [title, ...headings.slice(0, 2)].some(item => /^(?:404(?:\s*[-:·|]\s*)?(?:error|page not found)?|(?:sorry[, ]+)?(?:the )?page (?:was )?not found)(?:\s*[-:·|].*)?$/i.test(item));
   const schedulerProblem = [title, ...headings.slice(0, 4), ...statements.slice(0, 12)].find(item =>
     /\b(?:this (?:calendly |booking |scheduling |meeting |event )?link (?:is no longer valid|is invalid|has expired|is not active)|this event type is (?:inactive|unavailable)|this calendly url is not valid|we couldn.t find (?:that|this) event)\b/i.test(item));
-  return { identity, brand, canonical, statements, headings, title, links, contact, bookingControl, markets, missingPage, activityDates, publicationDates, activityAction: eventAction,
+  return { identity, brand, canonical, statements, headings, title, links, contact, bookingControl, markets, missingPage, activityDates, publicationDates,
+    organizerSites: [...organizerSites].slice(0, 2), activityAction: eventAction,
     testimonials, clientAccounts, genericInquiry, consultationIntake, informedIntake, scheduling, schedulerProblem, feedUrl: feedUrl ?? undefined, embeddedInquiry, hostedInquiry,
     contactProhibited: forbidden.test(bodyText), challenged: challenge.test(`${title} ${bodyText.slice(0, 850)}`) };
 }
@@ -442,6 +458,10 @@ export async function enrichCommercial(web: PublicWeb, job: Job, urls: string[],
 
 export async function resolveBusiness(web: PublicWeb, job: Job, signal: AbortSignal) {
   const checkpoint = emptyCheckpoint();
+  if (hostedBooking(job.website)) {
+    add(checkpoint, 'identity', 'UNVERIFIED', 'A hosted booking or event page cannot identify the coaching business.');
+    return { checkpoint, done: true };
+  }
   const seeds = job.seeds.filter(seed => domain(seed.website) === job.domain);
   const page = await inspect(web, job.website, signal, 'Official entry point', url => domain(url.href) === job.domain);
   checkpoint.evidence.push(page.evidence);
@@ -453,10 +473,10 @@ export async function resolveBusiness(web: PublicWeb, job: Job, signal: AbortSig
   }
   let identity = page;
   const matches = (item: Page) => seeds.filter(seed => seed.method === 'BUSINESS_SEARCH'
-    ? Boolean(item.brand) : containsName(item.identity, seed.name));
+    ? Boolean(item.brand) : item.brand === seed.name || containsName(item.identity, seed.name));
   let candidates = matches(identity);
   const homepage = new URL('/', page.url).href;
-  if (!candidates.length && seeds.some(seed => seed.method === 'BUSINESS_SEARCH') && homepage !== page.url) {
+  if (!candidates.length && seeds.some(seed => seed.method === 'BUSINESS_SEARCH' || seed.method === 'PUBLIC_OFFER') && homepage !== page.url) {
     identity = await inspect(web, homepage, signal, 'Official site branding', url => domain(url.href) === job.domain);
     checkpoint.evidence.push(identity.evidence);
     candidates = matches(identity);
@@ -524,6 +544,16 @@ function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: numbe
     return;
   }
   const now = Date.now();
+  if (job.seeds.some(seed => seed.method === 'PUBLIC_OFFER')) {
+    const promotion = checkpoint.paidPromotion;
+    const end = Date.parse(promotion?.date ?? '') + activityDays * 86_400_000;
+    add(checkpoint, 'acquisition', promotion && end > now ? 'VERIFIED' : 'UNVERIFIED', promotion && end > now
+      ? 'A dated public promotion leads to this exact verified paid coaching offer.'
+      : 'The dated promotion could not be tied again to the same paid coaching offer.', promotion && end > now ? [promotion.evidence] : []);
+    const gate = checkpoint.gates.at(-1)!;
+    if (gate.expiresAt) gate.expiresAt = new Date(Math.min(Date.parse(gate.expiresAt), end)).toISOString();
+    return;
+  }
   const organizations = new Set<string>();
   const hosts = new Set<string>();
   const records = new Set<string>();
@@ -701,6 +731,7 @@ export async function enrichAcquisition(web: PublicWeb, job: Job, settings: Sett
 function routeHost(value: string, official: string) {
   const host = domain(value);
   return host === official || ['book.', 'booking.', 'bookme.', 'schedule.'].some(prefix => host === `${prefix}${official}`) ||
+    /^outlook\.office(?:365)?\.com$/i.test(host) && /^\/book\//i.test(new URL(value).pathname) ||
     /^(?:calendly\.com|cal\.com|app\.acuityscheduling\.com|[a-z\d-]+\.(?:as\.me|youcanbook\.me)|savvycal\.com|koalendar\.com)$/i.test(host);
 }
 
@@ -830,6 +861,111 @@ function detailPages(pages: Page[], own: (url: URL) => boolean) {
   return [...new Map([...offers, ...other].map(link => [link.url, link])).values()];
 }
 
+const paidLanguage = /\b(?:investment|price|pricing|fee|tuition|cost|instal+l?ments|payments?|per (?:coaching )?session)\b/i;
+const paidAmount = /(?:US\$|CA\$|[$£]|(?:USD|CAD|GBP)\s*)\s*[1-9]\d{0,2}(?:,\d{3})*(?:\.\d{2})?\b|(?:USD|CAD|GBP|[$£])\s*[1-9]\d{3,6}(?:\.\d{2})?\b/i;
+const purchaseAction = /^(?:enrol+l?|apply (?:to join|for (?:the|this|our))|reserve (?:your|a) (?:place|seat|spot)|register|buy|purchase)\b/i;
+const programAction = /\b(?:explore|discover|learn (?:more|about)|join|apply|enrol+l?|work with|book|schedule|view|see)\b/i;
+const businessNiche = /\b(?:executive|leadership|business|CEO|founder)\b/i;
+
+function paidOffer(page: Page) {
+  const quotedEngagement = /\b(?:executive|leadership|business) coaching (?:investment|fees?|pricing) (?:varies|depends) (?:significantly )?(?:on|based on) (?:the )?(?:scope|duration|length)\b/i;
+  const marketPrice = page.statements.find(line => paidAmount.test(line) && (paidLanguage.test(line) || /^[A-Z]{0,3}[$£]/i.test(line)) &&
+    !/\b(?:could|typical|average|revenue|savings|salary|scholarship|donat(?:e|ion)|free trial|example|other coaches|earn|formerly)\b/i.test(line));
+  return marketPrice ?? page.statements.find(line => quotedEngagement.test(line));
+}
+
+function buyerLinks(page: Page, host: string) {
+  return page.links.filter(link => link.main && (domain(link.url) === host || routeHost(link.url, host) || hostedBooking(link.url)) &&
+    (booking.test(link.label) || purchaseAction.test(link.label) || contactLink.test(link.label)));
+}
+
+function paidPromotion(page: Page, offer: Page, activityDays: number) {
+  const host = domain(offer.url);
+  const hosted = hostedBooking(page.url);
+  if (page.state !== 'READABLE' || !hosted && domain(page.url) !== host) return;
+  if (page.canonical && domain(page.canonical) !== domain(page.url)) return;
+  const link = page.links.find(item => item.main && item.url === offer.url && programAction.test(item.label) &&
+    (offerLink.test(item.label) || offerPath.test(new URL(offer.url).pathname)));
+  const direct = page.url === offer.url && (page.bookingControl ||
+    buyerLinks(page, host).some(item => booking.test(item.label) || purchaseAction.test(item.label)));
+  const reciprocal = hosted && page.organizerSites?.some(site => domain(site) === host) && offer.links.some(item => item.main && item.url === page.url);
+  const offerBuyerUrls = buyerLinks(offer, host).filter(item => booking.test(item.label) || purchaseAction.test(item.label)).map(item => item.url);
+  const sharedBuyer = !hosted && page.statements.slice(0, 24).some(line => relevantCoach.test(line) && businessNiche.test(line)) &&
+    buyerLinks(page, host).find(item => offerBuyerUrls.includes(item.url) && (booking.test(item.label) || purchaseAction.test(item.label)));
+  if (!link && !direct && !reciprocal && !sharedBuyer) return;
+  const event = activityLink.test(`${page.headings[0] ?? ''} ${page.title} ${new URL(page.url).pathname.replace(/[-_/]/g, ' ')}`) ||
+    page.statements.some(line => /\b(?:next cohort|program(?:me)? starts|applications close|enrolment closes|enrollment closes)\b/i.test(line));
+  const dates = (event && page.activityAction ? page.activityDates : page.publicationDates ?? [])
+    .filter(value => /^\d{4}-\d\d-\d\d(?:T|$)/.test(value)).map(value => value.slice(0, 10));
+  const days = [...new Set(dates)];
+  const date = days[0];
+  const time = Date.parse(date);
+  if (days.length !== 1 || !(time >= Date.now() - activityDays * 86_400_000 && time <= Date.now() + (event ? 60 : 1) * 86_400_000)) return;
+  return { date, evidence: quote(page, `${date} · ${link?.label ?? (sharedBuyer ? sharedBuyer.label : 'Public offer registration or consultation')} · ${offer.url}`,
+    'Dated promotion of the verified paid coaching offer') };
+}
+
+export async function screenPublicOffer(web: PublicWeb, source: string, activityDays: number, signal: AbortSignal,
+  excluded: ReadonlySet<string>): Promise<{ seed: Seed } | { reason: string }> {
+  const sourceHost = domain(source);
+  const promotion = await inspect(web, source, signal, 'Public promotion screening', address => domain(address.href) === sourceHost);
+  if (promotion.state !== 'READABLE') return { reason: promotion.state };
+  const hosted = hostedBooking(promotion.url);
+  const official = hosted ? promotion.organizerSites?.[0] : promotion.url;
+  if (!official) return { reason: 'Host did not identify an official coach website' };
+  const host = domain(official);
+  if (excluded.has(host)) return { reason: 'Previously queued or investigated' };
+  const own = (url: URL) => domain(url.href) === host;
+  const entry = hosted ? await inspect(web, official, signal, 'Event organizer website', own) : promotion;
+  if (entry.state !== 'READABLE' || entry.canonical && !own(new URL(entry.canonical))) return { reason: 'Official site unverified' };
+  const sameSite = [...new Map(entry.links.filter(link => own(new URL(link.url)) && link.url !== entry.url &&
+    (offerPath.test(new URL(link.url).pathname) || link.main && offerLink.test(link.label) &&
+      (relevantCoach.test(link.label) || programAction.test(link.label)))).map(link => [link.url, link])).values()];
+  const ranked = sameSite.sort((a, b) => Number(b.main) - Number(a.main));
+  const scoped = [entry, ...await Promise.all(ranked.slice(0, 2).map(link => inspect(web, link.url, signal, 'Paid offer screening', own)))]
+    .filter(page => page.state === 'READABLE' && (!page.canonical || own(new URL(page.canonical))) &&
+      businessNiche.test(offerOn(page)?.line ?? '') && offerOn(page)?.detail);
+  if (!scoped.length) return { reason: 'No scoped coaching offer' };
+  const paid = scoped.filter(paidOffer);
+  if (!paid.length) return { reason: 'Paid terms unverified' };
+  let currentPromotion = promotion;
+  let offer = paid.find(page => paidPromotion(promotion, page, activityDays));
+  if (!offer && !hosted) {
+    const related = [...new Set([entry, ...paid].flatMap(page => page.links.filter(link => domain(link.url) === host &&
+      (activityLink.test(link.label) || publicationPath.test(new URL(link.url).pathname))).map(link => link.url)))].slice(0, 2);
+    for (const record of await Promise.all(related.map(url => inspect(web, url, signal, 'Linked coaching promotion screening', own)))) {
+      offer = paid.find(page => paidPromotion(record, page, activityDays));
+      if (offer) { currentPromotion = record; break; }
+    }
+  }
+  if (!offer) return { reason: hosted ? 'Hosted promotion not corroborated by the official offer' : 'No dated promotion of the paid offer' };
+  const homeUrl = new URL('/', offer.url).href;
+  const home = homeUrl === entry.url || homeUrl === offer.url ? (homeUrl === entry.url ? entry : offer) :
+    await inspect(web, homeUrl, signal, 'Official business context screening', own);
+  const buyer = buyerLinks(offer, host)[0];
+  if (!buyer && !offer.bookingControl && !offer.scheduling) return { reason: 'No eligible public booking or inquiry path' };
+  const destination = buyer ? await inspect(web, buyer.url, signal, 'Read-only buyer path screening', address => domain(address.href) === domain(buyer.url)) : offer;
+  if (!['READABLE', 'HTTP_404', 'HTTP_410'].includes(destination.state)) return { reason: `Buyer path ${destination.state}` };
+  const pages = [entry, offer, home, destination].filter(page => page.state === 'READABLE' && own(new URL(page.url)) &&
+    (!page.canonical || own(new URL(page.canonical))));
+  const identity = pages.find(page => page.brand)?.brand;
+  if (!identity) return { reason: 'Official business name unverified' };
+  const checkpoint = emptyCheckpoint();
+  recordMarket(checkpoint, pages);
+  if (!checkpoint.country) {
+    const links = pages.flatMap(page => page.links).filter(link => own(new URL(link.url)) && !pages.some(page => page.url === link.url));
+    const context = [...new Set([links.find(link => contactLink.test(link.label))?.url, links.find(link => aboutLink.test(link.label))?.url]
+      .filter((url): url is string => Boolean(url)))];
+    const read = await Promise.all(context.map(url => inspect(web, url, signal, 'Market evidence screening', own)));
+    recordMarket(checkpoint, [...pages, ...read]);
+  }
+  if (!checkpoint.country) return { reason: 'Eligible market unverified' };
+  return { seed: { method: 'PUBLIC_OFFER', name: identity, website: offer.url, source: promotion.url,
+    sourceKey: `public-offer:${hash(currentPromotion.url)}`, excerpt: 'Public promotion linked to an official paid coaching offer with a verified market and an observed buyer path.',
+    promotion: { url: currentPromotion.url, offer: offer.url }, discoveryPriority: 20 +
+      Number(destination.state !== 'READABLE' || Boolean(destination.schedulerProblem) || Boolean(destination.genericInquiry && !destination.informedIntake)) * 10 } };
+}
+
 export async function investigate(web: PublicWeb, job: Job, settings: Settings, signal: AbortSignal, shortlistCaptures = false) {
   const checkpoint = job.checkpoint;
   const linkedOffers = new Set<string>();
@@ -891,12 +1027,20 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     Number(Boolean(detail)) * 10 + Number(offerPath.test(new URL(item.url).pathname)) * 4 +
     Number(item.links.some(link => link.main && booking.test(link.label))) * 2 +
     Number(linkedOffers.has(item.url)) * 3 + Number(item.url === page.url);
-  const selected = observed.sort((a, b) => offerRank(b) - offerRank(a))[0];
+  const discoveryPromotion = job.seeds.find(seed => seed.method === 'PUBLIC_OFFER')?.promotion;
+  const selected = observed.find(item => item.page.url === discoveryPromotion?.offer && item.detail) ??
+    observed.sort((a, b) => offerRank(b) - offerRank(a))[0];
   const offer = selected?.page;
   const line = selected?.line;
   const engagement = selected?.detail;
   checkpoint.ownedActivities = pages.flatMap(item => ownedActivity(item, engagement ? offer?.url : undefined));
   checkpoint.attributedProgramScope = true;
+  if (discoveryPromotion && offer && line && engagement && offer.url === discoveryPromotion.offer) {
+    const source = pages.find(item => item.url === discoveryPromotion.url) ??
+      await inspect(web, discoveryPromotion.url, signal, 'Dated offer promotion recheck', url => domain(url.href) === domain(discoveryPromotion.url));
+    if (!pages.includes(source)) addJourney(checkpoint, offer.url, source, 'Dated paid offer promotion');
+    checkpoint.paidPromotion = paidPromotion(source, offer, settings.activityDays);
+  }
   if (offer && line && engagement) {
     checkpoint.offer = line;
     add(checkpoint, 'niche', 'VERIFIED', 'The official page describes a specialized coaching engagement.', [quote(offer, line, 'Offer heading'), quote(offer, engagement, 'Engagement scope')]);
@@ -931,12 +1075,16 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
       && !/\b(?:free|may offer|might offer|formerly|according to|report (?:on|by|from)|(?:a |the )?(?:study|survey|report|research) (?:shows|found|finds|documents|suggests|by|from))\b/i.test(item)
       && (/\b(?:our|my) (?:[\w:-]+ ){0,5}(?:coaching|engagement|program(?:me)?)\b|\bthis (?:[\w:-]+ ){0,4}coaching (?:container|package|program(?:me)?|engagement)\b|\b(?:at|with) (?:our|this|the) (?:practice|firm)\b|\b(?:we|I) (?:offer|deliver|provide|run|include)\b|\byou(?:['’]ll| will) (?:receive|get)\b/i.test(item)
         || containsName(item, checkpoint.identityName ?? job.name)));
-    const commercial = [price && quote(offer, price, 'Published offer price'), proof ?? namedClients[0] ?? (testimonial && quote(offer, testimonial, 'Attributed coaching client account')), substance && quote(substance.page, substance.statement, 'First-party operating history'),
+    const explicitPrice = discoveryPromotion ? paidOffer(offer) : price;
+    const commercial = [explicitPrice && quote(offer, explicitPrice, paidAmount.test(explicitPrice) ? 'Published offer price' : 'Published paid terms'),
+      proof ?? namedClients[0] ?? (testimonial && quote(offer, testimonial, 'Attributed coaching client account')), substance && quote(substance.page, substance.statement, 'First-party operating history'),
       program && quote(offer, program, 'Published coaching program scope')].filter((item): item is Evidence => Boolean(item));
     // Separately attributed engagements from different organizations can establish repeat client work.
     if (commercial.length < 2 && namedClients.length === 2) commercial.splice(0, commercial.length, ...namedClients);
-    add(checkpoint, 'substance', commercial.length >= 2 ? 'VERIFIED' : 'UNVERIFIED', commercial.length >= 2
+    const supportsPaidOffer = discoveryPromotion ? Boolean(explicitPrice && offer.url === discoveryPromotion.offer) : true;
+    add(checkpoint, 'substance', commercial.length >= 2 && supportsPaidOffer ? 'VERIFIED' : 'UNVERIFIED', commercial.length >= 2 && supportsPaidOffer
       ? 'Multiple documented measures establish commercial substance for the scoped coaching offer.'
+      : discoveryPromotion && !supportsPaidOffer ? 'The published paid coaching offer could not be independently verified.'
       : 'Commercial substance needs two supporting signals across a substantial program, published pricing, a client engagement, and operating history.', commercial);
   } else {
     add(checkpoint, 'niche', 'UNVERIFIED', line ? 'A specialized offer was visible, but the provider did not establish its coaching scope.' : 'A specialized coaching offer was not established.');

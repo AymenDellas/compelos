@@ -188,15 +188,27 @@ const processedEarlier = `EXISTS (SELECT 1 FROM origin_investigations prior
   WHERE prior.business_id=business.id AND prior.run_id<>$1 AND prior.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
     AND (prior.processing_started_at IS NOT NULL OR prior.stage<>'RESOLVING' OR prior.attempts>0))`;
 
-export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources: SourceResult[], refill = false) {
-  return fenced(pool, run, async db => {
-    const candidates = seeds.map(seed => domain(seed.website));
-    const { rows } = await db.query<{ domain: string }>(`SELECT DISTINCT candidate.domain
+async function processedDomains(db: Pool | PoolClient, runId: string, domains: string[], keys: string[]) {
+  const { rows } = await db.query<{ domain: string }>(`SELECT DISTINCT candidate.domain
       FROM unnest($2::text[], $3::text[]) candidate(domain,key)
       LEFT JOIN origin_identity_keys identity ON identity.key=candidate.key
       JOIN origin_businesses business ON business.domain=candidate.domain OR business.id=identity.business_id
-      WHERE ${processedEarlier}`, [run.id, candidates, seeds.map(seed => seed.sourceKey)]);
-    const processed = new Set(rows.map(row => row.domain));
+      WHERE ${processedEarlier}`, [runId, domains, keys]);
+  return new Set(rows.map(row => row.domain));
+}
+
+export async function existingDiscoveryDomains(pool: Pool, runId: string, domains: string[]) {
+  const excluded = await processedDomains(pool, runId, domains, domains.map(() => ''));
+  const { rows } = await pool.query<{ domain: string }>(`SELECT b.domain FROM origin_investigations j
+    JOIN origin_businesses b ON b.id=j.business_id WHERE j.run_id=$1 AND b.domain=ANY($2::text[]) AND ${includedInvestigation}`, [runId, domains]);
+  for (const row of rows) excluded.add(row.domain);
+  return excluded;
+}
+
+export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources: SourceResult[], refill = false) {
+  return fenced(pool, run, async db => {
+    const candidates = seeds.map(seed => domain(seed.website));
+    const processed = await processedDomains(db, run.id, candidates, seeds.map(seed => seed.sourceKey));
     const { rows: queued } = await db.query<{ business_id: string; domain: string; discovery_order: number; stage: string }>(`SELECT j.business_id,b.domain,j.discovery_order,j.stage
       FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
       WHERE j.run_id=$1 AND ${includedInvestigation}`, [run.id]);
@@ -240,6 +252,9 @@ export async function saveDiscovery(pool: Pool, run: Run, seeds: Seed[], sources
         discovered: earlier.discovered + source.discovered, elapsedMs: earlier.elapsedMs + source.elapsedMs,
         searches: (earlier.searches ?? 0) + (source.searches ?? 0), queryIndex: source.queryIndex ?? earlier.queryIndex,
         searchAttempts: (earlier.searchAttempts ?? earlier.searches ?? 0) + (source.searchAttempts ?? source.searches ?? 0),
+        ...(source.screening ? { screening: Object.fromEntries([...new Set([
+          ...Object.keys(earlier.screening ?? {}), ...Object.keys(source.screening),
+        ])].map(key => [key, (earlier.screening?.[key] ?? 0) + (source.screening?.[key] ?? 0)])) } : {}),
       } : source);
     }
     const nextRound = refill && businessIds.size < batchLimit ? (run.discovery_round ?? 0) + 1 : null;

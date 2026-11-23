@@ -1,7 +1,7 @@
 import type { ProspectResearch } from './prospect-qualification.cjs';
 export function publicUrl(value: string): URL;
 export function fetchPublicPage(value: string, options: {
-    resource: true; followRedirects: false; signal: AbortSignal; userAgent?: string;
+    resource: true; followRedirects: false; signal: AbortSignal; userAgent?: string; jsonBody?: string;
 }): Promise<{ url: string; status: number; headers: Record<string, string>; body: Buffer }>;
 export function fetchPublicPage(value: string, options: {
     signal: AbortSignal; allowUrl?: (url: URL) => boolean;
