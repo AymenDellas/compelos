@@ -1,3 +1,4 @@
+import { setTimeout as delaySearchRetry } from 'node:timers/promises';
 import { normaliseLinkedinUrl } from './utils';
 import { countrySearchExpansion } from './discovery-locations';
 import { assessDiscoveryLocation, canonicalDiscoveryTarget, type DiscoveryLocationEvidence } from './discovery-location-evidence.cjs';
@@ -463,7 +464,7 @@ export function createSerperSearcher(apiKeys: string | string[]) {
   let nextKey = 0;
   const unavailable = () => new Error(`All configured Serper API keys are unavailable: ${[...new Set(disabled.values())].join('; ')}. Add credits or update an available key before retrying.`);
 
-  return async (query: string, page = 1, onAttempt?: () => void | Promise<void>): Promise<any[]> => {
+  return async (query: string, page = 1, onAttempt?: () => void | Promise<void>, signal?: AbortSignal): Promise<any[]> => {
     let lastError = 'The search service could not be reached.';
     for (let round = 0; round < 3; round++) {
       if (disabled.size === keys.length) throw unavailable();
@@ -473,6 +474,7 @@ export function createSerperSearcher(apiKeys: string | string[]) {
         const key = keys[index];
         if (disabled.has(key)) continue;
         nextKey = (index + 1) % keys.length;
+        signal?.throwIfAborted();
         await onAttempt?.();
         let response: Response;
         let data: any;
@@ -481,14 +483,16 @@ export function createSerperSearcher(apiKeys: string | string[]) {
             method: 'POST',
             headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
             body: JSON.stringify({ q: query, num: 10, page }),
-            signal: AbortSignal.timeout(20_000),
+            signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
           });
           data = await response.json().catch(() => null);
         } catch {
+          signal?.throwIfAborted();
           lastError = 'Serper request timed out or could not reach the search service.';
           retryDelay = Math.max(retryDelay, 5000);
           continue;
         }
+        signal?.throwIfAborted();
         if (response.status === 200) return Array.isArray(data?.organic) ? data.organic : [];
 
         let message = typeof data?.message === 'string' ? data.message : typeof data?.error === 'string' ? data.error : '';
@@ -514,7 +518,7 @@ export function createSerperSearcher(apiKeys: string | string[]) {
       if (disabled.size === keys.length) throw unavailable();
       if (round < 2 && retryDelay) {
         await onAttempt?.();
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        await delaySearchRetry(retryDelay, undefined, { signal });
       }
     }
     throw new Error(`Search could not finish after retries: ${lastError}`);
