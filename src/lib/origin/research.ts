@@ -1015,13 +1015,18 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
       && !/\b(?:free|may offer|might offer|formerly|according to|report (?:on|by|from)|(?:a |the )?(?:study|survey|report|research) (?:shows|found|finds|documents|suggests|by|from))\b/i.test(item)
       && (/\b(?:our|my) (?:[\w:-]+ ){0,5}(?:coaching|engagement|program(?:me)?)\b|\bthis (?:[\w:-]+ ){0,4}coaching (?:container|package|program(?:me)?|engagement)\b|\b(?:at|with) (?:our|this|the) (?:practice|firm)\b|\b(?:we|I) (?:offer|deliver|provide|run|include)\b|\byou(?:['’]ll| will) (?:receive|get)\b/i.test(item)
         || containsName(item, checkpoint.identityName ?? job.name)));
+    const programLabel = /\bcoaching (?:program(?:me)?|package|engagement)\b/i;
     const programTitle = [line, offer.title, ...offer.headings.slice(0, 4)].find(item =>
       /\b(?:9\d|[1-3]\d{2})[- ]day\b/i.test(item) && businessNiche.test(item) &&
-      /\bcoaching (?:program(?:me)?|package|engagement)\b/i.test(item) && !/\b(?:free|trial)\b/i.test(item));
+      programLabel.test(item) && !/\b(?:free|trial)\b/i.test(item));
     const programSessions = programTitle && offer.headings.find(item =>
       /^(?:[^\p{L}\p{N}]*)(?:[6-9]|[1-9]\d)\s+(?:(?:private|individual|1[: -]1|one-on-one|weekly|biweekly|monthly)\s+){0,3}coaching (?:sessions|calls)\b/iu.test(item) &&
       !/\b(?:free|sample|bonus)\b/i.test(item));
-    const program = writtenProgram ?? (programTitle && programSessions ? `${programTitle} | ${programSessions}` : undefined);
+    const packageHeading = offer.headings.find(item => programLabel.test(item) && !/\b(?:free|trial|sample|how|what)\b/i.test(item));
+    const packageSchedule = packageHeading && offer.headings.find(item =>
+      /^(?:[6-9]|[1-9]\d) (?:coaching )?(?:sessions|calls) (?:to use )?(?:over|within) (?:[3-9]|1[0-9]|three|four|five|six|nine|twelve) months?$/i.test(item));
+    const program = writtenProgram ?? (programTitle && programSessions ? `${programTitle} | ${programSessions}` : undefined) ??
+      (packageHeading && packageSchedule ? `${packageHeading} | ${packageSchedule}` : undefined);
     const requirePaidTerms = qualificationOnly || Boolean(screenedOffer);
     const explicitPrice = requirePaidTerms ? paidOffer(offer) : price;
     const commercial = [explicitPrice && quote(offer, explicitPrice, paidAmount.test(explicitPrice) ? 'Published offer price' : 'Published paid terms'),

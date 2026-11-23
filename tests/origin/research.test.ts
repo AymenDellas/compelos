@@ -63,14 +63,17 @@ test('a named coaching package and repeated private sessions in headings support
   const home = page.replace('<p>Our business was founded in 2012.</p>', '')
     .replace('<p>Coaching engagement pricing is $5,000.</p>', `<h5>The 90-Day VIP Business Coaching Program</h5>
       <h4>6 Private Biweekly Coaching Sessions</h4><p>Coaching engagement pricing is $5,000.</p>`);
-  for (const [html, state] of [[home, 'VERIFIED'], [home.replace('6 Private', '2 Private'), 'UNVERIFIED']]) {
+  const prePaid = home.replace('The 90-Day VIP Business Coaching Program', 'Flexible Pre-Paid Coaching Package')
+    .replace('6 Private Biweekly Coaching Sessions', '6 sessions to use over 6 months');
+  for (const [html, program] of [[home, /90-Day.*6 Private Biweekly/], [prePaid, /Pre-Paid.*6 sessions/],
+    [home.replace('6 Private', '2 Private'), null], [prePaid.replace('6 months', '2 months'), null]] as const) {
     const { web } = fixture(html);
     const job = candidate();
     const { checkpoint } = await resolveBusiness(web, job, signal());
     const { checkpoint: inspected } = await investigate(web, { ...job, checkpoint }, settings, signal(), { qualificationOnly: true });
-    assert.equal(inspected.gates.find(gate => gate.name === 'substance')?.state, state);
-    if (state === 'VERIFIED') {
-      assert.match(inspected.evidence.find(item => item.method === 'Published coaching program scope')?.excerpt ?? '', /90-Day.*6 Private Biweekly/);
+    assert.equal(inspected.gates.find(gate => gate.name === 'substance')?.state, program ? 'VERIFIED' : 'UNVERIFIED');
+    if (program) {
+      assert.match(inspected.evidence.find(item => item.method === 'Published coaching program scope')?.excerpt ?? '', program);
       assert.equal(decide(inspected.gates, inspected.evidence).outcome, 'QUALIFIED');
     }
   }
