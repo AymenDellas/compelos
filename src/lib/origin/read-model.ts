@@ -43,7 +43,7 @@ async function qualifiedOpportunities(pool: DB, limit: number, run: string | nul
       ORDER BY created_at DESC,id DESC LIMIT 1) j ON true
     WHERE j.outcome='QUALIFIED' AND ${view === 'ready' ? currentEvidence : `NOT ${currentEvidence}`}
       AND NOT (${suppressed}) AND ($3::uuid IS NULL OR j.run_id=$3)
-    ORDER BY acquisition_sources DESC,j.updated_at DESC,b.name,b.id LIMIT $1`, [limit, POLICY_VERSION, run])).rows;
+    ORDER BY j.updated_at DESC,b.name,b.id LIMIT $1`, [limit, POLICY_VERSION, run])).rows;
 }
 
 export function readyOpportunities(pool: DB, limit = 100, run: string | null = null) {
@@ -85,7 +85,7 @@ export async function listRuns(db: DB, limit = 12) {
 
 export async function investigations(db: DB, run: string | null, outcome: string | null, limit: number) {
   return (await db.query<Finding & { business_id: string; run_id: string; website: string }>(`SELECT j.id,b.id AS business_id,j.run_id,COALESCE(j.checkpoint->>'identityName',b.name) AS name,b.website,j.stage,j.outcome,j.updated_at,
-    COALESCE(j.error,(SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'state'<>'VERIFIED'
+    COALESCE(j.error,j.decision->>'reason',(SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'state'<>'VERIFIED'
       ORDER BY (g->>'state'='CONTRADICTED') DESC LIMIT 1)) AS reason
     FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
     WHERE ${includedInvestigation} AND ($1::uuid IS NULL OR j.run_id=$1) AND ($2::text IS NULL OR COALESCE(j.outcome,j.stage)=$2)

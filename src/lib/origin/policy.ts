@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
-export const POLICY_VERSION = 'origin-v6';
+export const POLICY_VERSION = 'origin-v7';
 export const MAX_CANDIDATES = 72;
 export const MAX_RUN_MINUTES = 75;
 export const MAX_QUALIFIED_TARGET = 2_147_483_647;
-export const gateNames = ['identity', 'niche', 'geography', 'substance', 'acquisition', 'opportunity', 'contact'] as const;
-export type GateName = typeof gateNames[number];
+export const gateNames = ['identity', 'niche', 'geography', 'substance'] as const;
+export type GateName = typeof gateNames[number] | 'acquisition' | 'opportunity' | 'contact';
 export type Outcome = 'QUALIFIED' | 'UNRESOLVED' | 'REJECTED';
 export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLICATION' | 'PROCUREMENT' | 'BUSINESS_SEARCH' | 'PUBLIC_OFFER';
 
@@ -43,7 +43,6 @@ export type Seed = {
   publisherLinks?: string[];
   discoveryPriority?: number;
   activityLinks?: string[];
-  promotion?: { url: string; offer: string };
   commercialLinks?: string[];
   contract?: { amountGbp: number; awardedOn: string; buyer?: string };
   publication?: { checkedAt: string; permissionPage: string; digest: string; use?: 'FACTS_ONLY'; title?: string; recordUrl?: string };
@@ -98,7 +97,7 @@ export function decide(findings: Gate[], evidence: Evidence[], now = Date.now())
   const expiresAt = outcome === 'QUALIFIED' ? gates.map(gate => gate.expiresAt!).sort()[0] : null;
   return { version: POLICY_VERSION, outcome, gates, expiresAt, decidedAt: new Date(now).toISOString() };
 }
-export type Decision = ReturnType<typeof decide>;
+export type Decision = ReturnType<typeof decide> & { reason?: string };
 
 export type SourceResult = { adapter: string; discovered: number; elapsedMs: number; status: 'OK' | 'FAILED' | 'DEFERRED'; code?: string; retryAt?: string;
   publisherAudit?: PublisherAudit[]; credit?: string; queryIndex?: number; searches?: number; searchAttempts?: number;
@@ -131,7 +130,6 @@ export type Checkpoint = {
   funnel?: { found: number; tested: number; interactive: boolean; intakeVersion?: number };
   acquisitionSources?: number;
   ownedActivities?: { date: string; evidence: Evidence }[];
-  paidPromotion?: { date: string; evidence: Evidence };
   ownedFeeds?: string[];
   publisherPointers?: PublisherPointer[];
   publisherAudit?: PublisherAudit[];

@@ -20,7 +20,8 @@ export async function evaluate(pool: Pool, runId: string) {
     (SELECT count(*)::int FROM origin_artifacts a WHERE a.investigation_id=j.id AND a.image IS NOT NULL) AS artifacts
     FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id
     WHERE run_id=$1 AND ${includedInvestigation} ORDER BY b.domain`, [runId]);
-  const gates = Object.fromEntries(gateNames.map(name => [name, { VERIFIED: 0, UNVERIFIED: 0, CONTRADICTED: 0, STALE: 0 } as Record<Gate['state'], number>]));
+  const reportedGates = new Set([...gateNames, ...rows.flatMap(row => row.decision?.gates.map(gate => gate.name) ?? [])]);
+  const gates = Object.fromEntries([...reportedGates].map(name => [name, { VERIFIED: 0, UNVERIFIED: 0, CONTRADICTED: 0, STALE: 0 } as Record<Gate['state'], number>]));
   const blockers = new Map<string, { gate: string; state: Gate['state']; reason: string; count: number }>();
   for (const row of rows) for (const gate of row.decision?.gates ?? []) {
     gates[gate.name][gate.state]++;

@@ -9,7 +9,7 @@ import { screenPublicOffer } from './research';
 import { existingDiscoveryDomains, runSearch, saveDiscovery, sourceHistory } from './store';
 import type { Run } from './store';
 
-export const publicOfferSource = 'Public coaching promotions';
+export const publicOfferSource = 'Public coaching offers';
 const indexHost = 'public-api.wordpress.com';
 const tags = ['executive-coaching', 'leadership-coaching', 'business-coaching', 'business-coach', 'leadership-development',
   'entrepreneurship', 'coaching-program', 'group-coaching', 'business-growth', 'leadership-training', 'executive-coach', 'small-business-growth'];
@@ -19,21 +19,20 @@ const directIntent = /\b(?:book (?:a|your)|schedule (?:a|your)|register|enrol+l?
 const excludedIndexRecord = /\b(?:Wikipedia|SEO agency|marketing agency|best coach in|certification training|job opening)\b/i;
 type Pointer = { url: string; date: number; priority: number; navigation?: string };
 
-export function publicOfferPointers(payload: unknown, days: number, now = Date.now()): Pointer[] {
+export function publicOfferPointers(payload: unknown): Pointer[] {
   if (!payload || typeof payload !== 'object' || !('posts' in payload) || !Array.isArray(payload.posts)) throw new PublicFailure('UNREADABLE_INDEX');
   return payload.posts.slice(0, 24).flatMap((row: unknown) => {
     if (!row || typeof row !== 'object') return [];
     const { URL: value, title, excerpt, date } = row as Record<string, unknown>;
-    if (typeof value !== 'string' || typeof title !== 'string' || typeof date !== 'string') return [];
-    const time = Date.parse(date);
-    if (!(time >= now - days * 86_400_000 && time <= now + 86_400_000)) return [];
+    if (typeof value !== 'string' || typeof title !== 'string') return [];
+    const time = typeof date === 'string' ? Date.parse(date) : 0;
     const label = load(title.slice(0, 400)).text();
     const text = `${label} ${typeof excerpt === 'string' ? load(excerpt.slice(0, 4000)).text() : ''}`;
-    if (!intent.test(text) || excludedIndexRecord.test(label)) return [];
+    if ((!intent.test(text) && !relevantCoach.test(text)) || excludedIndexRecord.test(label)) return [];
     try {
       const url = documentUrl(value).href;
       const priority = Number(relevantCoach.test(text)) * 3 + Number(directIntent.test(text)) * 3 + Number(intent.test(label)) * 2;
-      return [{ url, date: time, priority }];
+      return [{ url, date: Number.isFinite(time) ? time : 0, priority }];
     } catch { return []; }
   });
 }
@@ -49,16 +48,14 @@ function indexPage(index: number) {
   return `https://${indexHost}/rest/v1.2/read/tags/${tag}/posts?${query}`;
 }
 
-export function promotionSearch(index: number, now = new Date()) {
+function offerSearch(index: number) {
   const country = (['us', 'gb', 'ca'] as const)[index % 3];
   const specialty = ['executive', 'leadership', 'business'][Math.floor(index / 3) % 3];
-  const window = new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-  const issueMonth = window.format(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + Number(index % 2 === 0), 1)));
   const intents = [
-    `"workshop" "${issueMonth}" "register"`,
-    '"investment" "book a call" "months"',
-    `"next cohort" "${issueMonth}"`,
-    '"investment" "book a discovery call"',
+    '"investment" "coaching program"',
+    '"coaching package" "pricing"',
+    '"coaching sessions" "fees"',
+    '"investment" "months"',
   ];
   return { country, query: `"${specialty} coaching" ${intents[Math.floor(index / 9) % intents.length]} -site:linkedin.com -site:youtube.com -jobs -certification` };
 }
@@ -98,10 +95,10 @@ export async function discoverPublicOffers(pool: Pool, run: Run, web: PublicWeb,
     source.searchAttempts!++;
     const reader = index % 3 === 2;
     try {
-      const records = await runSearch(pool, run, `public-promotions:${index}`, async () => {
+      const records = await runSearch(pool, run, `public-offers-v7:${index}`, async () => {
         const budget = AbortSignal.any([signal, AbortSignal.timeout(9500)]);
-        if (reader) return publicOfferPointers(await web.api(indexPage(Math.floor(index / 3)), indexHost, budget), run.config.activityDays);
-        const search = promotionSearch(index - Math.floor(index / 3));
+        if (reader) return publicOfferPointers(await web.api(indexPage(Math.floor(index / 3)), indexHost, budget));
+        const search = offerSearch(index - Math.floor(index / 3));
         const candidates = searchPromotionPointers(await web.publicSearch(search.query, search.country, budget))
           .sort((a, b) => b.priority - a.priority).slice(0, 7);
         const navigationBudget = AbortSignal.any([signal, AbortSignal.timeout(5_000)]);
@@ -109,7 +106,7 @@ export async function discoverPublicOffers(pool: Pool, run: Run, web: PublicWeb,
           if (!navigation || position >= 4) return pointer;
           try {
             const url = await web.publicSearchDestination(navigation, pointer.url, navigationBudget);
-            if (url !== pointer.url) count('Exact public offer or promotion links');
+            if (url !== pointer.url) count('Exact public offer links');
             return { ...pointer, url };
           } catch { return pointer; }
         }));
@@ -127,7 +124,7 @@ export async function discoverPublicOffers(pool: Pool, run: Run, web: PublicWeb,
     }
   }
   signal.throwIfAborted();
-  count('Public promotion pointers', pointers.size);
+  count('Public offer pointers', pointers.size);
   const excluded = await existingDiscoveryDomains(pool, run.id, [...new Set([...pointers.values()].map(item => domain(item.url)))]);
   const ranked = [...pointers.values()].sort((first, second) => second.priority - first.priority || second.date - first.date);
   const fresh = ranked.filter(item => !excluded.has(domain(item.url)) || hostedBooking(item.url));
@@ -143,7 +140,7 @@ export async function discoverPublicOffers(pool: Pool, run: Run, web: PublicWeb,
   for (let offset = 0; offset < shortlist.length && Date.now() - started < 52_000; offset += 3) {
     signal.throwIfAborted();
     const group = await Promise.all(shortlist.slice(offset, offset + 3).map(item => screenPublicOffer(web, item.url,
-      run.config.activityDays, AbortSignal.any([signal, AbortSignal.timeout(12_500)]), excluded)
+      AbortSignal.any([signal, AbortSignal.timeout(12_500)]), excluded)
       .catch(() => ({ reason: 'Screening read timed out or failed' }))));
     for (const result of group) {
       if ('reason' in result) count(result.reason);

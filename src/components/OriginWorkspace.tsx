@@ -150,8 +150,7 @@ function RunActions({ run, busy, mutate }: { run: RunSummary; busy: boolean; mut
 function Discovery({ data }: { data: Overview }) {
   const names = [...new Set(data.sources.map(source => source.adapter))];
   const methods = [
-    ['Public promotion discovery', 'Find recent coaching promotions and verify the paid offer, market and buyer path before investigation.'],
-    ['Funnel verification', 'Read the public booking and inquiry paths and independently recheck any observed issue.'],
+    ['Public offer discovery', 'Find coaching businesses and verify their paid offers and eligible markets.'],
   ];
   return <div className="origin-operations">
     <section className="origin-section"><div className="origin-heading"><h2>Discovery sources</h2></div>
@@ -165,7 +164,7 @@ function Discovery({ data }: { data: Overview }) {
               .map(([reason, count]) => <small key={reason}>{reason} · {count}</small>)}
             {history[0].publisherAudit?.map(check => <small key={check.url}>{new URL(check.url).hostname} · {human(check.code)}</small>)}</td>
           <td>{history.reduce((sum, item) => sum + item.discovered, 0)}</td><td>{quality?.offers ?? 0}</td><td>{quality?.qualified ?? 0}</td><td>{history.filter(item => item.status === 'FAILED').length}</td></tr>;
-        })}</tbody></table></div> : <p className="origin-empty">Public promotion screening results will appear after the first run.</p>}
+        })}</tbody></table></div> : <p className="origin-empty">Public offer screening results will appear after the first run.</p>}
     </section>
     <section className="origin-section"><div className="origin-heading"><h2>Research methods</h2></div>
       <dl className="origin-detail">{methods.map(([name, description]) => <div key={name}><dt>{name}</dt><dd>{description}</dd></div>)}</dl>
@@ -176,23 +175,20 @@ function Discovery({ data }: { data: Overview }) {
 function Opportunities({ data, open }: { data: Overview; open: (id: string) => void }) {
   const [search, setSearch] = useState('');
   const [country, setCountry] = useState('');
-  const [sort, setSort] = useState('sources');
   const opportunities = [...data.opportunities.map(item => ({ ...item, status: 'READY' })),
     ...data.savedOpportunities.map(item => ({ ...item, status: 'NEEDS_RECHECK' }))];
   const rows = opportunities.filter(item => (!country || item.country === country) &&
     `${item.name} ${item.offer}`.toLowerCase().includes(search.trim().toLowerCase()));
-  if (sort === 'recent') rows.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   return <section className="origin-section">
     <div className="origin-heading"><h2>Saved opportunities</h2><span>{rows.length} shown</span></div>
     <div className="origin-filters">
       <label>Business or offer<input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search opportunities" /></label>
       <label>Market<select value={country} onChange={event => setCountry(event.target.value)}><option value="">All markets</option><option value="US">United States</option><option value="UK">United Kingdom</option><option value="CA">Canada</option></select></label>
-      <label>Sort by<select value={sort} onChange={event => setSort(event.target.value)}><option value="sources">Acquisition evidence</option><option value="recent">Latest investigation</option></select></label>
     </div>
-    {rows.length ? <div className="origin-scroll origin-opportunities-table"><table><thead><tr><th>Business</th><th>Market</th><th>Opportunity</th><th>Evidence expires</th></tr></thead>
+    {rows.length ? <div className="origin-scroll origin-opportunities-table"><table><thead><tr><th>Business</th><th>Coaching offer</th><th>Market</th><th>Evidence expires</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.id}>
-        <td><button className="origin-text-action" onClick={() => open(row.id)}>{row.name}</button><small>{row.offer}</small><State value={row.status} /></td>
-        <td>{row.country}</td><td>{row.opportunity}</td><td>{stamp(row.expires_at)}</td>
+        <td><button className="origin-text-action" onClick={() => open(row.id)}>{row.name}</button><State value={row.status} /></td>
+        <td>{row.offer}</td><td>{row.country}</td><td>{stamp(row.expires_at)}</td>
       </tr>)}</tbody></table></div>
       : <p className="origin-empty">{opportunities.length ? 'No opportunities match these filters.' : 'No saved opportunities yet.'}</p>}
   </section>;
@@ -236,9 +232,9 @@ function DossierView({ id, close }: { id: string; close: () => void }) {
     {!entry && !error && <p className="origin-empty" role="status">Loading evidence…</p>}
     {entry && checkpoint && <>
       <div className="origin-dossier-header"><div><h2>{entry.name}</h2><External url={entry.website}>{new URL(entry.website).hostname}</External></div>
-        <State value={entry.suppressed ? 'SUPPRESSED' : entry.decision?.outcome === 'QUALIFIED' && !entry.evidence_current ? 'NEEDS_RECHECK' : entry.decision?.outcome ?? entry.stage} /></div>
+        <State value={entry.suppressed ? 'SUPPRESSED' : entry.decision?.outcome === 'QUALIFIED' ? entry.evidence_current ? 'READY' : 'NEEDS_RECHECK' : entry.decision?.outcome ?? entry.stage} /></div>
       <dl className="origin-detail"><dt>Offer</dt><dd>{checkpoint.offer ?? 'Unverified'}</dd><dt>Market</dt><dd>{checkpoint.country ?? 'Unverified'}</dd>
-        <dt>Business contact</dt><dd>{entry.suppressed ? 'Suppressed in Compel OS' : checkpoint.contact ?? 'Unverified'}</dd><dt>Last investigated</dt><dd>{stamp(entry.updated_at)}</dd>
+        {checkpoint.contact && !entry.suppressed && <><dt>Recorded business contact</dt><dd>{checkpoint.contact}</dd></>}<dt>Last investigated</dt><dd>{stamp(entry.updated_at)}</dd>
         <dt>Qualification policy</dt><dd>{entry.decision?.version ?? 'No decision yet'}</dd></dl>
       {checkpoint.advisory && <p><strong>AI review</strong> {human(checkpoint.advisory.assessment)} · <a href={`#evidence-${checkpoint.advisory.evidence}`}>Supporting evidence</a></p>}
       <section className="origin-section"><div className="origin-heading"><h3>Qualification evidence</h3></div>
@@ -276,9 +272,9 @@ function SettingsForm({ config, busy, save }: { config: Settings; busy: boolean;
     event.preventDefault();
     const fields = new FormData(event.currentTarget);
     const interval = Number(fields.get('intervalMinutes'));
-    void save({ ...config, intervalMinutes: interval || null, browser: fields.has('browser'), candidateLimit: Number(fields.get('candidateLimit')),
+    void save({ ...config, intervalMinutes: interval || null, candidateLimit: Number(fields.get('candidateLimit')),
       qualifiedTarget: Number(fields.get('qualifiedTarget')),
-      runMinutes: Number(fields.get('runMinutes')), activityDays: Number(fields.get('activityDays')) });
+      runMinutes: Number(fields.get('runMinutes')) });
   };
   return <form className="origin-section" onSubmit={submit}><div className="origin-heading"><h2>Research settings</h2></div>
     <div className="origin-fields">
@@ -287,8 +283,6 @@ function SettingsForm({ config, busy, save }: { config: Settings; busy: boolean;
       <label>Qualified opportunities target<input name="qualifiedTarget" type="number" min="0" max="2147483647" defaultValue={config.qualifiedTarget || ''}
         placeholder="Single batch" aria-describedby="origin-qualified-target-hint" /></label>
       <label>Time budget (minutes)<input required name="runMinutes" type="number" min="2" max="75" defaultValue={config.runMinutes} /></label>
-      <label>Acquisition lookback (days)<input required name="activityDays" type="number" min="30" max="180" defaultValue={config.activityDays} /></label>
-      <label className="origin-checkbox"><input name="browser" type="checkbox" defaultChecked={config.browser} /> Capture desktop and mobile views</label>
     </div>
     <div className="origin-form-footer"><span id="origin-qualified-target-hint">A qualified target repeats batches within the time budget. Leave it blank for a single batch.</span>
       <button className="origin-primary" disabled={busy}>Save settings</button></div>

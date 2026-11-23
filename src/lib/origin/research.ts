@@ -2,7 +2,7 @@ import { load } from 'cheerio';
 import { normalizedName, publisherPointer, relatedPublisherHosts, verifyPublications } from './auto-publishers';
 import { createFunnelBrowser, type RenderedPage } from '../funnel-browser';
 import { coachingEditorial, relevantCoach } from './discovery';
-import { emptyCheckpoint, finding, hash, observe } from './policy';
+import { emptyCheckpoint, finding, gateNames, hash, observe } from './policy';
 import type { Checkpoint, Evidence, Settings } from './policy';
 import { documentUrl, hostedBooking, PublicFailure } from './public-web';
 import type { Seed } from './policy';
@@ -544,16 +544,6 @@ function recordAcquisition(job: Job, checkpoint: Checkpoint, activityDays: numbe
     return;
   }
   const now = Date.now();
-  if (job.seeds.some(seed => seed.method === 'PUBLIC_OFFER')) {
-    const promotion = checkpoint.paidPromotion;
-    const end = Date.parse(promotion?.date ?? '') + activityDays * 86_400_000;
-    add(checkpoint, 'acquisition', promotion && end > now ? 'VERIFIED' : 'UNVERIFIED', promotion && end > now
-      ? 'A dated public promotion leads to this exact verified paid coaching offer.'
-      : 'The dated promotion could not be tied again to the same paid coaching offer.', promotion && end > now ? [promotion.evidence] : []);
-    const gate = checkpoint.gates.at(-1)!;
-    if (gate.expiresAt) gate.expiresAt = new Date(Math.min(Date.parse(gate.expiresAt), end)).toISOString();
-    return;
-  }
   const organizations = new Set<string>();
   const hosts = new Set<string>();
   const records = new Set<string>();
@@ -846,7 +836,7 @@ function offerOn(page: Page) {
   return { page, line, detail };
 }
 
-function detailPages(pages: Page[], own: (url: URL) => boolean) {
+function detailPages(pages: Page[], own: (url: URL) => boolean, includePublications: boolean) {
   const targets = [...new Map(pages.flatMap(page => page.links).filter(link => own(new URL(link.url)) &&
     (!navigationOnly.test(link.label) || publicationIndex.test(link.label)) && !pages.some(page => page.url === link.url)).map(link => [link.url, link])).values()];
   const ranked = targets.map(link => {
@@ -856,14 +846,13 @@ function detailPages(pages: Page[], own: (url: URL) => boolean) {
     return { link, score };
   });
   const offers = ranked.filter(value => value.score >= 2).sort((a, b) => b.score - a.score).slice(0, 2).map(value => value.link);
-  const other = [caseLink, pricingLink, contactLink, aboutLink, activityLink, publicationIndex]
+  const other = [caseLink, pricingLink, contactLink, aboutLink, ...(includePublications ? [activityLink, publicationIndex] : [])]
     .flatMap(pattern => targets.filter(link => pattern.test(link.label)).slice(0, 1));
   return [...new Map([...offers, ...other].map(link => [link.url, link])).values()];
 }
 
 const paidLanguage = /\b(?:investment|price|pricing|fee|tuition|cost|instal+l?ments|payments?|per (?:coaching )?session)\b/i;
 const paidAmount = /(?:US\$|CA\$|[$£]|(?:USD|CAD|GBP)\s*)\s*[1-9]\d{0,2}(?:,\d{3})*(?:\.\d{2})?\b|(?:USD|CAD|GBP|[$£])\s*[1-9]\d{3,6}(?:\.\d{2})?\b/i;
-const purchaseAction = /^(?:enrol+l?|apply (?:to join|for (?:the|this|our))|reserve (?:your|a) (?:place|seat|spot)|register|buy|purchase)\b/i;
 const programAction = /\b(?:explore|discover|learn (?:more|about)|join|apply|enrol+l?|work with|book|schedule|view|see)\b/i;
 const businessNiche = /\b(?:executive|leadership|business|CEO|founder)\b/i;
 
@@ -874,49 +863,18 @@ function paidOffer(page: Page) {
   return marketPrice ?? page.statements.find(line => quotedEngagement.test(line));
 }
 
-function buyerLinks(page: Page, host: string) {
-  return page.links.filter(link => link.main && (domain(link.url) === host || routeHost(link.url, host) || hostedBooking(link.url)) &&
-    (booking.test(link.label) || purchaseAction.test(link.label) || contactLink.test(link.label)));
-}
-
-function paidPromotion(page: Page, offer: Page, activityDays: number) {
-  const host = domain(offer.url);
-  const hosted = hostedBooking(page.url);
-  if (page.state !== 'READABLE' || !hosted && domain(page.url) !== host) return;
-  if (page.canonical && domain(page.canonical) !== domain(page.url)) return;
-  const link = page.links.find(item => item.main && item.url === offer.url && programAction.test(item.label) &&
-    (offerLink.test(item.label) || offerPath.test(new URL(offer.url).pathname)));
-  const direct = page.url === offer.url && (page.bookingControl ||
-    buyerLinks(page, host).some(item => booking.test(item.label) || purchaseAction.test(item.label)));
-  const reciprocal = hosted && page.organizerSites?.some(site => domain(site) === host) && offer.links.some(item => item.main && item.url === page.url);
-  const offerBuyerUrls = buyerLinks(offer, host).filter(item => booking.test(item.label) || purchaseAction.test(item.label)).map(item => item.url);
-  const sharedBuyer = !hosted && page.statements.slice(0, 24).some(line => relevantCoach.test(line) && businessNiche.test(line)) &&
-    buyerLinks(page, host).find(item => offerBuyerUrls.includes(item.url) && (booking.test(item.label) || purchaseAction.test(item.label)));
-  if (!link && !direct && !reciprocal && !sharedBuyer) return;
-  const event = activityLink.test(`${page.headings[0] ?? ''} ${page.title} ${new URL(page.url).pathname.replace(/[-_/]/g, ' ')}`) ||
-    page.statements.some(line => /\b(?:next cohort|program(?:me)? starts|applications close|enrolment closes|enrollment closes)\b/i.test(line));
-  const dates = (event && page.activityAction ? page.activityDates : page.publicationDates ?? [])
-    .filter(value => /^\d{4}-\d\d-\d\d(?:T|$)/.test(value)).map(value => value.slice(0, 10));
-  const days = [...new Set(dates)];
-  const date = days[0];
-  const time = Date.parse(date);
-  if (days.length !== 1 || !(time >= Date.now() - activityDays * 86_400_000 && time <= Date.now() + (event ? 60 : 1) * 86_400_000)) return;
-  return { date, evidence: quote(page, `${date} · ${link?.label ?? (sharedBuyer ? sharedBuyer.label : 'Public offer registration or consultation')} · ${offer.url}`,
-    'Dated promotion of the verified paid coaching offer') };
-}
-
-export async function screenPublicOffer(web: PublicWeb, source: string, activityDays: number, signal: AbortSignal,
+export async function screenPublicOffer(web: PublicWeb, source: string, signal: AbortSignal,
   excluded: ReadonlySet<string>): Promise<{ seed: Seed } | { reason: string }> {
   const sourceHost = domain(source);
-  const promotion = await inspect(web, source, signal, 'Public promotion screening', address => domain(address.href) === sourceHost);
-  if (promotion.state !== 'READABLE') return { reason: promotion.state };
-  const hosted = hostedBooking(promotion.url);
-  const official = hosted ? promotion.organizerSites?.[0] : promotion.url;
+  const pointer = await inspect(web, source, signal, 'Public offer screening', address => domain(address.href) === sourceHost);
+  if (pointer.state !== 'READABLE') return { reason: pointer.state };
+  const hosted = hostedBooking(pointer.url);
+  const official = hosted ? pointer.organizerSites?.[0] : pointer.url;
   if (!official) return { reason: 'Host did not identify an official coach website' };
   const host = domain(official);
   if (excluded.has(host)) return { reason: 'Previously queued or investigated' };
   const own = (url: URL) => domain(url.href) === host;
-  const entry = hosted ? await inspect(web, official, signal, 'Event organizer website', own) : promotion;
+  const entry = hosted ? await inspect(web, official, signal, 'Event organizer website', own) : pointer;
   if (entry.state !== 'READABLE' || entry.canonical && !own(new URL(entry.canonical))) return { reason: 'Official site unverified' };
   const sameSite = [...new Map(entry.links.filter(link => own(new URL(link.url)) && link.url !== entry.url &&
     (offerPath.test(new URL(link.url).pathname) || link.main && offerLink.test(link.label) &&
@@ -928,26 +886,14 @@ export async function screenPublicOffer(web: PublicWeb, source: string, activity
   if (!scoped.length) return { reason: 'No scoped coaching offer' };
   const paid = scoped.filter(paidOffer);
   if (!paid.length) return { reason: 'Paid terms unverified' };
-  let currentPromotion = promotion;
-  let offer = paid.find(page => paidPromotion(promotion, page, activityDays));
-  if (!offer && !hosted) {
-    const related = [...new Set([entry, ...paid].flatMap(page => page.links.filter(link => domain(link.url) === host &&
-      (activityLink.test(link.label) || publicationPath.test(new URL(link.url).pathname))).map(link => link.url)))].slice(0, 2);
-    for (const record of await Promise.all(related.map(url => inspect(web, url, signal, 'Linked coaching promotion screening', own)))) {
-      offer = paid.find(page => paidPromotion(record, page, activityDays));
-      if (offer) { currentPromotion = record; break; }
-    }
-  }
-  if (!offer) return { reason: hosted ? 'Hosted promotion not corroborated by the official offer' : 'No dated promotion of the paid offer' };
+  const offer = paid[0];
   const homeUrl = new URL('/', offer.url).href;
   const home = homeUrl === entry.url || homeUrl === offer.url ? (homeUrl === entry.url ? entry : offer) :
     await inspect(web, homeUrl, signal, 'Official business context screening', own);
-  const buyer = buyerLinks(offer, host)[0];
-  if (!buyer && !offer.bookingControl && !offer.scheduling) return { reason: 'No eligible public booking or inquiry path' };
-  const destination = buyer ? await inspect(web, buyer.url, signal, 'Read-only buyer path screening', address => domain(address.href) === domain(buyer.url)) : offer;
-  if (!['READABLE', 'HTTP_404', 'HTTP_410'].includes(destination.state)) return { reason: `Buyer path ${destination.state}` };
-  const pages = [entry, offer, home, destination].filter(page => page.state === 'READABLE' && own(new URL(page.url)) &&
+  const pages = [entry, offer, home].filter(page => page.state === 'READABLE' && own(new URL(page.url)) &&
     (!page.canonical || own(new URL(page.canonical))));
+  if (hosted && !pages.some(page => page.links.some(link => link.main && link.url === pointer.url)))
+    return { reason: 'Official website did not corroborate the hosted listing' };
   const identity = pages.find(page => page.brand)?.brand;
   if (!identity) return { reason: 'Official business name unverified' };
   const checkpoint = emptyCheckpoint();
@@ -960,14 +906,14 @@ export async function screenPublicOffer(web: PublicWeb, source: string, activity
     recordMarket(checkpoint, [...pages, ...read]);
   }
   if (!checkpoint.country) return { reason: 'Eligible market unverified' };
-  return { seed: { method: 'PUBLIC_OFFER', name: identity, website: offer.url, source: promotion.url,
-    sourceKey: `public-offer:${hash(currentPromotion.url)}`, excerpt: 'Public promotion linked to an official paid coaching offer with a verified market and an observed buyer path.',
-    promotion: { url: currentPromotion.url, offer: offer.url }, discoveryPriority: 20 +
-      Number(destination.state !== 'READABLE' || Boolean(destination.schedulerProblem) || Boolean(destination.genericInquiry && !destination.informedIntake)) * 10 } };
+  return { seed: { method: 'PUBLIC_OFFER', name: identity, website: offer.url, source: pointer.url,
+    sourceKey: 'public-offer:' + hash(offer.url), excerpt: 'Official paid coaching offer with a verified business and eligible market.', discoveryPriority: 20 } };
 }
 
-export async function investigate(web: PublicWeb, job: Job, settings: Settings, signal: AbortSignal, shortlistCaptures = false) {
+export async function investigate(web: PublicWeb, job: Job, settings: Settings, signal: AbortSignal,
+  { qualificationOnly = false }: { qualificationOnly?: boolean } = {}) {
   const checkpoint = job.checkpoint;
+  if (qualificationOnly) checkpoint.gates = checkpoint.gates.filter(gate => gateNames.some(name => name === gate.name));
   const linkedOffers = new Set<string>();
   const own = (url: URL) => domain(url.href) === job.domain || linkedOffers.has(url.href);
   const entry = await inspect(web, job.website, signal, 'Offer investigation entry', own);
@@ -997,11 +943,11 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
   const promotedOffers = pages.flatMap(item => item.links).filter(link =>
     linkedOfferHost(new URL(link.url), job.domain) && offerLink.test(link.label));
   for (const link of promotedOffers.slice(0, 3)) linkedOffers.add(link.url);
-  const discoveredCampaigns = [...new Set(job.seeds.flatMap(seed => seed.activityLinks ?? []))].filter(url => own(new URL(url)) && !pages.some(item => item.url === url))
+  const discoveredCampaigns = qualificationOnly ? [] : [...new Set(job.seeds.flatMap(seed => seed.activityLinks ?? []))].filter(url => own(new URL(url)) && !pages.some(item => item.url === url))
     .slice(0, 2).map(url => ({ url, label: 'Discovered promotion' }));
   const discoveredCases = [...new Set(job.seeds.flatMap(seed => seed.commercialLinks ?? []))].filter(url => own(new URL(url)) && !pages.some(item => item.url === url))
     .slice(0, 2).map(url => ({ url, label: 'Discovered coaching case' }));
-  const planned = [...new Map([...promotedOffers.slice(0, 1), ...detailPages(pages, own), ...discoveredCampaigns, ...discoveredCases]
+  const planned = [...new Map([...promotedOffers.slice(0, 1), ...detailPages(pages, own, !qualificationOnly), ...discoveredCampaigns, ...discoveredCases]
     .map(link => [link.url, link])).values()];
   const details = await Promise.all(planned.map(link => inspect(web, link.url, signal, 'Official detail page', own)));
   for (const [index, detail] of details.entries()) {
@@ -1010,37 +956,31 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
       containsName(detail.brand ?? detail.identity, checkpoint.identityName ?? job.name))) pages.push(detail);
   }
   const deeper = [...new Map(pages.flatMap(item => item.links).filter(link => link.main && own(new URL(link.url)) && !pages.some(item => item.url === link.url) &&
-    (activityLink.test(`${link.label} ${new URL(link.url).pathname.replace(/[-_/]/g, ' ')}`) || caseLink.test(link.label) ||
-      caseDetailPath.test(new URL(link.url).pathname) || publicationPath.test(new URL(link.url).pathname)) &&
+    (caseLink.test(link.label) || caseDetailPath.test(new URL(link.url).pathname) || !qualificationOnly &&
+      (activityLink.test(link.label) || publicationPath.test(new URL(link.url).pathname))) &&
     !/\b(?:personal use|directory|privacy|login|view all|archives?)\b/i.test(link.label)).map(link => [link.url, link])).values()]
     .sort((a, b) => Number(/\/(?:case-stud(?:y|ies)|webinars?|episodes?)\/[^/]+/i.test(new URL(b.url).pathname)) -
       Number(/\/(?:case-stud(?:y|ies)|webinars?|episodes?)\/[^/]+/i.test(new URL(a.url).pathname))).slice(0, 3);
-  for (const [index, detail] of (await Promise.all(deeper.map(link => inspect(web, link.url, signal, 'Supporting case or campaign', own)))).entries()) {
+  for (const [index, detail] of (await Promise.all(deeper.map(link => inspect(web, link.url, signal, qualificationOnly ? 'Supporting coaching case' : 'Supporting case or campaign', own)))).entries()) {
     addJourney(checkpoint, page.url, detail, deeper[index].label);
     if (detail.state === 'READABLE') pages.push(detail);
   }
   recordMarket(checkpoint, pages);
-  checkpoint.ownedFeeds = [...new Set(pages.flatMap(item => item.feedUrl && own(new URL(item.feedUrl)) ? [item.feedUrl] : []))].slice(0, 2);
-  publicationLinks(pages, job, checkpoint);
-  const observed = pages.flatMap(item => { const candidate = offerOn(item); return candidate ? [candidate] : []; });
+  const observed = pages.flatMap(item => {
+    const candidate = offerOn(item);
+    return candidate && (!qualificationOnly || businessNiche.test(candidate.line)) ? [candidate] : [];
+  });
   const offerRank = ({ page: item, detail }: NonNullable<ReturnType<typeof offerOn>>) =>
     Number(Boolean(detail)) * 10 + Number(offerPath.test(new URL(item.url).pathname)) * 4 +
-    Number(item.links.some(link => link.main && booking.test(link.label))) * 2 +
+    (qualificationOnly ? Number(Boolean(paidOffer(item))) * 6 : Number(item.links.some(link => link.main && booking.test(link.label))) * 2) +
     Number(linkedOffers.has(item.url)) * 3 + Number(item.url === page.url);
-  const discoveryPromotion = job.seeds.find(seed => seed.method === 'PUBLIC_OFFER')?.promotion;
-  const selected = observed.find(item => item.page.url === discoveryPromotion?.offer && item.detail) ??
+  const screenedOffer = job.seeds.find(seed => seed.method === 'PUBLIC_OFFER')?.website;
+  const selected = observed.find(item => item.page.url === screenedOffer && item.detail && paidOffer(item.page)) ??
     observed.sort((a, b) => offerRank(b) - offerRank(a))[0];
   const offer = selected?.page;
   const line = selected?.line;
   const engagement = selected?.detail;
-  checkpoint.ownedActivities = pages.flatMap(item => ownedActivity(item, engagement ? offer?.url : undefined));
   checkpoint.attributedProgramScope = true;
-  if (discoveryPromotion && offer && line && engagement && offer.url === discoveryPromotion.offer) {
-    const source = pages.find(item => item.url === discoveryPromotion.url) ??
-      await inspect(web, discoveryPromotion.url, signal, 'Dated offer promotion recheck', url => domain(url.href) === domain(discoveryPromotion.url));
-    if (!pages.includes(source)) addJourney(checkpoint, offer.url, source, 'Dated paid offer promotion');
-    checkpoint.paidPromotion = paidPromotion(source, offer, settings.activityDays);
-  }
   if (offer && line && engagement) {
     checkpoint.offer = line;
     add(checkpoint, 'niche', 'VERIFIED', 'The official page describes a specialized coaching engagement.', [quote(offer, line, 'Offer heading'), quote(offer, engagement, 'Engagement scope')]);
@@ -1075,23 +1015,22 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
       && !/\b(?:free|may offer|might offer|formerly|according to|report (?:on|by|from)|(?:a |the )?(?:study|survey|report|research) (?:shows|found|finds|documents|suggests|by|from))\b/i.test(item)
       && (/\b(?:our|my) (?:[\w:-]+ ){0,5}(?:coaching|engagement|program(?:me)?)\b|\bthis (?:[\w:-]+ ){0,4}coaching (?:container|package|program(?:me)?|engagement)\b|\b(?:at|with) (?:our|this|the) (?:practice|firm)\b|\b(?:we|I) (?:offer|deliver|provide|run|include)\b|\byou(?:['’]ll| will) (?:receive|get)\b/i.test(item)
         || containsName(item, checkpoint.identityName ?? job.name)));
-    const explicitPrice = discoveryPromotion ? paidOffer(offer) : price;
+    const requirePaidTerms = qualificationOnly || Boolean(screenedOffer);
+    const explicitPrice = requirePaidTerms ? paidOffer(offer) : price;
     const commercial = [explicitPrice && quote(offer, explicitPrice, paidAmount.test(explicitPrice) ? 'Published offer price' : 'Published paid terms'),
       proof ?? namedClients[0] ?? (testimonial && quote(offer, testimonial, 'Attributed coaching client account')), substance && quote(substance.page, substance.statement, 'First-party operating history'),
       program && quote(offer, program, 'Published coaching program scope')].filter((item): item is Evidence => Boolean(item));
     // Separately attributed engagements from different organizations can establish repeat client work.
     if (commercial.length < 2 && namedClients.length === 2) commercial.splice(0, commercial.length, ...namedClients);
-    const supportsPaidOffer = discoveryPromotion ? Boolean(explicitPrice && offer.url === discoveryPromotion.offer) : true;
+    const supportsPaidOffer = !requirePaidTerms || Boolean(explicitPrice);
     add(checkpoint, 'substance', commercial.length >= 2 && supportsPaidOffer ? 'VERIFIED' : 'UNVERIFIED', commercial.length >= 2 && supportsPaidOffer
       ? 'Multiple documented measures establish commercial substance for the scoped coaching offer.'
-      : discoveryPromotion && !supportsPaidOffer ? 'The published paid coaching offer could not be independently verified.'
+      : !supportsPaidOffer ? 'The published paid coaching offer could not be independently verified.'
       : 'Commercial substance needs two supporting signals across a substantial program, published pricing, a client engagement, and operating history.', commercial);
   } else {
     add(checkpoint, 'niche', 'UNVERIFIED', line ? 'A specialized offer was visible, but the provider did not establish its coaching scope.' : 'A specialized coaching offer was not established.');
     add(checkpoint, 'substance', 'UNVERIFIED', 'A matching scoped coaching engagement is needed before commercial proof can qualify.');
   }
-  recordAcquisition(job, checkpoint, settings.activityDays);
-
   const privacyLink = !checkpoint.country && !checkpoint.gates.some(gate => gate.name === 'geography' && gate.state === 'CONTRADICTED')
     ? pages.flatMap(item => item.links).find(link => own(new URL(link.url)) && /^(?:privacy policy|privacy notice)$/i.test(link.label)) : undefined;
   if (privacyLink) {
@@ -1100,6 +1039,11 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     if (privacy.state === 'READABLE' && privacy.markets.length) recordMarket(checkpoint, [...pages, privacy]);
   }
   const artifacts: Artifact[] = [];
+  if (qualificationOnly) return { checkpoint, artifacts };
+  checkpoint.ownedFeeds = [...new Set(pages.flatMap(item => item.feedUrl && own(new URL(item.feedUrl)) ? [item.feedUrl] : []))].slice(0, 2);
+  publicationLinks(pages, job, checkpoint);
+  checkpoint.ownedActivities = pages.flatMap(item => ownedActivity(item, engagement ? offer?.url : undefined));
+  recordAcquisition(job, checkpoint, settings.activityDays);
   if (checkpoint.gates.some(gate => gate.state === 'CONTRADICTED')) return { checkpoint, artifacts };
   const prioritized = offer ? [offer, ...pages.filter(item => item !== offer)] : pages;
   const routesByUrl = new Map<string, { from: Page; link: Link }>();
@@ -1176,9 +1120,7 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     ? 'The site publishes restrictions on unsolicited inquiries.' : 'No suitable public business inquiry route was found.', restricted ? [restricted.evidence] : []);
 
   const renderPage = routes[0]?.from ?? offer ?? page;
-  const promising = [checkpoint.breakage, checkpoint.bookingMismatch, checkpoint.inquiryMismatch, checkpoint.priceMismatch].some(Boolean) ||
-    checkpoint.gates.filter(item => item.name !== 'identity' && item.state === 'VERIFIED').length >= 3;
-  if (settings.browser && (!shortlistCaptures || promising) && (offer || cta) && pages[0].state === 'READABLE' && !signal.aborted) {
+  if (settings.browser && (offer || cta) && pages[0].state === 'READABLE' && !signal.aborted) {
     const browserSignal = AbortSignal.any([signal, AbortSignal.timeout(19_000)]);
     const browser = createFunnelBrowser((url, requestSignal) => web.asset(url, requestSignal, renderPage.url), browserSignal, { inspectBookingDialogs: true });
     try {

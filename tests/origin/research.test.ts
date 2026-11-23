@@ -20,44 +20,43 @@ test('only a complete and fresh proof dossier can qualify', async () => {
   const verified = await verifyOpportunity(web, { ...job, checkpoint: researched.checkpoint }, signal());
   const decision = decide(verified.gates, verified.evidence);
   assert.equal(decision.outcome, 'QUALIFIED');
-  assert.equal(decision.gates.length, 7);
+  assert.equal(decision.gates.length, 4);
   assert.ok(decision.gates.every(gate => gate.evidence.length > 0));
   assert.equal(read.filter(value => value === book).length, 2);
-  assert.equal(decide(verified.gates, verified.evidence, Date.now() + 86_400_000).outcome, 'UNRESOLVED');
+  assert.equal(decide(verified.gates, verified.evidence, Date.now() + 15 * 86_400_000).outcome, 'UNRESOLVED');
   assert.equal(decide(verified.gates, verified.evidence.filter(item => item.id !== decision.gates[0].evidence[0])).outcome, 'UNRESOLVED');
 });
 
-test('public promotion discovery verifies a paid offer and retains all seven dossier gates', async () => {
-  const sourceUrl = official + 'news/leadership-workshop';
-  const recently = new Date(Date.now() - 86_400_000).toISOString();
+test('an evergreen paid offer qualifies without promotion, funnel checks, or business contact', async () => {
+  const sourceUrl = official + 'news/leadership-coaching';
   const fromIndex = publicOfferPointers({ posts: [
-    { URL: sourceUrl, date: recently, title: 'Executive coaching workshop registration' },
-    { URL: official + 'past', date: '2022-01-01', title: 'Executive coaching workshop' },
-    { URL: 'http://127.0.0.1/workshop', date: recently, title: 'Executive coaching workshop' },
-  ] }, 120);
-  assert.deepEqual(fromIndex.map(item => item.url), [sourceUrl]);
+    { URL: sourceUrl, title: 'Executive coaching' },
+    { URL: official + 'past', date: '2022-01-01', title: 'Executive coaching program' },
+    { URL: 'http://127.0.0.1/workshop', title: 'Executive coaching workshop' },
+  ] });
+  assert.deepEqual(fromIndex.map(item => item.url), [sourceUrl, official + 'past']);
   const brand = '<meta property="og:site_name" content="Cedar Leadership">';
-  const home = page.replace('<title>', brand + '<title>');
-  const { web } = fixture(home);
+  const home = page.replace('<title>', brand + '<title>').replace(/<p>Vendor inquiries.*?<\/p>/, '');
+  const { web, read } = fixture(home);
   const scout = { ...web, async document(...args: Parameters<typeof web.document>) {
     if (args[0] === sourceUrl) return { url: sourceUrl, status: 200, headers: { 'content-type': 'text/html' },
-      body: Buffer.from(`${brand}<main><h1>Leadership workshop</h1><time class="published" datetime="${recently}"></time>
+      body: Buffer.from(`${brand}<main><h1>Leadership coaching</h1>
       <a href="/">Explore our executive coaching program</a></main>`) };
     return web.document(...args);
   } };
-  const screened = await screenPublicOffer(scout, sourceUrl, 120, signal(), new Set());
+  const screened = await screenPublicOffer(scout, sourceUrl, signal(), new Set());
   assert.ok('seed' in screened);
   assert.equal(screened.seed.website, official);
   assert.equal(screened.seed.source, sourceUrl);
-  assert.equal('reason' in await screenPublicOffer(scout, sourceUrl, 120, signal(), new Set(['cedar-leadership.test'])), true);
+  assert.equal('reason' in await screenPublicOffer(scout, sourceUrl, signal(), new Set(['cedar-leadership.test'])), true);
   const job = candidate([screened.seed]);
   const resolved = await resolveBusiness(scout, job, signal());
   assert.equal(resolved.done, false);
-  const investigated = await investigate(scout, { ...job, checkpoint: resolved.checkpoint }, settings, signal());
-  const verified = await verifyOpportunity(scout, { ...job, checkpoint: investigated.checkpoint }, signal());
-  assert.equal(decide(verified.gates, verified.evidence).outcome, 'QUALIFIED');
-  assert.equal(verified.paidPromotion?.evidence.url, sourceUrl);
-  assert.equal(verified.gates.find(gate => gate.name === 'opportunity')?.state, 'VERIFIED');
+  const { checkpoint } = await investigate(scout, { ...job, checkpoint: resolved.checkpoint }, settings, signal(), { qualificationOnly: true });
+  assert.equal(decide(checkpoint.gates, checkpoint.evidence).outcome, 'QUALIFIED');
+  assert.deepEqual(checkpoint.gates.map(gate => gate.name).sort(), [...gateNames].sort());
+  assert.equal(read.includes(book), false);
+  assert.equal(checkpoint.contact, undefined);
 });
 
 test('hosted events require a reciprocal organizer link and cannot become a business', async () => {
@@ -73,13 +72,13 @@ test('hosted events require a reciprocal organizer link and cannot become a busi
     } };
   };
   const home = page.replace('<title>', '<meta property="og:site_name" content="Cedar Leadership"><title>');
-  assert.ok('reason' in await screenPublicOffer(wrap(home), event, 120, signal(), new Set()));
+  assert.ok('reason' in await screenPublicOffer(wrap(home), event, signal(), new Set()));
   const result = await screenPublicOffer(wrap(home.replace('</main>', `<a href="${event}">Register for the leadership workshop</a></main>`)),
-    event, 120, signal(), new Set());
+    event, signal(), new Set());
   assert.ok('seed' in result);
   assert.equal(result.seed.website, official);
   assert.equal((await resolveBusiness(wrap(home), { ...candidate(), website: event }, signal())).done, true);
-  assert.ok('reason' in await screenPublicOffer(wrap(home.replace('Coaching engagement pricing is $5,000.', 'Free introductory coaching.')), event, 120, signal(), new Set()));
+  assert.ok('reason' in await screenPublicOffer(wrap(home.replace('Coaching engagement pricing is $5,000.', 'Free introductory coaching.')), event, signal(), new Set()));
 });
 
 test('a public index link may recover the exact path on the same business domain only', async () => {
@@ -480,7 +479,6 @@ test('a material discrepancy on a working booking route must reproduce before it
     assert.equal(read.filter(url => url === book).length, 2);
     const opportunity = verified.gates.find(gate => gate.name === 'opportunity');
     assert.equal(opportunity?.state, secondMinutes === 50 ? 'VERIFIED' : 'UNVERIFIED');
-    assert.equal(decide(verified.gates, verified.evidence).outcome, secondMinutes === 50 ? 'QUALIFIED' : 'UNRESOLVED');
   }
 });
 
@@ -583,7 +581,7 @@ test('syndicated mentions and model-like instructions establish no traffic or ac
   const researched = await investigate(web, { ...job, checkpoint }, settings, signal());
   const verified = await verifyOpportunity(web, { ...job, checkpoint: researched.checkpoint }, signal());
   assert.equal(verified.acquisitionSources, 1);
-  assert.equal(decide(verified.gates, verified.evidence).outcome, 'UNRESOLVED');
+  assert.equal(verified.gates.find(gate => gate.name === 'acquisition')?.state, 'UNVERIFIED');
 });
 
 test('changed, functional, and challenged booking paths cannot pass independent verification', async () => {
@@ -599,7 +597,7 @@ test('changed, functional, and challenged booking paths cannot pass independent 
     const researched = await investigate(web, { ...job, checkpoint }, settings, signal());
     const verified = await verifyOpportunity(web, { ...job, checkpoint: researched.checkpoint }, signal());
     assert.deepEqual(verified.journey.filter(step => step.url === book).map(step => step.result), expected);
-    assert.equal(decide(verified.gates, verified.evidence).outcome, 'UNRESOLVED');
+    assert.equal(verified.gates.find(gate => gate.name === 'opportunity')?.state, 'UNVERIFIED');
   }));
 });
 
@@ -618,6 +616,9 @@ test('rejects a conflicting gate despite complete proof for all other requiremen
   const checks = gateNames.map(name => finding(name, name === 'geography' ? 'CONTRADICTED' : 'VERIFIED', 'Fixture assertion', [evidence]));
   assert.equal(decide(checks, [evidence]).outcome, 'REJECTED');
   assert.equal(decide(checks, []).outcome, 'UNRESOLVED');
+  const required = gateNames.map(name => finding(name, 'VERIFIED', 'Fixture assertion', [evidence]));
+  const olderContactCheck = finding('contact', 'CONTRADICTED', 'Fixture contact assertion', [evidence]);
+  assert.equal(decide([...required, olderContactCheck], [evidence]).outcome, 'QUALIFIED');
 });
 
 test('robots rules, unsupported addresses, redirect target checks, and Retry-After stop external reads', async () => {

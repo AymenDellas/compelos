@@ -9,7 +9,7 @@ import { discoverPublicOffers, publicOfferSource } from './public-discovery';
 import { createPublicWeb } from './public-web';
 import type { PublicWeb } from './public-web';
 import { hasSchema } from './read-model';
-import { enrichAcquisition, investigate, resolveBusiness, verifyOpportunity } from './research';
+import { investigate, resolveBusiness } from './research';
 import { advanceQualifiedRun, claimRun, failStage, finish, includedInvestigation, migrate, nextJob, release, runSearch, saveDiscovery, saveStage, sourceHistory } from './store';
 import type { Run } from './store';
 
@@ -91,16 +91,10 @@ export function createOriginLane(pool: Pool, limitRequest: Limiter, options: {
             const { checkpoint, done } = await resolveBusiness(web, job, signal);
             checkpoint.stageMs = { ...checkpoint.stageMs, resolve: Date.now() - startedAt };
             await saveStage(pool, run, job, checkpoint, done ? decide(checkpoint.gates, checkpoint.evidence) : 'INVESTIGATING');
-          } else if (job.stage === 'INVESTIGATING') {
-            const { checkpoint, artifacts } = await investigate(web, job, run.config, signal, !options.web);
-            checkpoint.stageMs = { ...checkpoint.stageMs, investigate: Date.now() - startedAt };
-            await saveStage(pool, run, job, checkpoint, checkpoint.gates.some(gate => gate.state === 'CONTRADICTED')
-              ? decide(checkpoint.gates, checkpoint.evidence) : 'VERIFYING', artifacts);
           } else {
-            const publications = await enrichAcquisition(web, job, run.config, signal);
-            const checkpoint = await verifyOpportunity(web, job, signal, run.config.browser);
-            checkpoint.stageMs = { ...checkpoint.stageMs, verify: Date.now() - startedAt };
-            await saveStage(pool, run, job, checkpoint, decide(checkpoint.gates, checkpoint.evidence), [], publications);
+            const { checkpoint } = await investigate(web, job, run.config, signal, { qualificationOnly: true });
+            checkpoint.stageMs = { ...checkpoint.stageMs, investigate: Date.now() - startedAt };
+            await saveStage(pool, run, job, checkpoint, decide(checkpoint.gates, checkpoint.evidence));
           }
         } catch (error) {
           if (!signal.aborted) {

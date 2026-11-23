@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import { decide, defaults, domain, emptyCheckpoint, finding, observe, POLICY_VERSION, settingsSchema } from './policy';
+import { defaults, domain, emptyCheckpoint, observe, POLICY_VERSION, settingsSchema } from './policy';
 import type { Checkpoint, Decision, Seed, Settings, SourceResult } from './policy';
 import { schema } from './schema';
 import { approvedFeeds, parseFeeds } from './sources';
@@ -323,8 +323,7 @@ export async function saveStage(pool: Pool, run: Run, job: Job, checkpoint: Chec
       if (match.rowCount) {
         const record = observe('source', job.website, 'A matching Compel OS business domain is suppressed.', 'CRM suppression');
         checkpoint.evidence.push(record);
-        checkpoint.gates = checkpoint.gates.filter(gate => gate.name !== 'contact').concat(finding('contact', 'CONTRADICTED', record.excerpt, [record]));
-        Object.assign(decision, decide(checkpoint.gates, checkpoint.evidence));
+        Object.assign(decision, { outcome: 'REJECTED', expiresAt: null, reason: record.excerpt });
       }
     }
     await db.query(`UPDATE origin_investigations SET stage=$2,checkpoint=$3,decision=$4,outcome=$5,expires_at=$6,seeds=seeds || $7::jsonb,
