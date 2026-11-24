@@ -201,6 +201,7 @@ export async function advanceQualifiedRun(pool: Pool, run: Run, searches: number
 // Legacy rows can record progress only through the stage or an attempt count.
 const processedEarlier = `EXISTS (SELECT 1 FROM origin_investigations prior
   WHERE prior.business_id=business.id AND prior.run_id<>$1 AND prior.checkpoint->>'skippedAsDuplicate' IS DISTINCT FROM 'true'
+    AND COALESCE(prior.review_policy,prior.decision->>'version')='${POLICY_VERSION}'
     AND COALESCE(prior.processing_started_at, prior.created_at) >= COALESCE(
       (SELECT dedup_reset_at FROM origin_settings WHERE id=1), '-infinity'::timestamptz)
     AND (prior.processing_started_at IS NOT NULL OR prior.stage<>'RESOLVING' OR prior.attempts>0))`;
@@ -290,7 +291,7 @@ export async function nextJob(pool: Pool, run: Run) {
       SELECT j.id FROM origin_investigations j WHERE j.run_id=$1 AND j.stage NOT IN ('COMPLETED','FAILED') AND ${includedInvestigation}
       ORDER BY CASE WHEN j.stage='VERIFYING' THEN 0 WHEN (j.stage='INVESTIGATING')=$2 THEN 1 ELSE 2 END,discovery_order,created_at,id LIMIT 1
     ), started AS (
-      UPDATE origin_investigations j SET processing_started_at=COALESCE(j.processing_started_at,now())
+      UPDATE origin_investigations j SET processing_started_at=COALESCE(j.processing_started_at,now()),review_policy='${POLICY_VERSION}'
       FROM selected WHERE j.id=selected.id RETURNING j.*
     ) SELECT j.*,b.domain,b.name,b.website,b.signature FROM started j JOIN origin_businesses b ON b.id=j.business_id`, [run.id, run.config.qualifiedTarget > 0])).rows[0];
   });
@@ -374,7 +375,8 @@ export async function savedOfferPointers(db: DB, offset: number, limit: number) 
   const { rows } = await db.query<{ website: string }>(`WITH earlier AS (
     SELECT DISTINCT ON (j.business_id) j.business_id,j.checkpoint,j.updated_at
     FROM origin_investigations j CROSS JOIN origin_settings settings
-    WHERE settings.id=1 AND COALESCE(j.processing_started_at,j.created_at)<settings.dedup_reset_at
+    WHERE settings.id=1 AND (COALESCE(j.processing_started_at,j.created_at)<settings.dedup_reset_at
+      OR j.decision->>'version' IS DISTINCT FROM '${POLICY_VERSION}')
       AND j.outcome IN ('QUALIFIED','UNRESOLVED') AND j.checkpoint->>'country' IN ('US','UK','CA')
       AND EXISTS (SELECT 1 FROM jsonb_array_elements(j.checkpoint->'gates') gate
         WHERE gate->>'name'='niche' AND gate->>'state'='VERIFIED')
@@ -382,9 +384,7 @@ export async function savedOfferPointers(db: DB, offset: number, limit: number) 
   ) SELECT COALESCE((SELECT NULLIF(evidence->>'url','') FROM jsonb_array_elements(earlier.checkpoint->'evidence') evidence
     WHERE evidence->>'method'='Offer heading' LIMIT 1),b.website) AS website
   FROM earlier JOIN origin_businesses b ON b.id=earlier.business_id
-  ORDER BY EXISTS (SELECT 1 FROM jsonb_array_elements(earlier.checkpoint->'evidence') evidence
-    WHERE evidence->>'method' IN ('Published offer price','Published paid terms','Published coaching program scope')) DESC,
-    earlier.updated_at DESC,earlier.business_id OFFSET $1 LIMIT $2`, [offset, limit]);
+  ORDER BY earlier.updated_at DESC,earlier.business_id OFFSET $1 LIMIT $2`, [offset, limit]);
   return rows.map(row => row.website);
 }
 

@@ -27,7 +27,7 @@ test('only a complete and fresh proof dossier can qualify', async () => {
   assert.equal(decide(verified.gates, verified.evidence.filter(item => item.id !== decision.gates[0].evidence[0])).outcome, 'UNRESOLVED');
 });
 
-test('an evergreen paid offer qualifies without promotion, funnel checks, or business contact', async () => {
+test('an individual coach can qualify without a price, program, promotion, or business contact', async () => {
   const sourceUrl = official + 'news/leadership-coaching';
   const fromIndex = publicOfferPointers({ posts: [
     { URL: sourceUrl, title: 'Executive coaching' },
@@ -36,7 +36,11 @@ test('an evergreen paid offer qualifies without promotion, funnel checks, or bus
   ] });
   assert.deepEqual(fromIndex.map(item => item.url), [sourceUrl, official + 'past']);
   const brand = '<meta property="og:site_name" content="Cedar Leadership">';
-  const home = page.replace('<title>', brand + '<title>').replace(/<p>Vendor inquiries.*?<\/p>/, '');
+  const home = page.replace('<title>', brand + '<title>').replace(/<p>Vendor inquiries.*?<\/p>/, '')
+    .replace('<p>Our business was founded in 2012.</p>', '')
+    .replace('We serve executive teams in the United Kingdom.', 'I coach globally through virtual consultations, with face-to-face sessions available in Leeds, UK.')
+    .replace('<main>', '<main><h2>Canadian Designer, Entrepreneur and Business Coach</h2>')
+    .replace('<p>Coaching engagement pricing is $5,000.</p>', '');
   const { web, read } = fixture(home);
   const scout = { ...web, async document(...args: Parameters<typeof web.document>) {
     if (args[0] === sourceUrl) return { url: sourceUrl, status: 200, headers: { 'content-type': 'text/html' },
@@ -54,9 +58,68 @@ test('an evergreen paid offer qualifies without promotion, funnel checks, or bus
   assert.equal(resolved.done, false);
   const { checkpoint } = await investigate(scout, { ...job, checkpoint: resolved.checkpoint }, settings, signal(), { qualificationOnly: true });
   assert.equal(decide(checkpoint.gates, checkpoint.evidence).outcome, 'QUALIFIED');
+  assert.equal(checkpoint.individualCoach, 'Jamie Cedar');
   assert.deepEqual(checkpoint.gates.map(gate => gate.name).sort(), [...gateNames].sort());
   assert.equal(read.includes(book), false);
   assert.equal(checkpoint.contact, undefined);
+});
+
+test('official About pages establish solo ownership and reveal team delivery behind a named founder', async () => {
+  const about = official + 'about/';
+  const home = page.replace('<title>', '<meta property="og:site_name" content="Cedar Leadership"><title>')
+    .replace('<p>I’m Jamie Cedar, an executive coach.</p>', '<p>I coach senior leaders through a career transition.</p><a href="/about/">My story</a>');
+  const solo = '<main><h1>My story</h1><p>I’m Jamie de la Cedar.</p></main>';
+  const team = solo.replace('</main>', '<p>Our network of coaches delivers leadership coaching to clients.</p></main>');
+  for (const [aboutHtml, matches] of [[solo, true], [team, false]]) {
+    const { web } = fixture(home);
+    const publicWeb = { ...web, async document(...args: Parameters<typeof web.document>) {
+      if (args[0] === about) return { url: about, status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(String(aboutHtml)) };
+      return web.document(...args);
+    } };
+    const screened = await screenPublicOffer(publicWeb, official, signal(), new Set());
+    assert.equal('seed' in screened, matches);
+    const job = candidate();
+    const { checkpoint } = await resolveBusiness(publicWeb, job, signal());
+    const { checkpoint: result } = await investigate(publicWeb, { ...job, checkpoint }, settings, signal(), { qualificationOnly: true });
+    assert.equal(decide(result.gates, result.evidence).outcome, matches ? 'QUALIFIED' : 'REJECTED');
+    if (matches) assert.equal(result.individualCoach, 'Jamie de la Cedar');
+  }
+});
+
+test('coach directories and editorial authors cannot establish one direct provider', async () => {
+  const brand = '<meta property="og:site_name" content="Cedar Leadership">';
+  const home = page.replace('<title>', brand + '<title>').replace('<p>I’m Jamie Cedar, an executive coach.</p>', '');
+  for (const intro of [
+    '<blockquote>I’m Jamie Cedar, an executive coach.</blockquote>',
+    '<p>Jamie Cedar is an executive coach. Taylor Reed is a leadership coach.</p><h2>Our coaches</h2><p>We match you with an executive coach.</p>',
+    '<p>Browse our executive coaches and choose an appointment.</p>',
+  ]) {
+    const { web } = fixture(home.replace('<main>', `<main>${intro}`));
+    assert.ok('reason' in await screenPublicOffer(web, official, signal(), new Set()));
+  }
+});
+
+test('role descriptions and contact titles keep the named coach distinct from the practice brand', () => {
+  const url = 'https://jordanaverycoaching.test/';
+  const bio = parseBusinessPage(`<meta property="og:site_name" content="jordan avery coaching"><title>About me | Jordan Avery Coaching</title>
+    <main><h1>About me</h1><p>As an accredited executive coach, I specialize in supporting senior leaders.</p>
+    <h2>Canadian Designer, Entrepreneur and Business Coach</h2></main>`, url);
+  const contact = parseBusinessPage(`<title>Contact Jordan Avery | Executive Coach</title>
+    <main><p>I offer executive coaching for senior leaders.</p></main>`, url + 'contact');
+  assert.deepEqual(new Set([...bio.coachClaims, ...contact.coachClaims].map(claim => claim.name)), new Set(['Jordan Avery']));
+});
+
+test('official service metadata may identify the single coach behind a practice brand', async () => {
+  const metadata = { '@type': 'Service', serviceType: 'Executive coaching', provider: { '@type': 'Person', name: 'Jo Rivera', url: official } };
+  const home = page.replace('<p>I’m Jamie Cedar, an executive coach.</p>', '')
+    .replace('<title>', `<script type="application/ld+json">${JSON.stringify(metadata)}</script><title>`);
+  const { web } = fixture(home);
+  const screened = await screenPublicOffer(web, official, signal(), new Set());
+  assert.ok('seed' in screened);
+  const job = candidate([screened.seed]);
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const result = await investigate(web, { ...job, checkpoint }, settings, signal(), { qualificationOnly: true });
+  assert.equal(result.checkpoint.individualCoach, 'Jo Rivera');
 });
 
 test('a named coaching package and repeated private sessions in headings support commercial substance', async () => {
@@ -70,7 +133,7 @@ test('a named coaching package and repeated private sessions in headings support
     const { web } = fixture(html);
     const job = candidate();
     const { checkpoint } = await resolveBusiness(web, job, signal());
-    const { checkpoint: inspected } = await investigate(web, { ...job, checkpoint }, settings, signal(), { qualificationOnly: true });
+    const { checkpoint: inspected } = await investigate(web, { ...job, checkpoint }, settings, signal());
     assert.equal(inspected.gates.find(gate => gate.name === 'substance')?.state, program ? 'VERIFIED' : 'UNVERIFIED');
     if (program) {
       assert.match(inspected.evidence.find(item => item.method === 'Published coaching program scope')?.excerpt ?? '', program);
@@ -98,7 +161,9 @@ test('hosted events require a reciprocal organizer link and cannot become a busi
   assert.ok('seed' in result);
   assert.equal(result.seed.website, official);
   assert.equal((await resolveBusiness(wrap(home), { ...candidate(), website: event }, signal())).done, true);
-  assert.ok('reason' in await screenPublicOffer(wrap(home.replace('Coaching engagement pricing is $5,000.', 'Free introductory coaching.')), event, signal(), new Set()));
+  const noPrice = home.replace('Coaching engagement pricing is $5,000.', 'Free introductory coaching.')
+    .replace('</main>', `<a href="${event}">Register for the leadership workshop</a></main>`);
+  assert.ok('seed' in await screenPublicOffer(wrap(noPrice), event, signal(), new Set()));
 });
 
 test('a public index link may recover the exact path on the same business domain only', async () => {
@@ -398,6 +463,7 @@ test('a published project price and an attributed coaching client account establ
 test('a search title alone cannot verify identity and official branding supplies the business name', async () => {
   const job = candidate([{ ...seed, name: 'Local leadership coaches', method: 'BUSINESS_SEARCH', source: official, occurredAt: undefined }]);
   const unbranded = await resolveBusiness(fixture(page.replace('<title>Cedar Leadership</title>', '<title>Local leadership coaches</title>')
+    .replace('<p>I’m Jamie Cedar, an executive coach.</p>', '')
     .replace('<body>', '<body><header><a href="/"><img alt="Cedar_Logo_Transparent"></a></header>')).web, job, signal());
   assert.equal(unbranded.done, true);
   const branded = await resolveBusiness(fixture(page.replace('</head>', '<meta property="og:site_name" content="Cedar Leadership"></head>')).web, job, signal());

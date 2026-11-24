@@ -12,6 +12,7 @@ const tabs = ['Overview', 'Discovery', 'Opportunities', 'Rejections', 'Operation
 type Tab = typeof tabs[number];
 const activeStates = ['QUEUED', 'RUNNING', 'PAUSED'];
 const human = (value: string) => value.toLowerCase().replaceAll('_', ' ').replace(/^./, first => first.toUpperCase());
+const requirementLabel = (value: string) => value === 'individual' ? 'Individual coach' : human(value);
 const stamp = (value: string | null) => value ? new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 const money = (cents: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
@@ -112,7 +113,7 @@ export default function OriginWorkspace() {
         {!!data.gateProgress?.length && <section className="origin-section">
           <div className="origin-heading"><h2>Latest run evidence</h2></div>
           <div className="origin-scroll"><table><thead><tr><th>Requirement</th><th>Examined</th><th>Verified</th><th>Unresolved</th><th>Contradicted</th></tr></thead>
-            <tbody>{data.gateProgress.map(gate => <tr key={gate.name}><td>{human(gate.name)}</td><td>{gate.reached}</td><td>{gate.verified}</td>
+            <tbody>{data.gateProgress.map(gate => <tr key={gate.name}><td>{requirementLabel(gate.name)}</td><td>{gate.reached}</td><td>{gate.verified}</td>
               <td>{gate.held}</td><td>{gate.contradicted}</td></tr>)}</tbody></table></div>
         </section>}
       </>}
@@ -157,7 +158,7 @@ function RunActions({ run, busy, mutate }: { run: RunSummary; busy: boolean; mut
 function Discovery({ data }: { data: Overview }) {
   const names = [...new Set(data.sources.map(source => source.adapter))];
   const methods = [
-    ['Public offer discovery', 'Find coaching businesses and verify their paid offers and eligible markets.'],
+    ['Public offer discovery', 'Find individual coaches and verify their coaching services and eligible markets.'],
   ];
   return <div className="origin-operations">
     <section className="origin-section"><div className="origin-heading"><h2>Discovery sources</h2></div>
@@ -246,7 +247,7 @@ function DossierView({ id, close }: { id: string; close: () => void }) {
       {checkpoint.advisory && <p><strong>AI review</strong> {human(checkpoint.advisory.assessment)} · <a href={`#evidence-${checkpoint.advisory.evidence}`}>Supporting evidence</a></p>}
       <section className="origin-section"><div className="origin-heading"><h3>Qualification evidence</h3></div>
         {(entry.decision?.gates ?? checkpoint.gates).map(gate => <div className="origin-gate" key={gate.name}>
-          <div><strong>{human(gate.name)}</strong><State value={gate.state} /></div><p>{gate.assertion}</p>
+          <div><strong>{requirementLabel(gate.name)}</strong><State value={gate.state} /></div><p>{gate.assertion}</p>
           {gate.evidence.map((evidence, index) => <a key={evidence} href={`#evidence-${evidence}`}>Evidence {index + 1}</a>)}
         </div>)}
       </section>

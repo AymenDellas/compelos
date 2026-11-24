@@ -74,7 +74,7 @@ export function endToEndFixture() {
     if (url.pathname === '/about') return reply(200, page(name, `<h1>${name}</h1><p>Our business was founded in 2012.</p>`));
     if (url.pathname === '/case-study') return reply(200, page('Case study', '<h1>Case study: Tern Manufacturing</h1><p>Tern Manufacturing engaged us to deliver executive coaching for its directors.</p>'));
     const brand = slug === 'maple' ? 'The Boardroom Practice' : name;
-    return reply(200, page(brand, `<h1>${brand} executive coaching</h1><p>Our 1:1 coaching engagement is for leadership teams.</p>
+    return reply(200, page(brand, `<h1>${brand} executive coaching</h1><p>I’m Jamie Rowan, an executive coach.</p><p>Our 1:1 coaching engagement is for leadership teams.</p>
       ${slug === 'maple' ? `<script type="application/ld+json">${JSON.stringify({ '@type': 'Service', serviceType: 'Executive coaching', url: value,
         areaServed: { '@type': 'Country', name: 'Canada' } })}</script>` : `<p>${slug === 'oak' ? 'We exclusively serve clients in France.' : 'We serve leadership teams in the UK.'}</p>`}
       ${slug === 'maple' ? '<a href="/about">About us</a><a href="/case-study">Case study</a>' : '<p>Our business was founded in 2012.</p><p>Coaching engagement pricing is $5,000.</p>'}

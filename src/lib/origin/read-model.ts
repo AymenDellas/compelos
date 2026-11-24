@@ -35,7 +35,7 @@ const currentEvidence = `COALESCE(j.decision->>'version'=$2 AND j.expires_at>now
 
 async function qualifiedOpportunities(pool: DB, limit: number, run: string | null, view: 'ready' | 'saved') {
   const suppressed = await suppressionFilter(pool);
-  return (await pool.query<Opportunity>(`SELECT j.id,b.id AS business_id,COALESCE(j.checkpoint->>'identityName',b.name) AS name,b.website,j.updated_at,j.expires_at,
+  return (await pool.query<Opportunity>(`SELECT j.id,b.id AS business_id,COALESCE(j.checkpoint->>'individualCoach',j.checkpoint->>'identityName',b.name) AS name,b.website,j.updated_at,j.expires_at,
     j.checkpoint->>'offer' AS offer,j.checkpoint->>'country' AS country,j.checkpoint->>'contact' AS contact,
     (SELECT jsonb_array_length(g->'evidence') FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='acquisition') AS acquisition_sources,
     (SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='opportunity') AS opportunity
@@ -154,7 +154,7 @@ export type Overview = Awaited<ReturnType<typeof overview>>;
 
 export async function dossier(pool: Pool, id: string) {
   const suppressed = await suppressionFilter(pool);
-  const { rows: [record] } = await pool.query<Omit<Dossier, 'artifacts'>>(`SELECT j.id,j.business_id,COALESCE(j.checkpoint->>'identityName',b.name) AS name,b.website,j.stage,j.updated_at,j.checkpoint,j.decision,j.error,${suppressed} AS suppressed,
+  const { rows: [record] } = await pool.query<Omit<Dossier, 'artifacts'>>(`SELECT j.id,j.business_id,COALESCE(j.checkpoint->>'individualCoach',j.checkpoint->>'identityName',b.name) AS name,b.website,j.stage,j.updated_at,j.checkpoint,j.decision,j.error,${suppressed} AS suppressed,
     ${currentEvidence} AS evidence_current FROM origin_investigations j JOIN origin_businesses b ON b.id=j.business_id WHERE j.id=$1`, [id, POLICY_VERSION]);
   if (!record) return null;
   const images = await pool.query<Dossier['artifacts'][number]>(`SELECT id,device,url,digest,image IS NOT NULL AS available FROM origin_artifacts

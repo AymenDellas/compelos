@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
-export const POLICY_VERSION = 'origin-v7';
+export const POLICY_VERSION = 'origin-v8';
 export const MAX_CANDIDATES = 72;
 export const MAX_RUN_MINUTES = 75;
 export const MAX_QUALIFIED_TARGET = 2_147_483_647;
-export const gateNames = ['identity', 'niche', 'geography', 'substance'] as const;
-export type GateName = typeof gateNames[number] | 'acquisition' | 'opportunity' | 'contact';
+export const gateNames = ['identity', 'individual', 'niche', 'geography'] as const;
+export type GateName = typeof gateNames[number] | 'substance' | 'acquisition' | 'opportunity' | 'contact';
 export type Outcome = 'QUALIFIED' | 'UNRESOLVED' | 'REJECTED';
 export type Method = 'Wikidata' | 'ECHO' | 'CONSTELLATION' | 'IGNITION' | 'PUBLICATION' | 'PROCUREMENT' | 'BUSINESS_SEARCH' | 'PUBLIC_OFFER';
 
@@ -74,7 +74,7 @@ export type Gate = {
   expiresAt: string | null;
 };
 
-const days = { identity: 60, niche: 14, geography: 30, substance: 60, acquisition: 14, opportunity: 1, contact: 7 };
+const days = { identity: 60, individual: 30, niche: 14, geography: 30, substance: 60, acquisition: 14, opportunity: 1, contact: 7 };
 export function finding(name: GateName, state: Gate['state'], assertion: string, evidence: Evidence[] = []): Gate {
   const oldest = Math.min(...evidence.map(item => Date.parse(item.observedAt)));
   return { name, state, assertion, evidence: evidence.map(item => item.id), expiresAt: Number.isFinite(oldest)
@@ -112,6 +112,7 @@ export type Checkpoint = {
   journey: JourneyStep[];
   identityPage?: string;
   identityName?: string;
+  individualCoach?: string;
   offer?: string;
   attributedProgramScope?: boolean;
   marketEvidenceChecked?: boolean;

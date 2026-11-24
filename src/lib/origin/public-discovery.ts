@@ -10,7 +10,7 @@ import { existingDiscoveryDomains, runSearch, savedOfferPointers, saveDiscovery,
 import type { Run } from './store';
 
 export const publicOfferSource = 'Public coaching offers';
-const savedOfferSource = 'Saved coaching offers';
+const savedOfferSource = 'Saved coach offers';
 const indexHost = 'public-api.wordpress.com';
 const tags = ['executive-coaching', 'leadership-coaching', 'business-coaching', 'business-coach', 'leadership-development',
   'entrepreneurship', 'coaching-program', 'group-coaching', 'business-growth', 'leadership-training', 'executive-coach', 'small-business-growth'];
@@ -21,9 +21,8 @@ const markets = [
 ] as const;
 const rounds = 8;
 const intent = /\b(?:book|schedule|apply|join|register|enrol+l?|cohort|workshop|masterclass|program(?:me)?|engagement|consultation|investment|pricing)\b/i;
-const directIntent = /\b(?:book (?:a|your)|schedule (?:a|your)|register|enrol+l?|applications? (?:are )?open|join (?:the|our|my)|cohort|workshop|coaching program(?:me)?)\b/i;
+const directIntent = /\b(?:work with me|I coach|my coaching|private coaching|one[- ]on[- ]one|1:1 coaching|book (?:a|your)|schedule (?:a|your)|coaching services)\b/i;
 const excludedIndexRecord = /\b(?:Wikipedia|SEO agency|marketing agency|best coach in|certification training|job opening)\b/i;
-const commercialLanguage = /\b(?:investment|pricing|program(?:me)? fees?|coaching packages?)\b|[£$]\s*\d/i;
 type Pointer = { url: string; date: number; priority: number; navigation?: string };
 
 export function publicOfferPointers(payload: unknown): Pointer[] {
@@ -38,7 +37,7 @@ export function publicOfferPointers(payload: unknown): Pointer[] {
     if ((!intent.test(text) && !relevantCoach.test(text)) || excludedIndexRecord.test(label)) return [];
     try {
       const url = documentUrl(value).href;
-      const priority = Number(relevantCoach.test(text)) * 3 + Number(directIntent.test(text)) * 3 + Number(intent.test(label)) * 2;
+    const priority = Number(relevantCoach.test(text)) * 3 + Number(directIntent.test(text)) * 3 + Number(intent.test(label)) * 2;
       return [{ url, date: Number.isFinite(time) ? time : 0, priority }];
     } catch { return []; }
   });
@@ -61,12 +60,12 @@ function offerSearch(index: number) {
   const specialtyIndex = Math.floor(index / markets.length);
   const specialty = specialties[specialtyIndex % specialties.length];
   const intents = [
-    '"investment" "90-day"',
-    '"coaching package" "pricing"',
-    '"coaching sessions" "fees"',
-    '"investment" "coaching sessions"',
-    '"coaching package" "6 months"',
-    '"investment" "coaching program"',
+    '"work with me"',
+    '"my coaching"',
+    '"I coach"',
+    '"private coaching"',
+    '"1:1 coaching"',
+    '"about me"',
   ];
   const intentIndex = Math.floor(specialtyIndex / specialties.length);
   const region = Math.floor(intentIndex / intents.length) % (market.cities.length + 1);
@@ -87,9 +86,9 @@ export function searchPromotionPointers(payload: unknown): Pointer[] {
       const host = domain(url);
       if (/\.(?:edu|gov|gov\.uk|ac\.uk)$/.test(host) || /\.(?:pdf|xml|rss)$/i.test(new URL(url).pathname)) return [];
       const text = `${load(title.slice(0, 400)).text()} ${typeof description === 'string' ? load(description.slice(0, 1800)).text() : ''}`;
-      if (!relevantCoach.test(text) && !hostedBooking(url) || !intent.test(text)) return [];
-      return [{ url, date: 0, priority: 1 + Number(relevantCoach.test(title)) * 3 + Number(directIntent.test(text)) * 3 +
-        Number(commercialLanguage.test(text)) * 3 - Number(coachingEditorial.test(title)) * 3 + (18 - index) / 18,
+      if (!relevantCoach.test(text) && !hostedBooking(url) || !intent.test(text) && !directIntent.test(text) && !relevantCoach.test(title)) return [];
+      return [{ url, date: 0, priority: 1 + Number(relevantCoach.test(title)) * 3 + Number(directIntent.test(text)) * 5 -
+        Number(coachingEditorial.test(title)) * 3 + (18 - index) / 18,
         ...(typeof go === 'string' && new URL(url).pathname === '/' ? { navigation: go } : {}) }];
     } catch { return []; }
   });
@@ -112,7 +111,7 @@ export async function discoverPublicOffers(pool: Pool, run: Run, web: PublicWeb,
       signal.throwIfAborted();
       source.elapsedMs = Date.now() - started;
       source.discovered = accepted.length;
-      if (!accepted.length) source.code = 'NO_VERIFIED_PAID_OFFERS';
+      if (!accepted.length) source.code = 'NO_VERIFIED_INDIVIDUAL_OFFERS';
       await saveDiscovery(pool, run, accepted, [source], round + 1 < rounds);
       return;
     }
@@ -129,7 +128,7 @@ export async function discoverPublicOffers(pool: Pool, run: Run, web: PublicWeb,
       source.searchAttempts!++;
       const reader = index % 3 === 2;
       try {
-        const records = await runSearch(pool, run, `public-offers-v7:${index}`, async () => {
+        const records = await runSearch(pool, run, `solo-coaching-offers:${index}`, async () => {
           const budget = AbortSignal.any([signal, AbortSignal.timeout(9500)]);
           if (reader) return publicOfferPointers(await web.api(indexPage(Math.floor(index / 3)), indexHost, budget));
           const search = offerSearch(index - Math.floor(index / 3));
@@ -171,7 +170,7 @@ export async function discoverPublicOffers(pool: Pool, run: Run, web: PublicWeb,
   if (!source.searches) {
     source.status = source.retryAt ? 'DEFERRED' : 'FAILED';
     source.code = source.retryAt ? 'RATE_LIMITED' : 'PUBLIC_INDEX_UNAVAILABLE';
-  } else if (!accepted.length) source.code = 'NO_VERIFIED_PAID_OFFERS';
+  } else if (!accepted.length) source.code = 'NO_VERIFIED_INDIVIDUAL_OFFERS';
   const previousCode = run.sources?.find(item => item.adapter === publicOfferSource)?.code;
   // An unavailable group can be transient. Try the next group within the same search budget.
   const canContinue = source.status === 'OK' || source.status === 'FAILED' && previousCode !== 'PUBLIC_INDEX_UNAVAILABLE';

@@ -7,7 +7,7 @@ export const official = 'https://cedar-leadership.test/';
 export const company = 'Cedar Leadership';
 export const book = `${official}booking`;
 export const page = `<html><head><title>${company}</title></head><body><main>
-  <h1>${company} executive coaching</h1><p>Our 1:1 coaching engagement is for leadership teams.</p>
+  <h1>${company} executive coaching</h1><p>I’m Jamie Cedar, an executive coach.</p><p>Our 1:1 coaching engagement is for leadership teams.</p>
   <p>We serve executive teams in the United Kingdom.</p><p>Our business was founded in 2012.</p>
   <p>Coaching engagement pricing is $5,000.</p><a href="/booking">Book a call</a>
   <p>Vendor inquiries are welcome at <a href="mailto:vendors@cedar-leadership.test">vendors@cedar-leadership.test</a>.</p>

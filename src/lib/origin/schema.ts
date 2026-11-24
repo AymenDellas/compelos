@@ -64,6 +64,7 @@ CREATE INDEX IF NOT EXISTS origin_investigations_business ON origin_investigatio
 CREATE INDEX IF NOT EXISTS origin_investigations_run_stage ON origin_investigations (run_id,stage,created_at);
 ALTER TABLE origin_investigations ADD COLUMN IF NOT EXISTS discovery_order integer NOT NULL DEFAULT 0;
 ALTER TABLE origin_investigations ADD COLUMN IF NOT EXISTS processing_started_at timestamptz;
+ALTER TABLE origin_investigations ADD COLUMN IF NOT EXISTS review_policy text;
 CREATE TABLE IF NOT EXISTS origin_artifacts (
   investigation_id uuid NOT NULL REFERENCES origin_investigations(id),
   id text NOT NULL,

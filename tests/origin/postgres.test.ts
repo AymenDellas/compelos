@@ -233,7 +233,7 @@ test('resetting review history releases old businesses once and keeps their save
     const unexpectedIndex = async () => { assert.fail('The first round should use saved first-party offers.'); };
     const lane = createOriginLane(pool, async work => work(), { runId: id, web: { ...web, api: unexpectedIndex, publicSearch: unexpectedIndex } });
     assert.equal(await lane.runOnce(), true);
-    assert.equal((await runSummary(pool, id)).sources?.[0].adapter, 'Saved coaching offers');
+    assert.equal((await runSummary(pool, id)).sources?.[0].adapter, 'Saved coach offers');
     lane.stop();
     const current = (await claimRun(pool, id))!;
     const newJob = (await nextJob(pool, current))!;
@@ -251,6 +251,9 @@ test('resetting review history releases old businesses once and keeps their save
     const next = (await claimRun(pool, later))!;
     await saveDiscovery(pool, next, [offer], []);
     assert.equal(await nextJob(pool, next), undefined);
+    await pool.query(`UPDATE origin_investigations SET review_policy='origin-v7',decision=jsonb_set(decision,'{version}','"origin-v7"') WHERE id=$1`, [newJob.id]);
+    assert.deepEqual(await existingDiscoveryDomains(pool, later, [host]), new Set());
+    assert.deepEqual((await overview(pool)).savedOpportunities.map(item => item.id), [newJob.id]);
   } finally {
     await pool.end();
     if (created) await admin.query(`DROP SCHEMA ${name} CASCADE`);
@@ -418,7 +421,7 @@ test('the qualified target carries across batches and stops on the third current
     shortfallLane.stop();
     assert.equal((await runSummary(pool, shortfallId)).qualified_progress, 1);
     assert.equal((await runSummary(pool, shortfallId)).state, 'COMPLETED');
-    assert.equal((await readyOpportunities(pool, 10, shortfallId))[0]?.name, 'Cedar Leadership');
+    assert.equal((await readyOpportunities(pool, 10, shortfallId))[0]?.name, 'Jamie Cedar');
     assert.deepEqual(queries.map(query => query.match(/"(Chicago|London)"/)?.[1]), ['Chicago', 'London']);
     assert.equal(readerPages.length, 1);
     assert.ok(new URL(readerPages[0]).searchParams.has('before'));
