@@ -26,8 +26,8 @@ async function request<T>(path = '', body?: unknown, signal?: AbortSignal): Prom
 }
 
 function State({ value }: { value: string }) { return <span className="origin-state" data-value={value}>{human(value)}</span>; }
-function External({ url, children }: { url: string; children: React.ReactNode }) {
-  return <a href={url} target="_blank" rel="noreferrer">{children} <ArrowUpRight size={13} aria-hidden /></a>;
+function External({ url, children, title }: { url: string; children: React.ReactNode; title?: string }) {
+  return <a href={url} target="_blank" rel="noreferrer" title={title}>{children} <ArrowUpRight size={13} aria-hidden /></a>;
 }
 
 export default function OriginWorkspace() {
@@ -193,10 +193,12 @@ function Opportunities({ data, open }: { data: Overview; open: (id: string) => v
       <label>Business or offer<input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search opportunities" /></label>
       <label>Market<select value={country} onChange={event => setCountry(event.target.value)}><option value="">All markets</option><option value="US">United States</option><option value="UK">United Kingdom</option><option value="CA">Canada</option></select></label>
     </div>
-    {rows.length ? <div className="origin-scroll origin-opportunities-table"><table><thead><tr><th>Business</th><th>Coaching offer</th><th>Market</th><th>Evidence expires</th></tr></thead>
+    {rows.length ? <div className="origin-scroll origin-opportunities-table"><table><thead><tr><th>Coach</th><th>Coaching offer</th><th>Market</th><th>LinkedIn</th><th>Evidence expires</th><th>Evidence</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.id}>
-        <td><button className="origin-text-action" onClick={() => open(row.id)}>{row.name}</button><State value={row.status} /></td>
-        <td>{row.offer}</td><td>{row.country}</td><td>{stamp(row.expires_at)}</td>
+        <td><External url={row.linkedin_url ?? row.website} title={row.linkedin_url ? 'Open LinkedIn profile' : 'Open official website'}>{row.name}</External><State value={row.status} /></td>
+        <td>{row.offer}</td><td>{row.country}</td>
+        <td>{row.linkedin_url ? <External url={row.linkedin_url} title={row.linkedin_url}>Profile</External> : '—'}</td>
+        <td>{stamp(row.expires_at)}</td><td><button className="origin-text-action" aria-label={`View evidence for ${row.name}`} onClick={() => open(row.id)}>View</button></td>
       </tr>)}</tbody></table></div>
       : <p className="origin-empty">{opportunities.length ? 'No opportunities match these filters.' : 'No saved opportunities yet.'}</p>}
   </section>;

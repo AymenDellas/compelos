@@ -2,6 +2,8 @@ import { load } from 'cheerio';
 import { normalizedName, publisherPointer, relatedPublisherHosts, verifyPublications } from './auto-publishers';
 import { createFunnelBrowser, type RenderedPage } from '../funnel-browser';
 import { coachingEditorial, relevantCoach } from './discovery';
+import { findCoachLinkedIn, visibleLinkedInLinks } from './coach-linkedin';
+import type { LinkedInLink } from './coach-linkedin';
 import { coachMetadata, directCoaching, pageCoachIdentity, singleCoach } from './individual-coach';
 import type { CoachPage } from './individual-coach';
 import { emptyCheckpoint, finding, gateNames, hash, observe } from './policy';
@@ -48,7 +50,7 @@ const navigationOnly = /\b(?:privacy|cookie|legal|terms|policies|newsletters?|ar
 
 type Link = { url: string; label: string; main: boolean; appearanceContext: boolean };
 type MarketStatement = { country: NonNullable<Checkpoint['country']>; evidence: string };
-export type Page = CoachPage & { state: string; evidence: Evidence; identity: string; brand?: string; canonical: string | null;
+export type Page = CoachPage & { state: string; evidence: Evidence; identity: string; brand?: string; canonical: string | null; linkedInLinks?: LinkedInLink[];
   statements: string[]; headings: string[]; title: string; links: Link[]; contact: { address: string; context: string } | null;
   contactProhibited: boolean; bookingControl: boolean; markets: MarketStatement[]; missingPage: boolean; activityDates: string[]; activityAction?: string;
   publicationDates?: string[]; organizerSites?: string[];
@@ -386,9 +388,10 @@ export function parseBusinessPage(html: string, url: string) {
   const missingPage = [title, ...headings.slice(0, 2)].some(item => /^(?:404(?:\s*[-:·|]\s*)?(?:error|page not found)?|(?:sorry[, ]+)?(?:the )?page (?:was )?not found)(?:\s*[-:·|].*)?$/i.test(item));
   const schedulerProblem = [title, ...headings.slice(0, 4), ...statements.slice(0, 12)].find(item =>
     /\b(?:this (?:calendly |booking |scheduling |meeting |event )?link (?:is no longer valid|is invalid|has expired|is not active)|this event type is (?:inactive|unavailable)|this calendly url is not valid|we couldn.t find (?:that|this) event)\b/i.test(item));
-  const coach = pageCoachIdentity(url, title, headings, paragraphs, siteBrand, coachMarkup);
+  const coach = pageCoachIdentity(url, title, headings, paragraphs, siteBrand, coachMarkup.claims);
+  const linkedInLinks = [...coachMarkup.linkedInLinks, ...visibleLinkedInLinks($)];
   const brand = siteBrand ?? coach.coachClaims.find(claim => claim.provider)?.name;
-  return { identity, brand, canonical, statements, headings, title, links, contact, bookingControl, markets, missingPage, activityDates, publicationDates, ...coach,
+  return { identity, brand, canonical, statements, headings, title, links, linkedInLinks, contact, bookingControl, markets, missingPage, activityDates, publicationDates, ...coach,
     organizerSites: [...organizerSites].slice(0, 2), activityAction: eventAction,
     testimonials, clientAccounts, genericInquiry, consultationIntake, informedIntake, scheduling, schedulerProblem, feedUrl: feedUrl ?? undefined, embeddedInquiry, hostedInquiry,
     contactProhibited: forbidden.test(bodyText), challenged: challenge.test(`${title} ${bodyText.slice(0, 850)}`) };
@@ -437,6 +440,15 @@ function recordIndividual(checkpoint: Checkpoint, pages: Page[]) {
     : 'The official site did not establish who personally provides the coaching service.';
   add(checkpoint, 'individual', individual.state, reason,
     individual.observations.map(({ page, text }) => quote(page, text, 'Official coach attribution')));
+}
+
+export function coachLinkedInEvidence(pages: Page[], coach: string, businessDomain: string) {
+  const official = pages.filter(page => page.state === 'READABLE' && domain(page.url) === businessDomain &&
+    (!page.canonical || domain(page.canonical) === businessDomain));
+  const profile = findCoachLinkedIn(official, coach);
+  if (!profile) return;
+  const evidence = quote(profile.page, `The official site links ${coach} to ${profile.url}.`, 'Official LinkedIn profile link');
+  return { url: profile.url, evidence };
 }
 
 function caseEvidence(item: Page, provider: string) {
@@ -1083,7 +1095,16 @@ export async function investigate(web: PublicWeb, job: Job, settings: Settings, 
     if (privacy.state === 'READABLE' && privacy.markets.length) recordMarket(checkpoint, [...pages, privacy]);
   }
   const artifacts: Artifact[] = [];
-  if (qualificationOnly) return { checkpoint, artifacts };
+  if (qualificationOnly) {
+    if (checkpoint.individualCoach && gateNames.every(name => checkpoint.gates.some(gate => gate.name === name && gate.state === 'VERIFIED'))) {
+      const profile = coachLinkedInEvidence(pages, checkpoint.individualCoach, job.domain);
+      if (profile) {
+        checkpoint.linkedin = { url: profile.url, evidence: profile.evidence.id };
+        checkpoint.evidence.push(profile.evidence);
+      }
+    }
+    return { checkpoint, artifacts };
+  }
   checkpoint.ownedFeeds = [...new Set(pages.flatMap(item => item.feedUrl && own(new URL(item.feedUrl)) ? [item.feedUrl] : []))].slice(0, 2);
   publicationLinks(pages, job, checkpoint);
   checkpoint.ownedActivities = pages.flatMap(item => ownedActivity(item, engagement ? offer?.url : undefined));

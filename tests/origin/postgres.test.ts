@@ -64,12 +64,14 @@ test('PostgreSQL fences interrupted stages, deduplicates identities, enforces bu
     assert.equal(await readOrReserve(pool, recovered, job, 'fixture-model', 1, 'keyB', 30), null);
     const evidence = observe('official', official, 'Fixture', 'Fixture');
     const checkpoint = { ...emptyCheckpoint(), country: 'UK' as const, offer: 'Executive coaching',
+      linkedin: { url: 'https://ca.linkedin.com/in/jamie-cedar?trk=official', evidence: evidence.id },
       contact: 'vendors@cedar-leadership.test', acquisitionSources: 2, evidence: [evidence],
       gates: gateNames.map(name => finding(name, 'VERIFIED', 'Fixture qualifying evidence.', [evidence])) };
     const decision = decide(checkpoint.gates, checkpoint.evidence);
     const image = Buffer.from('fixture image bytes');
     await saveStage(pool, recovered, job, checkpoint, decision, [{ id: evidence.id, url: official, device: 'desktop', digest: evidence.digest, image }]);
     assert.equal((await readyOpportunities(pool))[0].business_id, job.business_id);
+    assert.equal((await readyOpportunities(pool))[0].linkedin_url, 'https://www.linkedin.com/in/jamie-cedar');
     assert.equal((await dossier(pool, job.id))?.decision?.outcome, 'QUALIFIED');
     assert.deepEqual(await artifact(pool, job.id, evidence.id), image);
     const { usage, sources, runs, savedOpportunities } = await overview(pool);

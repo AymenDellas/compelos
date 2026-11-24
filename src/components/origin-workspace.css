@@ -36,7 +36,8 @@
 .origin-workspace th { color: var(--text-dim); font-size: 12px; font-weight: 550; white-space: nowrap; }
 .origin-workspace td { font-size: 13px; min-width: 76px; }
 .origin-opportunities-table td:first-child { min-width: 190px; }
-.origin-opportunities-table td:nth-child(3) { min-width: 260px; }
+.origin-opportunities-table td:nth-child(2) { min-width: 220px; }
+.origin-opportunities-table td:first-child .origin-state { display: flex; margin-top: 4px; }
 .origin-workspace tbody tr:last-child td { border-bottom: 0; }
 .origin-workspace td small { display: block; margin-top: 3px; color: var(--text-dim); }
 .origin-state { align-self: start; display: inline-flex; gap: 6px; align-items: center; color: var(--text-dim); font-size: 12px; white-space: nowrap; }

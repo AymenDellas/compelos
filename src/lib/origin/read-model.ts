@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { personalLinkedInUrl } from './coach-linkedin';
 import { readModelConfig } from './model';
 import { defaults, POLICY_VERSION } from './policy';
 import type { Checkpoint, Decision, Outcome, Settings, SourceResult } from './policy';
@@ -16,7 +17,7 @@ export type RunSummary = {
 };
 export type Opportunity = {
   id: string; business_id: string; name: string; website: string; offer: string; country: string;
-  opportunity: string; contact: string; updated_at: string; expires_at: string | null; acquisition_sources: number;
+  opportunity: string; contact: string; linkedin_url: string | null; updated_at: string; expires_at: string | null; acquisition_sources: number;
 };
 export type Finding = { id: string; name: string; stage: string; outcome: Outcome | null; reason: string | null; updated_at: string };
 type GateProgress = { name: string; reached: number; verified: number; held: number; contradicted: number };
@@ -35,8 +36,9 @@ const currentEvidence = `COALESCE(j.decision->>'version'=$2 AND j.expires_at>now
 
 async function qualifiedOpportunities(pool: DB, limit: number, run: string | null, view: 'ready' | 'saved') {
   const suppressed = await suppressionFilter(pool);
-  return (await pool.query<Opportunity>(`SELECT j.id,b.id AS business_id,COALESCE(j.checkpoint->>'individualCoach',j.checkpoint->>'identityName',b.name) AS name,b.website,j.updated_at,j.expires_at,
+  const { rows } = await pool.query<Opportunity>(`SELECT j.id,b.id AS business_id,COALESCE(j.checkpoint->>'individualCoach',j.checkpoint->>'identityName',b.name) AS name,b.website,j.updated_at,j.expires_at,
     j.checkpoint->>'offer' AS offer,j.checkpoint->>'country' AS country,j.checkpoint->>'contact' AS contact,
+    j.checkpoint->'linkedin'->>'url' AS linkedin_url,
     (SELECT jsonb_array_length(g->'evidence') FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='acquisition') AS acquisition_sources,
     (SELECT g->>'assertion' FROM jsonb_array_elements(j.decision->'gates') g WHERE g->>'name'='opportunity') AS opportunity
     FROM origin_businesses b JOIN LATERAL (SELECT j.* FROM origin_investigations j WHERE business_id=b.id AND j.outcome IS NOT NULL
@@ -44,7 +46,8 @@ async function qualifiedOpportunities(pool: DB, limit: number, run: string | nul
       ORDER BY created_at DESC,id DESC LIMIT 1) j ON true
     WHERE j.outcome='QUALIFIED' AND ${view === 'ready' ? currentEvidence : `NOT ${currentEvidence}`}
       AND NOT (${suppressed}) AND ($3::uuid IS NULL OR j.run_id=$3)
-    ORDER BY j.updated_at DESC,b.name,b.id LIMIT $1`, [limit, POLICY_VERSION, run])).rows;
+    ORDER BY j.updated_at DESC,b.name,b.id LIMIT $1`, [limit, POLICY_VERSION, run]);
+  return rows.map(row => ({ ...row, linkedin_url: personalLinkedInUrl(row.linkedin_url) ?? null }));
 }
 
 export function readyOpportunities(pool: DB, limit = 100, run: string | null = null) {

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { discover, feed } from '../../src/lib/origin/discovery';
+import { personalLinkedInUrl } from '../../src/lib/origin/coach-linkedin';
 import { classifyModelError, reserveCents } from '../../src/lib/origin/model';
 import { decide, defaults, finding, gateNames, observe } from '../../src/lib/origin/policy';
 import { publicOfferPointers } from '../../src/lib/origin/public-discovery';
 import { createPublicWeb, documentUrl, robotsAllows } from '../../src/lib/origin/public-web';
-import { enrichAcquisition, enrichCommercial, investigate, parseBusinessPage, resolveBusiness, screenPublicOffer, verifyOpportunity } from '../../src/lib/origin/research';
+import { coachLinkedInEvidence, enrichAcquisition, enrichCommercial, investigate, parseBusinessPage, resolveBusiness, screenPublicOffer, verifyOpportunity } from '../../src/lib/origin/research';
 import { book, candidate, fixture, official, page, seed, source } from './fixtures';
 
 const signal = () => AbortSignal.timeout(30_000);
@@ -120,6 +121,36 @@ test('official service metadata may identify the single coach behind a practice 
   const { checkpoint } = await resolveBusiness(web, job, signal());
   const result = await investigate(web, { ...job, checkpoint }, settings, signal(), { qualificationOnly: true });
   assert.equal(result.checkpoint.individualCoach, 'Jo Rivera');
+});
+
+test('qualified coach research saves a personal LinkedIn URL and the official page that linked it', async () => {
+  const profile = 'https://www.linkedin.com/in/jamie-cedar-42';
+  const home = page.replace('</body>', `<footer>
+    <a href="https://ca.linkedin.com/in/jamie-cedar-42/?trk=site" aria-label="LinkedIn">Profile</a>
+    <a href="https://linkedin.com/company/cedar-leadership">Company LinkedIn</a>
+    <p>Site by <a href="https://linkedin.com/in/site-designer">Site designer</a></p>
+    </footer></body>`);
+  const { web, read } = fixture(home);
+  const job = candidate();
+  const { checkpoint } = await resolveBusiness(web, job, signal());
+  const { checkpoint: result } = await investigate(web, { ...job, checkpoint }, settings, signal(), { qualificationOnly: true });
+  assert.equal(result.linkedin?.url, profile);
+  assert.equal(result.evidence.find(item => item.id === result.linkedin?.evidence)?.url, official);
+  assert.ok(read.every(url => !new URL(url).hostname.endsWith('linkedin.com')));
+});
+
+test('coach metadata resolves vanity URLs and conflicting unlabelled profiles stay unassigned', () => {
+  const source = (contents: string) => ({ url: official, state: 'READABLE', evidence: observe('official', official, 'Fixture', 'Fixture'),
+    ...parseBusinessPage(`<main>${contents}</main>`, official) });
+  const personal = 'https://www.linkedin.com/in/coach-vanity';
+  const about = source(`<script type="application/ld+json">${JSON.stringify({ '@type': 'Person', name: 'Jamie V. Cedar', sameAs: personal })}</script>
+    <footer><a href="https://linkedin.com/in/unlabelled-account">LinkedIn</a></footer>`);
+  assert.equal(coachLinkedInEvidence([about], 'Jamie Cedar', 'cedar-leadership.test')?.url, personal);
+  const conflicts = source(`<footer><a href="${personal}">LinkedIn</a><a href="https://linkedin.com/in/possible-peer">LinkedIn</a></footer>
+    <p>Client profile <a href="https://linkedin.com/in/jamie-cedar-42">Jamie Cedar</a></p>`);
+  assert.equal(coachLinkedInEvidence([conflicts], 'Jamie Cedar', 'cedar-leadership.test'), undefined);
+  for (const url of ['https://linkedin.com.evil.test/in/jamie-cedar', 'https://linkedin.com/company/jamie-cedar',
+    'https://linkedin.com/in/jamie-cedar/details', 'https://linkedin.com/in/jamie%2Fcedar']) assert.equal(personalLinkedInUrl(url), undefined);
 });
 
 test('a named coaching package and repeated private sessions in headings support commercial substance', async () => {

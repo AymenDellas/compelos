@@ -1,4 +1,6 @@
 import type { CheerioAPI } from 'cheerio';
+import { personalLinkedInUrl } from './coach-linkedin';
+import type { LinkedInLink } from './coach-linkedin';
 
 type Claim = { name: string; text: string; provider: boolean; self?: boolean };
 export type CoachPage = { url: string; coachClaims?: Claim[]; coachDelivery?: string; teamDelivery?: string };
@@ -51,10 +53,22 @@ export function coachMetadata($: CheerioAPI, url: string) {
     } catch { return []; }
   });
   const claims: Claim[] = [];
+  const linkedInLinks: LinkedInLink[] = [];
+  const readProfile = (person: Node, name: string) => {
+    const profilePage = person.url ?? person['@id'];
+    if (profilePage && !ownUrl(profilePage, page)) return;
+    for (const reference of [person.sameAs].flat().slice(0, 16)) {
+      const profile = personalLinkedInUrl(reference);
+      if (profile) linkedInLinks.push({ url: profile, owner: name });
+    }
+  };
   for (const item of entries) {
     const name = plausibleName(item.name);
-    if (type(item, 'Person') && name && coachRole.test(String(item.jobTitle ?? '')) && ownUrl(item.url ?? item['@id'], page)) {
-      claims.push({ name, text: `${name} · ${String(item.jobTitle).slice(0, 100)} (official Person metadata)`, provider: false });
+    if (type(item, 'Person') && name) {
+      readProfile(item, name);
+      if (coachRole.test(String(item.jobTitle ?? '')) && ownUrl(item.url ?? item['@id'], page)) {
+        claims.push({ name, text: `${name} · ${String(item.jobTitle).slice(0, 100)} (official Person metadata)`, provider: false });
+      }
     }
     const service = String(item.serviceType ?? item.name ?? '').slice(0, 100);
     if (!type(item, 'Service') || !coachingService.test(service)) continue;
@@ -63,11 +77,12 @@ export function coachMetadata($: CheerioAPI, url: string) {
       const person = plausibleName(provider.name);
       const providerUrl = provider.url ?? provider['@id'];
       if (person && type(provider, 'Person') && (!providerUrl || ownUrl(providerUrl, page))) {
+        readProfile(provider, person);
         claims.push({ name: person, text: `${person} · ${service} (official coaching service provider metadata)`, provider: true });
       }
     }
   }
-  return claims;
+  return { claims, linkedInLinks };
 }
 
 export function pageCoachIdentity(url: string, title: string, headings: string[], paragraphs: string[], brand: string | undefined, metadata: Claim[]) {

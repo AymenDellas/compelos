@@ -113,6 +113,7 @@ export type Checkpoint = {
   identityPage?: string;
   identityName?: string;
   individualCoach?: string;
+  linkedin?: { url: string; evidence: string };
   offer?: string;
   attributedProgramScope?: boolean;
   marketEvidenceChecked?: boolean;
